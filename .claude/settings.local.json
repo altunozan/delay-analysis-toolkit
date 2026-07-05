@@ -1,0 +1,31 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl:*)",
+      "Bash(for f in ConstraintTypeHelper RelationTypeHelper ActivityStatusHelper TaskTypeHelper ActivityTypeHelper)",
+      "Bash(do echo \"==== $f ====\")",
+      "Bash(done)",
+      "Bash(python3:*)",
+      "Bash(bash:*)",
+      "Bash(chmod:*)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(nohup streamlit run app.py --server.headless true --server.port 8501)",
+      "Skill(claude-api)",
+      "Skill(claude-api:*)",
+      "Bash(pip install *)",
+      "Bash(awk -F'\\\\t' '/^%T\\\\tTASK$/{t=1} /^%T\\\\t/{if\\($2!=\"TASK\"\\)t=0} t&&/^%R/{print}' sample_project.xer)",
+      "Bash(awk -F'\\\\t' '/^%T\\\\tACTVTYPE$/{t=1;next} /^%T\\\\t/{t=0} t&&/^%R/{print $0}' sample_project.xer)",
+      "Bash([ -f \"$MEMDIR/MEMORY.md\" ])",
+      "Bash(pip3 --version)",
+      "Bash(pip3 download *)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(./.venv-mac/bin/python -m pip install --no-index --find-links wheels/macos -r src/requirements.txt --quiet)",
+      "Bash(echo \"INSTALL EXIT: $?\")",
+      "Bash(./.venv-mac/bin/python -)",
+      "Bash(git init *)",
+      "Bash(git config *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
