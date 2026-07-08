@@ -6,6 +6,7 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 ENV/
 build/
 develop-eggs/
@@ -47,3 +48,5 @@ htmlcov/
 sample/*.xer
 *.xlsx
 *.tmp
+deckforge/.deckforge_autosave.pkl
+deckforge/sample_output.pptx

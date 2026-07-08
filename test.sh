@@ -4,7 +4,7 @@
 # (no browser / Streamlit UI). Prints the scorecard to the terminal.
 #
 # Usage:
-#   ./test.sh                         # uses sample/sample_project.xer
+#   ./test.sh                         # uses sample/Sample Baseline.xer
 #   ./test.sh path/to/your.xer        # runs against your own file
 #
 # On first run this creates the local virtual environment (.venv) and installs
@@ -19,7 +19,7 @@ cd "$SCRIPT_DIR"
 VENV_DIR=".venv"
 
 # Default XER file; override by passing a path as the first argument.
-XER_FILE="${1:-sample/sample_project.xer}"
+XER_FILE="${1:-sample/Sample Baseline.xer}"
 
 if [ ! -f "$XER_FILE" ]; then
     echo "Error: XER file not found: $XER_FILE" >&2
