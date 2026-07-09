@@ -15,6 +15,7 @@ Run with:  streamlit run app.py
 
 from __future__ import annotations
 
+import hashlib
 import io
 import os
 
@@ -40,8 +41,28 @@ from dcma.report_xlsx import build_xlsx_report
 from programme.variance import DIMENSION_SEPARATOR
 from programme import (
     activity_code_types,
+    BasisOfAnalysis,
+    ReportSection,
+    SourceFile,
+    WEIGHT_OPTIONS,
+    analyse_float_erosion,
+    analyse_windows,
+    build_assembled_report,
+    build_comparison_prompt,
+    build_float_erosion_prompt,
+    build_float_erosion_xlsx,
+    build_progress_prompt,
+    build_progress_xlsx,
+    build_resources_prompt,
+    build_resources_xlsx,
+    compute_progress,
+    extract_resource_loading,
+    build_comparison_xlsx,
     build_critical_path_prompt,
     build_critical_path_xlsx,
+    build_windows_prompt,
+    build_windows_xlsx,
+    compare_revisions,
     build_inventory,
     combine_mappings,
     end_activity_candidates,
@@ -205,6 +226,7 @@ def intake_tab() -> None:
     signature = tuple(sorted((name, size) for name, _, size in sources))
     if signature != st.session_state.get("xer_pool_sig"):
         files = []
+        hashes: dict[str, str] = {}
         for name, src, _ in sources:
             try:
                 if isinstance(src, str):
@@ -212,6 +234,7 @@ def intake_tab() -> None:
                         raw = fh.read()
                 else:
                     raw = src.getvalue()
+                hashes[name] = hashlib.sha256(raw).hexdigest()
                 data = parse_xer(raw, DCMAConfig())
             except Exception as exc:  # noqa: BLE001 - surface per-file errors
                 st.warning(f"Skipped '{name}': {exc}")
@@ -221,6 +244,7 @@ def intake_tab() -> None:
                 continue
             files.append((name, data))
         st.session_state["xer_pool"] = files
+        st.session_state["xer_hashes"] = hashes
         st.session_state["xer_pool_sig"] = signature
         # New data invalidates cached narratives.
         for key in list(st.session_state):
@@ -877,6 +901,844 @@ def variance_tab() -> None:
 
 
 # ====================================================================== #
+# Tab 11 — Report Assembler (Module 11)
+# ====================================================================== #
+
+def _stored_narrative(exact_or_prefix: str) -> str | None:
+    """Fetch an analyst-generated narrative from session state.
+
+    Accepts the exact panel key or a prefix (for keys parameterised by the
+    chosen programme). Widget keys carry suffixes and are excluded.
+    """
+    suffixes = ("_tmpl", "_provider", "_model", "_key", "_go", "_dl")
+    if exact_or_prefix in st.session_state:
+        v = st.session_state[exact_or_prefix]
+        if isinstance(v, str):
+            return v
+    for k, v in st.session_state.items():
+        if (isinstance(k, str) and k.startswith(exact_or_prefix)
+                and not k.endswith(suffixes) and isinstance(v, str)):
+            return v
+    return None
+
+
+def report_tab() -> None:
+    st.caption(
+        "Assemble the module analyses into one Word report: narratives you "
+        "have generated, key figures, a single aggregated Limitations "
+        "section, and a Basis of Analysis appendix (files, hashes, "
+        "settings)."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+
+    pool = dict(files)
+    base_name = (inv.baseline.file_name if inv.baseline
+                 else inv.revisions[0].file_name)
+    curr_name = (inv.current.file_name
+                 if getattr(inv, "current", None) else
+                 inv.revisions[-1].file_name)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    multi = len(files) >= 2
+
+    c1, c2, c3 = st.columns(3)
+    title = c1.text_input("Report title",
+                          "Preliminary Delay Analysis Report")
+    project = c2.text_input(
+        "Project", (pool[base_name].project.short_name
+                    if pool[base_name].project else ""))
+    author = c3.text_input("Prepared by", "")
+
+    # ---- build candidate sections (deterministic findings + narrative) ---
+    def fmt_d(d):
+        return f"{d:%d %b %Y}" if d else "—"
+
+    candidates: list[tuple[str, ReportSection, list[str]]] = []
+
+    # Inventory
+    sec = ReportSection("Information Relied Upon",
+                        _stored_narrative("nar_inventory"))
+    span = [r.data_date for r in inv.revisions if r.data_date]
+    sec.key_findings = [
+        f"{len(inv.revisions)} programme revision(s) received, data dates "
+        f"{fmt_d(min(span)) if span else '—'} to "
+        f"{fmt_d(max(span)) if span else '—'}.",
+        f"Baseline: {base_name}; current: {curr_name}.",
+    ]
+    sec.caveats = list(inv.missing) + list(inv.warnings)
+    candidates.append(("Data inventory", sec, []))
+
+    # DCMA on baseline
+    results = run_all_checks(pool[base_name], DCMAConfig())
+    fails = [r for r in results if r.status == CheckStatus.FAIL]
+    passes = [r for r in results if r.status == CheckStatus.PASS]
+    sec = ReportSection("Programme Examination (DCMA 14-Point)",
+                        _stored_narrative("nar_dcma"))
+    sec.key_findings = [
+        f"Baseline '{base_name}': {len(passes)} of 14 checks passed.",
+        "Checks not met: " + ", ".join(f"{r.number} {r.name}"
+                                       for r in fails) + "."
+        if fails else "All checks met.",
+    ]
+    candidates.append(("DCMA 14-point", sec,
+                       [f"DCMA — programme: {base_name}; standard "
+                        "thresholds"]))
+
+    # Baseline critical path (longest path, default terminal)
+    cp = extract_longest_path(pool[base_name], base_name)
+    sec = ReportSection("Baseline Planned Critical Path",
+                        _stored_narrative("nar_cp_"))
+    sec.key_findings = [
+        f"Longest path traced backward from {cp.end_choice}: "
+        f"{len(cp.critical)} activities, {len(cp.links)} driving links.",
+        f"Near-critical band (TF ≤ {cp.near_critical_days:.0f}d): "
+        f"{len(cp.near_critical)} activities.",
+    ]
+    sec.caveats = list(cp.caveats) + list(cp.warnings)
+    candidates.append(("Critical path", sec,
+                       [f"Critical path — method: backward driving-logic "
+                        f"trace from {cp.end_choice} (programme: "
+                        f"{base_name})"]))
+
+    if multi:
+        # Milestones
+        ms = track_milestone_shifts(
+            [(n, d.project.data_date if d.project else None, d)
+             for n, d in ordered])
+        tracked = [s for s in ms.series if s.total_shift_days is not None]
+        slipped = [s for s in tracked if s.total_shift_days > 7]
+        worst = max(tracked, key=lambda s: s.total_shift_days, default=None)
+        sec = ReportSection("Milestone Slippage",
+                            _stored_narrative("nar_milestones"))
+        sec.key_findings = [
+            f"{len(tracked)} milestones tracked across revisions; "
+            f"{len(slipped)} slipped by more than 7 days.",
+        ]
+        if worst:
+            sec.key_findings.append(
+                f"Largest shift: {worst.key} '{worst.name}' "
+                f"({worst.total_shift_days:+.0f} days).")
+        sec.caveats = list(ms.warnings)
+        candidates.append(("Milestone shifts", sec,
+                           ["Milestones — matched by Activity ID with "
+                            "fuzzy-name proposals excluded unless "
+                            "confirmed"]))
+
+        # Revision comparison (baseline -> current)
+        cmp = compare_revisions(pool[base_name], pool[curr_name],
+                                base_name, curr_name)
+        sec = ReportSection("Programme Revision Comparison",
+                            _stored_narrative("nar_cmp_"))
+        sec.key_findings = [
+            f"{cmp.total_changes} recorded changes between '{base_name}' "
+            f"and '{curr_name}'.",
+            f"Scope: {len(cmp.added)} added / {len(cmp.deleted)} deleted; "
+            f"logic {len(cmp.logic_added)} added / "
+            f"{len(cmp.logic_removed)} removed.",
+            f"Actual dates changed retrospectively: "
+            f"{len(cmp.actual_date_changes)}.",
+        ]
+        sec.caveats = list(cmp.caveats) + list(cmp.warnings)
+        candidates.append(("Revision comparison", sec,
+                           [f"Comparison — '{base_name}' vs '{curr_name}', "
+                            "matched by Activity ID"]))
+
+        # Windows
+        wres = analyse_windows(ordered)
+        sec = ReportSection("Windows / Period Movement",
+                            _stored_narrative("nar_windows"))
+        if wres.total_movement_days is not None:
+            sec.key_findings.append(
+                f"Cumulative completion movement "
+                f"{wres.total_movement_days:+.0f} days across "
+                f"{len(wres.windows)} window(s).")
+        sec.caveats = list(wres.caveats) + list(wres.warnings)
+        candidates.append(("Windows analysis", sec,
+                           ["Windows — driving path per revision traced "
+                            "from its latest finisher"]))
+
+        # S-curve
+        updates = [(n, d) for n, d in ordered if n != base_name]
+        pr = compute_progress(pool[base_name], base_name, updates)
+        sec = ReportSection("Progress S-Curve",
+                            _stored_narrative("nar_progress"))
+        if pr.recorded_pct_at_dd is not None:
+            sec.key_findings.append(
+                f"Recorded {pr.recorded_pct_at_dd:.1f}% vs planned "
+                f"{pr.planned_pct_at_dd:.1f}% at the latest data date"
+                + (f" (≈ {pr.time_offset_days:+.0f} days in time)."
+                   if pr.time_offset_days is not None else "."))
+        sec.caveats = list(pr.caveats) + list(pr.warnings)
+        candidates.append(("Progress S-curve", sec,
+                           ["S-curve — weighting: activity duration; "
+                            "monthly buckets"]))
+
+        # Float erosion
+        fe = analyse_float_erosion(ordered)
+        lasts = fe.snapshots[-1]
+        sec = ReportSection("Float Erosion",
+                            _stored_narrative("nar_float"))
+        sec.key_findings = [
+            f"Latest revision: median float "
+            f"{lasts.median_float:+.0f}d, {lasts.negative_count} "
+            f"negative-float activities (minimum {lasts.min_float:+.0f}d)."
+            if lasts.median_float is not None else
+            "Float profile not computable.",
+        ]
+        sec.caveats = list(fe.caveats) + list(fe.warnings)
+        candidates.append(("Float erosion", sec,
+                           ["Float erosion — near-critical threshold 10d"]))
+
+    # Resources (baseline)
+    rl = extract_resource_loading(pool[base_name], base_name)
+    if rl.histogram:
+        sec = ReportSection("Planned Resource Loading",
+                            _stored_narrative("nar_res_"))
+        top = rl.resources[0]
+        sec.key_findings = [
+            f"{len(rl.resources)} resources with planned loading; largest: "
+            f"{top.short_name} [{top.rsrc_type}] "
+            f"({top.total_qty:,.0f} across {top.assignment_count} "
+            "assignments).",
+        ]
+        sec.caveats = list(rl.caveats) + list(rl.warnings)
+        candidates.append(("Resource loading", sec,
+                           [f"Resources — programme: {base_name}; planned "
+                            "quantities spread across scheduled dates"]))
+
+    # ---- selection UI -----------------------------------------------------
+    st.subheader("Sections to include")
+    included: list[ReportSection] = []
+    settings: list[str] = []
+    cols = st.columns(3)
+    for i, (label, sec, setting_lines) in enumerate(candidates):
+        has_nar = sec.narrative_md is not None
+        tick = cols[i % 3].checkbox(
+            f"{label} {'📝' if has_nar else '▫️'}",
+            value=True, key=f"rep_inc_{label}",
+            help=("Narrative generated — will be included."
+                  if has_nar else
+                  "No narrative generated yet — key figures and caveats "
+                  "only. Generate one in the module's tab to include it."))
+        if tick:
+            included.append(sec)
+            settings.extend(setting_lines)
+    st.caption("📝 = analyst narrative available · ▫️ = key figures only")
+
+    if not included:
+        st.warning("Select at least one section.")
+        return
+
+    # ---- basis of analysis -------------------------------------------------
+    hashes = st.session_state.get("xer_hashes", {})
+    basis = BasisOfAnalysis(
+        files=[SourceFile(
+            file_name=r.file_name,
+            sha256=hashes.get(r.file_name, "not recorded"),
+            data_date=r.data_date,
+            role=("Baseline" if r.is_baseline
+                  else "Current" if r.is_current else "Update"),
+            activity_count=r.activity_count,
+        ) for r in inv.revisions],
+        settings=settings,
+    )
+
+    n_narr = sum(1 for s in included if s.narrative_md)
+    st.markdown(
+        f"**{len(included)}** sections selected — {n_narr} with analyst "
+        f"narratives, {len(included) - n_narr} figures-only."
+    )
+    st.download_button(
+        "⬇️ Assemble & download report (Word)",
+        data=build_assembled_report(title, project, author, included, basis),
+        file_name="preliminary_delay_analysis_report.docx",
+        mime=("application/vnd.openxmlformats-officedocument."
+              "wordprocessingml.document"),
+        type="primary",
+    )
+
+
+# ====================================================================== #
+# Tab 10 — Planned Resource Histograms (Module 10)
+# ====================================================================== #
+
+def resources_tab() -> None:
+    st.caption(
+        "Monthly planned resource loading from the programme's assignments "
+        "— planned deployment as scheduled, not actual expenditure."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]
+    default_idx = (names.index(inv.baseline.file_name)
+                   if inv.baseline else 0)
+    chosen = st.selectbox("Programme", names, index=default_idx,
+                          key="res_prog", help="Defaults to the baseline.")
+    res = extract_resource_loading(dict(files)[chosen], chosen)
+
+    for w in res.warnings:
+        st.warning(w)
+    if not res.histogram:
+        return
+
+    all_names = [r.short_name for r in res.resources]
+    sel = st.multiselect(
+        "Resources to chart", all_names, default=all_names[:8],
+        help="Ordered by total planned quantity.")
+    rows = [{"Month": p.month_end, "Resource": p.resource,
+             "Type": p.rsrc_type, "Quantity": round(p.qty, 1)}
+            for p in res.histogram if p.resource in sel]
+    if rows:
+        st.altair_chart(
+            alt.Chart(pd.DataFrame(rows)).mark_bar()
+            .encode(
+                x=alt.X("yearmonth(Month):T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Quantity:Q", title="Planned quantity / month"),
+                color=alt.Color("Resource:N",
+                                legend=alt.Legend(orient="top", title=None)),
+                tooltip=["Resource", "Type",
+                         alt.Tooltip("yearmonth(Month):T", format="%b %Y"),
+                         alt.Tooltip("Quantity:Q", format=",.0f")],
+            ).properties(height=340),
+            use_container_width=True,
+        )
+
+    st.subheader("Resources")
+    st.dataframe(pd.DataFrame([{
+        "Resource": r.short_name,
+        "Name": r.name,
+        "Type": r.rsrc_type,
+        "Total planned qty": round(r.total_qty, 1),
+        "Assignments": r.assignment_count,
+    } for r in res.resources]), use_container_width=True, hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_res_{chosen}",
+        lambda tmpl: build_resources_prompt(res, tmpl),
+        "resources",
+        DEFAULT_TEMPLATES["resources"],
+    )
+    st.download_button(
+        "⬇️ Download resource loading report (Excel)",
+        data=build_resources_xlsx(res, narrative),
+        file_name="resource_loading_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab 9 — Float Erosion Tracker (Module 9)
+# ====================================================================== #
+
+def float_erosion_tab() -> None:
+    st.caption(
+        "How the programme's scheduling flexibility changed across "
+        "revisions: float profile per revision and float consumption per "
+        "window."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** tab "
+                "first.")
+        return
+
+    near = st.number_input("Near-critical threshold (days)",
+                           1.0, 100.0, 10.0, 1.0)
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    res = analyse_float_erosion(ordered, near_days=near)
+
+    last = res.snapshots[-1]
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Median float (latest)",
+              f"{last.median_float:+.0f} d"
+              if last.median_float is not None else "—")
+    m2.metric("Negative-float activities", last.negative_count)
+    m3.metric("Critical (TF ≤ 0)", last.critical_count)
+    m4.metric("Minimum float",
+              f"{last.min_float:+.0f} d"
+              if last.min_float is not None else "—")
+
+    for w in res.warnings:
+        (st.success if w.startswith("Favourable") else st.warning)(w)
+
+    prof = []
+    for s in res.snapshots:
+        if s.data_date is None:
+            continue
+        prof += [
+            {"Data date": s.data_date, "Revision": s.label,
+             "Metric": "Median float (d)", "Value": s.median_float},
+            {"Data date": s.data_date, "Revision": s.label,
+             "Metric": "Negative-float count", "Value": s.negative_count},
+        ]
+    if prof:
+        st.altair_chart(
+            alt.Chart(pd.DataFrame(prof)).mark_line(point=True)
+            .encode(
+                x=alt.X("Data date:T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Value:Q", title=None),
+                color=alt.Color("Metric:N", title=None,
+                                legend=alt.Legend(orient="top")),
+                tooltip=["Revision", "Metric", "Value"],
+            ).properties(height=260).facet(
+                column=alt.Column("Metric:N", title=None)
+            ).resolve_scale(y="independent"),
+            use_container_width=True,
+        )
+
+    st.subheader("Float profile by revision")
+    st.dataframe(pd.DataFrame([{
+        "Revision": s.label,
+        "Data date": f"{s.data_date:%Y-%m-%d}" if s.data_date else "—",
+        "Incomplete": s.incomplete_count,
+        "Median TF (d)": s.median_float,
+        "Min TF (d)": s.min_float,
+        "Critical (TF ≤ 0)": s.critical_count,
+        "Negative": s.negative_count,
+        f"Near (≤ {near:.0f}d)": s.near_count,
+    } for s in res.snapshots]), use_container_width=True, hide_index=True)
+
+    for w in res.windows:
+        if w.top_eroders or w.top_gainers:
+            with st.expander(
+                f"Window {w.index}: {w.from_label} → {w.to_label} — "
+                f"median Δ {w.median_delta:+.0f}d, {w.eroded_count} eroded, "
+                f"{w.gained_count} gained"
+            ):
+                st.dataframe(pd.DataFrame([{
+                    "Direction": "eroded", "Activity ID": d.task_code,
+                    "Activity": d.name, "TF was (d)": d.old_tf,
+                    "TF now (d)": d.new_tf, "Delta (d)": round(d.delta, 1),
+                } for d in w.top_eroders] + [{
+                    "Direction": "gained", "Activity ID": d.task_code,
+                    "Activity": d.name, "TF was (d)": d.old_tf,
+                    "TF now (d)": d.new_tf, "Delta (d)": round(d.delta, 1),
+                } for d in w.top_gainers]),
+                    use_container_width=True, hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        "nar_float",
+        lambda tmpl: build_float_erosion_prompt(res, tmpl),
+        "float_erosion",
+        DEFAULT_TEMPLATES["float_erosion"],
+    )
+    st.download_button(
+        "⬇️ Download float erosion report (Excel)",
+        data=build_float_erosion_xlsx(res, narrative),
+        file_name="float_erosion_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab 8 — Progress S-curve (Module 8)
+# ====================================================================== #
+
+def progress_tab() -> None:
+    st.caption(
+        "Planned cumulative progress from the baseline vs recorded progress "
+        "from the updates — slippage appears as the horizontal gap between "
+        "the curves."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+    if inv.baseline is None or len(files) < 2:
+        st.info("A baseline plus at least one update are needed for the "
+                "S-curve comparison.")
+        return
+
+    pool = dict(files)
+    base_name = inv.baseline.file_name
+    updates = [(r.file_name, pool[r.file_name])
+               for r in inv.revisions if r.file_name != base_name]
+
+    scheme_label = st.radio(
+        "Progress weighting", list(WEIGHT_OPTIONS.values()), horizontal=True,
+        help="How much each activity contributes to overall percent "
+             "complete.")
+    scheme = next(k for k, v in WEIGHT_OPTIONS.items()
+                  if v == scheme_label)
+
+    res = compute_progress(pool[base_name], base_name, updates,
+                           weight_scheme=scheme)
+    if not res.planned_curve:
+        for w in res.warnings:
+            st.warning(w)
+        return
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Planned at data date",
+              f"{res.planned_pct_at_dd:.1f}%"
+              if res.planned_pct_at_dd is not None else "—")
+    m2.metric("Recorded at data date",
+              f"{res.recorded_pct_at_dd:.1f}%"
+              if res.recorded_pct_at_dd is not None else "—")
+    m3.metric("Time offset",
+              f"{res.time_offset_days:+.0f} d"
+              if res.time_offset_days is not None else "—",
+              help="Positive = the recorded level of progress was planned "
+                   "to be reached that many days earlier.")
+
+    for w in res.warnings:
+        (st.success if w.startswith("Favourable") else st.warning)(w)
+
+    rows = ([{"Date": p.date, "Cum %": p.cum_pct, "Series": "Planned"}
+             for p in res.planned_curve]
+            + [{"Date": p.date, "Cum %": p.cum_pct, "Series": "As-recorded"}
+               for p in res.recorded_curve])
+    layers = [
+        alt.Chart(pd.DataFrame(rows)).mark_line(point=True)
+        .encode(
+            x=alt.X("Date:T", title=None, axis=alt.Axis(format="%b %Y")),
+            y=alt.Y("Cum %:Q", title="Cumulative progress (%)",
+                    scale=alt.Scale(domain=[0, 100])),
+            color=alt.Color("Series:N", title=None,
+                            scale=alt.Scale(
+                                domain=["Planned", "As-recorded"],
+                                range=["#3b76c4", "#cf222e"]),
+                            legend=alt.Legend(orient="top")),
+            tooltip=[alt.Tooltip("Date:T", format="%b %Y"), "Series",
+                     alt.Tooltip("Cum %:Q", format=".1f")],
+        )
+    ]
+    pts = [{"Date": rp.data_date, "Cum %": rp.recorded_pct,
+            "Revision": rp.label}
+           for rp in res.revision_points
+           if rp.data_date and rp.recorded_pct is not None]
+    if pts:
+        layers.append(
+            alt.Chart(pd.DataFrame(pts)).mark_point(
+                shape="diamond", size=140, filled=True, color="#e8a33d")
+            .encode(x="Date:T", y="Cum %:Q",
+                    tooltip=["Revision",
+                             alt.Tooltip("Date:T", format="%d %b %Y"),
+                             alt.Tooltip("Cum %:Q", format=".1f")]))
+    st.altair_chart(alt.layer(*layers).properties(height=380),
+                    use_container_width=True)
+    st.caption("◆ = each revision's overall recorded % at its data date.")
+
+    if res.revision_points:
+        st.dataframe(pd.DataFrame([{
+            "Revision": rp.label,
+            "Data date": (f"{rp.data_date:%Y-%m-%d}"
+                          if rp.data_date else "—"),
+            "Recorded %": rp.recorded_pct,
+            "Planned %": rp.planned_pct,
+            "Gap (pts)": (round(rp.planned_pct - rp.recorded_pct, 1)
+                          if rp.planned_pct is not None
+                          and rp.recorded_pct is not None else None),
+        } for rp in res.revision_points]),
+            use_container_width=True, hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_progress_{scheme}",
+        lambda tmpl: build_progress_prompt(res, tmpl),
+        "progress",
+        DEFAULT_TEMPLATES["progress"],
+    )
+    st.download_button(
+        "⬇️ Download S-curve report (Excel)",
+        data=build_progress_xlsx(res, narrative),
+        file_name="progress_scurve_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab 7 — Windows / Period Movement (Module 7)
+# ====================================================================== #
+
+def windows_tab() -> None:
+    st.caption(
+        "Movement per window between consecutive data dates: how much "
+        "completion moved, and how the driving path changed in each period."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** tab "
+                "first.")
+        return
+
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    res = analyse_windows(ordered)
+    if not res.windows:
+        for w in res.warnings:
+            st.warning(w)
+        return
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Windows", len(res.windows))
+    m2.metric("Cumulative completion movement",
+              f"{res.total_movement_days:+.0f} d"
+              if res.total_movement_days is not None else "—")
+    worst = max((w for w in res.windows if w.movement_days is not None),
+                key=lambda w: w.movement_days, default=None)
+    m3.metric("Largest window movement",
+              f"{worst.movement_days:+.0f} d (window {worst.index})"
+              if worst else "—")
+
+    for w in res.warnings:
+        (st.success if w.startswith("Favourable") else st.warning)(w)
+
+    # Completion trajectory: scheduled finish as at each data date.
+    traj = []
+    for w in res.windows:
+        if w.start and w.finish_old:
+            traj.append({"Data date": w.start, "Completion": w.finish_old})
+    last = res.windows[-1]
+    if last.end and last.finish_new:
+        traj.append({"Data date": last.end, "Completion": last.finish_new})
+    c1, c2 = st.columns(2)
+    if len(traj) >= 2:
+        c1.altair_chart(
+            alt.Chart(pd.DataFrame(traj))
+            .mark_line(point=True, interpolate="step-after")
+            .encode(
+                x=alt.X("Data date:T", axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Completion:T", title="Scheduled completion",
+                        scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="%b %Y")),
+                tooltip=[alt.Tooltip("Data date:T", format="%d %b %Y"),
+                         alt.Tooltip("Completion:T", format="%d %b %Y")],
+            ).properties(height=260, title="Completion trajectory"),
+            use_container_width=True,
+        )
+    mv = [{"Window": f"W{w.index}: {w.from_label} → {w.to_label}",
+           "Movement (d)": w.movement_days}
+          for w in res.windows if w.movement_days is not None]
+    if mv:
+        c2.altair_chart(
+            alt.Chart(pd.DataFrame(mv)).mark_bar(cornerRadius=2)
+            .encode(
+                x=alt.X("Window:N", sort=None, title=None,
+                        axis=alt.Axis(labelAngle=-20, labelLimit=200)),
+                y=alt.Y("Movement (d):Q"),
+                color=alt.condition("datum['Movement (d)'] > 0",
+                                    alt.value("#cf222e"),
+                                    alt.value("#1a7f37")),
+                tooltip=["Window", "Movement (d)"],
+            ).properties(height=260, title="Movement per window"),
+            use_container_width=True,
+        )
+
+    st.subheader("Windows")
+    st.dataframe(pd.DataFrame([{
+        "#": w.index,
+        "From": w.from_label,
+        "To": w.to_label,
+        "Period": (f"{w.start:%Y-%m-%d} → {w.end:%Y-%m-%d}"
+                   if w.start and w.end else "—"),
+        "Window (d)": w.window_days,
+        "Completion movement (d)": w.movement_days,
+        "Path retained": w.cp_retained,
+        "Path similarity": (f"{w.cp_similarity:.0%}"
+                            if w.cp_similarity is not None else "—"),
+        "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
+    } for w in res.windows]), use_container_width=True, hide_index=True)
+
+    for w in res.windows:
+        if w.shifts:
+            with st.expander(
+                f"Window {w.index} path changes — {len(w.joined)} joined, "
+                f"{len(w.left)} left ({w.from_label} → {w.to_label})"
+            ):
+                st.dataframe(pd.DataFrame([{
+                    "Direction": s.direction,
+                    "Activity ID": s.task_code,
+                    "Activity": s.name,
+                } for s in w.shifts]), use_container_width=True,
+                    hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        "nar_windows",
+        lambda tmpl: build_windows_prompt(res, tmpl),
+        "windows",
+        DEFAULT_TEMPLATES["windows"],
+    )
+    st.download_button(
+        "⬇️ Download windows report (Excel)",
+        data=build_windows_xlsx(res, narrative),
+        file_name="windows_analysis_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab 6 — Revision Comparison / Change Log (Module 6)
+# ====================================================================== #
+
+def comparison_tab() -> None:
+    st.caption(
+        "A change log between two programme revisions: scope, logic, "
+        "durations, constraints, calendars — and retrospective changes to "
+        "actualised dates."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** tab "
+                "first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]     # data-date order
+    c1, c2 = st.columns(2)
+    old_name = c1.selectbox("Earlier revision", names, index=0,
+                            help="Defaults to the baseline.")
+    new_default = len(names) - 1 if names[-1] != old_name else 0
+    new_name = c2.selectbox("Later revision", names, index=new_default)
+    if old_name == new_name:
+        st.warning("Pick two different revisions.")
+        return
+
+    pool = dict(files)
+    cmp = compare_revisions(pool[old_name], pool[new_name],
+                            old_name, new_name)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Total changes", cmp.total_changes)
+    m2.metric("Added / deleted",
+              f"{len(cmp.added)} / {len(cmp.deleted)}")
+    m3.metric("Logic added / removed",
+              f"{len(cmp.logic_added)} / {len(cmp.logic_removed)}")
+    m4.metric("Actuals changed retrospectively",
+              len(cmp.actual_date_changes))
+    if cmp.old_finish and cmp.new_finish:
+        moved = (cmp.new_finish - cmp.old_finish).days
+        st.markdown(
+            f"Scheduled completion: **{cmp.old_finish:%d %b %Y}** → "
+            f"**{cmp.new_finish:%d %b %Y}** ({moved:+d} calendar days)"
+        )
+
+    for w in cmp.warnings:
+        st.warning(w)
+
+    counts = {k: v for k, v in cmp.category_counts.items() if v}
+    if not counts:
+        st.success("No differences found between the two revisions.")
+        return
+    chart_df = pd.DataFrame(
+        [{"Category": k, "Count": v} for k, v in counts.items()])
+    st.altair_chart(
+        alt.Chart(chart_df).mark_bar(cornerRadius=2)
+        .encode(
+            x=alt.X("Count:Q", title=None),
+            y=alt.Y("Category:N", sort="-x", title=None,
+                    axis=alt.Axis(labelLimit=280)),
+            color=alt.condition(
+                "datum.Category == 'Actual dates changed retrospectively'",
+                alt.value("#cf222e"), alt.value("#3b76c4")),
+            tooltip=["Category", "Count"],
+        ).properties(height=28 * len(chart_df)),
+        use_container_width=True,
+    )
+
+    def _acts_table(refs):
+        return pd.DataFrame([{
+            "Activity ID": a.task_code, "Activity": a.name,
+            "Type": "Milestone" if a.is_milestone else "Task",
+            "Start": a.start.strftime("%Y-%m-%d") if a.start else "—",
+            "Finish": a.finish.strftime("%Y-%m-%d") if a.finish else "—",
+            "Duration (d)": a.duration_days,
+        } for a in refs])
+
+    def _changes_table(changes):
+        return pd.DataFrame([{
+            "Activity / Link": c.task_code, "Name": c.name,
+            "Was": c.old_value, "Now": c.new_value,
+            "Delta (d)": c.delta_days,
+        } for c in changes])
+
+    def _logic_table(links):
+        return pd.DataFrame([{
+            "Predecessor": lk.pred_code, "Pred name": lk.pred_name,
+            "Type": lk.link_type, "Successor": lk.succ_code,
+            "Succ name": lk.succ_name, "Lag (d)": lk.lag_days,
+        } for lk in links])
+
+    if cmp.actual_date_changes:
+        with st.expander(
+            f"🚩 Actual dates changed retrospectively "
+            f"({len(cmp.actual_date_changes)})", expanded=True,
+        ):
+            st.dataframe(_changes_table(cmp.actual_date_changes),
+                         use_container_width=True, hide_index=True)
+
+    sections = [
+        (f"Activities added ({len(cmp.added)})", _acts_table, cmp.added),
+        (f"Activities deleted ({len(cmp.deleted)})", _acts_table,
+         cmp.deleted),
+        (f"Duration changes ({len(cmp.duration_changes)})", _changes_table,
+         cmp.duration_changes),
+        (f"Logic added ({len(cmp.logic_added)})", _logic_table,
+         cmp.logic_added),
+        (f"Logic removed ({len(cmp.logic_removed)})", _logic_table,
+         cmp.logic_removed),
+        (f"Lag changes ({len(cmp.lag_changes)})", _changes_table,
+         cmp.lag_changes),
+        (f"Constraint changes ({len(cmp.constraint_changes)})",
+         _changes_table, cmp.constraint_changes),
+        (f"Calendar reassignments ({len(cmp.calendar_changes)})",
+         _changes_table, cmp.calendar_changes),
+        (f"Renamed activities ({len(cmp.renamed)})", _changes_table,
+         cmp.renamed),
+    ]
+    for label, fn, items in sections:
+        if items:
+            with st.expander(label):
+                st.dataframe(fn(items), use_container_width=True,
+                             hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in cmp.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_cmp_{old_name}_{new_name}",
+        lambda tmpl: build_comparison_prompt(cmp, tmpl),
+        "comparison",
+        DEFAULT_TEMPLATES["comparison"],
+    )
+    st.download_button(
+        "⬇️ Download comparison report (Excel)",
+        data=build_comparison_xlsx(cmp, narrative),
+        file_name="revision_comparison_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
 # Tab 5 — Baseline Planned Critical Path (Module 5)
 # ====================================================================== #
 
@@ -1080,12 +1942,19 @@ def main() -> None:
     st.title("Forensic Programme Analysis")
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 
-    intake, dcma, cpath, milestones, variance = st.tabs([
+    (intake, dcma, cpath, milestones, variance, compare, windows,
+     scurve, floats, resources, report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
         "🧭 Baseline Critical Path",
         "🏁 Milestone Shift Tracker",
         "📊 As-Planned vs As-Recorded",
+        "🔀 Revision Comparison",
+        "🪟 Windows Analysis",
+        "📈 Progress S-Curve",
+        "🎈 Float Erosion",
+        "👷 Resource Loading",
+        "📄 Report Assembler",
     ])
     with intake:
         intake_tab()
@@ -1097,6 +1966,18 @@ def main() -> None:
         milestone_tab()
     with variance:
         variance_tab()
+    with compare:
+        comparison_tab()
+    with windows:
+        windows_tab()
+    with scurve:
+        progress_tab()
+    with floats:
+        float_erosion_tab()
+    with resources:
+        resources_tab()
+    with report:
+        report_tab()
 
 
 if __name__ == "__main__":

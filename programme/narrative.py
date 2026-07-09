@@ -9,10 +9,15 @@ modules share one backend.
 
 from __future__ import annotations
 
+from .comparison import ComparisonResult
 from .critical_path import CriticalPathResult
 from .inventory import ProgrammeInventory
 from .milestones import MilestoneSeries, MilestoneShiftResult
 from .variance import VarianceResult
+from .float_erosion import FloatErosionResult
+from .progress import ProgressResult
+from .resources import ResourceLoadingResult
+from .windows import WindowsResult
 
 # Non-negotiable rules — always in the prompt, never user-editable, so a
 # template edit can't strip the forensic safety rails.
@@ -99,6 +104,129 @@ start and finish deltas in days. Order by finish delta, worst first.
 Only patterns visible in the figures: do delays concentrate in particular
 groups, do starts slip more than finishes, is any part of the works
 recovering between the two programmes?
+
+### 5. Limitations
+Every standing caveat and warning provided, in full.""",
+    "comparison": """\
+## Programme Revision Comparison
+
+### 1. Executive Summary
+2-3 sentences: the two revisions compared (with data dates), the movement of
+the scheduled completion date between them, and the overall volume and
+character of the changes.
+
+### 2. Scope Changes
+Activities added and deleted: how many, and what areas of work they sit in
+(from the activity names). If scope is unchanged, state that as a point of
+programme stability.
+
+### 3. Logic & Sequencing Changes
+Relationships added/removed and lag changes between activities present in
+both revisions. If the logic is substantially unchanged, state that the
+sequencing basis has been maintained.
+
+### 4. Duration & Constraint Changes
+The largest original-duration changes (both extensions and reductions) and
+the constraint changes, with figures.
+
+### 5. Retrospective Changes to Actual Dates
+CRITICAL SECTION: list every actualised date that was changed or removed
+between the revisions, exactly as provided. If there are none, state
+explicitly that no actualised dates were altered — a positive indicator for
+the contemporaneity of the records.
+
+### 6. Limitations
+Every standing caveat and warning provided, in full.""",
+    "resources": """\
+## Planned Resource Loading Review
+
+### 1. Executive Summary
+2-3 sentences: which resources the programme is loaded with, the dominant
+resources by planned quantity, and the period the loading spans.
+
+### 2. Resource-by-Resource Profile
+One bullet per resource: type (labour/equipment/material), total planned
+quantity, number of assignments, and when its loading peaks (from the
+monthly figures).
+
+### 3. Loading Pattern Observations
+Only what the monthly figures show: where loading concentrates, whether
+peaks coincide across resources, and any months with little or no planned
+loading.
+
+### 4. Coverage
+How much of the programme carries no resource assignment, and what that
+means for reliance on the histogram.
+
+### 5. Limitations
+Every standing caveat and warning provided, in full — including that this
+is planned loading, not actual expenditure.""",
+    "float_erosion": """\
+## Float Erosion Review
+
+### 1. Executive Summary
+2-3 sentences: how the programme's float profile changed across the
+revisions — median float, and the count of critical/negative-float
+activities at the latest revision.
+
+### 2. Float Profile by Revision
+One bullet per revision: incomplete activities, how many are critical
+(TF <= 0), near-critical, or negative, and the median float. Where the
+profile is healthy, say so.
+
+### 3. Float Consumption per Window
+Per window: the median float change on matched activities, how many eroded
+vs gained, and the worst-affected activities with figures. Report gains with
+the same weight as losses.
+
+### 4. Observations
+Only what the figures show: is erosion broad-based or concentrated, and
+does any revision show recovery of float?
+
+### 5. Limitations
+Every standing caveat and warning provided, in full.""",
+    "progress": """\
+## Progress S-Curve Review (Planned vs As-Recorded)
+
+### 1. Executive Summary
+2-3 sentences: recorded progress vs the planned profile as at the latest
+data date, in percentage points and in time (days), under the stated
+weighting scheme.
+
+### 2. Planned Profile
+The shape of the baseline curve: the period it spans and when the plan
+expected the works to be substantially complete.
+
+### 3. Recorded Progress
+The recorded curve and each revision's as-at point. Where progress tracked
+the plan, say so with the same weight as where it fell behind.
+
+### 4. Divergence
+When the recorded curve departed from the planned curve, and how the gap
+evolved (widening, stable, or narrowing) — only as visible in the figures.
+
+### 5. Limitations
+Every standing caveat and warning provided, in full.""",
+    "windows": """\
+## Windows / Period Movement Analysis
+
+### 1. Executive Summary
+2-3 sentences: the period covered, the number of windows, the cumulative
+completion movement, and which window contributed the largest movement.
+
+### 2. Window-by-Window Movement
+One bullet per window: the two revisions, the period between data dates, and
+the completion movement in days (state favourable movements as plainly as
+adverse ones).
+
+### 3. Critical Path Evolution
+Per window: how much of the driving path carried over, and what areas of
+work joined or left it (from the activity names). Flag windows where the
+path substantially switched.
+
+### 4. Periods of Stability or Recovery
+Windows with little or favourable movement, or a stable driving path —
+stated with the same weight as the adverse windows. If none, state that.
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
@@ -336,4 +464,246 @@ def build_critical_path_prompt(
     lines.extend(f"- {w}" for w in cp.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["critical_path"]))
+    return "\n".join(lines)
+
+def build_comparison_prompt(
+    cmp: ComparisonResult, template: str | None = None
+) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    lines = ["<context>Change log between two programme revisions: "
+             f"'{cmp.old_label}' (data date {fmt(cmp.old_data_date)}, "
+             f"scheduled finish {fmt(cmp.old_finish)}) and "
+             f"'{cmp.new_label}' (data date {fmt(cmp.new_data_date)}, "
+             f"scheduled finish {fmt(cmp.new_finish)}). Activities matched "
+             "by Activity ID; relationships by (pred, succ, type). Positive "
+             "delta = increased/later in the newer revision.</context>\n"]
+
+    lines.append("<change_summary>")
+    for k, v in cmp.category_counts.items():
+        lines.append(f"- {k}: {v}")
+    lines.append("</change_summary>\n")
+
+    def _acts(tag: str, refs, cap: int = 40):
+        if not refs:
+            return
+        lines.append(f"<{tag}>")
+        for a in refs[:cap]:
+            d = f"{a.duration_days:.0f}d" if a.duration_days is not None else "—"
+            kind = "MILESTONE" if a.is_milestone else d
+            lines.append(f"- {a.task_code} '{a.name}' [{kind}] "
+                         f"{fmt(a.start)} -> {fmt(a.finish)}")
+        if len(refs) > cap:
+            lines.append(f"... (+{len(refs) - cap} more)")
+        lines.append(f"</{tag}>\n")
+
+    _acts("activities_added", cmp.added)
+    _acts("activities_deleted", cmp.deleted)
+
+    def _changes(tag: str, changes, cap: int = 40):
+        if not changes:
+            return
+        lines.append(f"<{tag}>")
+        for c in changes[:cap]:
+            delta = (f" (delta {c.delta_days:+.1f}d)"
+                     if c.delta_days is not None else "")
+            lines.append(f"- {c.task_code} '{c.name}': {c.old_value} -> "
+                         f"{c.new_value}{delta}")
+        if len(changes) > cap:
+            lines.append(f"... (+{len(changes) - cap} more)")
+        lines.append(f"</{tag}>\n")
+
+    _changes("duration_changes", cmp.duration_changes)
+    _changes("constraint_changes", cmp.constraint_changes)
+    _changes("calendar_reassignments", cmp.calendar_changes)
+    _changes("renamed_activities", cmp.renamed, cap=20)
+    _changes("lag_changes", cmp.lag_changes)
+    # Never truncate the forensic category.
+    _changes("retrospective_actual_date_changes",
+             cmp.actual_date_changes, cap=10_000)
+
+    def _logic(tag: str, links):
+        if not links:
+            return
+        lines.append(f"<{tag}>")
+        for lk in links[:40]:
+            lag = f" lag {lk.lag_days:+.1f}d" if lk.lag_days else ""
+            lines.append(f"- {lk.pred_code} '{lk.pred_name}' "
+                         f"-{lk.link_type}-> {lk.succ_code} "
+                         f"'{lk.succ_name}'{lag}")
+        if len(links) > 40:
+            lines.append(f"... (+{len(links) - 40} more)")
+        lines.append(f"</{tag}>\n")
+
+    _logic("logic_added", cmp.logic_added)
+    _logic("logic_removed", cmp.logic_removed)
+
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in cmp.caveats)
+    lines.extend(f"- {w}" for w in cmp.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["comparison"]))
+    return "\n".join(lines)
+
+
+def build_windows_prompt(
+    res: WindowsResult, template: str | None = None
+) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    lines = ["<context>Windows analysis across programme revisions: each "
+             "window runs between two consecutive data dates. Movement = "
+             "change in the programme's scheduled completion over the "
+             "window (positive = slipped later). The driving path per "
+             "revision comes from a backward driving-logic trace; joined/"
+             "left = activities entering/leaving that path in the window."
+             "</context>\n"]
+    if res.total_movement_days is not None:
+        lines.append(f"<total_completion_movement>"
+                     f"{res.total_movement_days:+.0f} days across "
+                     f"{len(res.windows)} window(s)"
+                     f"</total_completion_movement>\n")
+    lines.append("<windows>")
+    for w in res.windows:
+        mv = (f"{w.movement_days:+.0f}d"
+              if w.movement_days is not None else "not computable")
+        sim = (f"{w.cp_similarity:.0%}"
+               if w.cp_similarity is not None else "n/a")
+        lines.append(
+            f"Window {w.index}: {w.from_label} -> {w.to_label} | "
+            f"{fmt(w.start)} to {fmt(w.end)} ({w.window_days or '?'} days) | "
+            f"completion {fmt(w.finish_old)} -> {fmt(w.finish_new)} "
+            f"(movement {mv}) | driving path {w.cp_old_count} -> "
+            f"{w.cp_new_count} activities, {w.cp_retained} retained "
+            f"(similarity {sim})"
+        )
+        for s in w.joined[:15]:
+            lines.append(f"  + joined path: {s.task_code} '{s.name}'")
+        if len(w.joined) > 15:
+            lines.append(f"  ... (+{len(w.joined) - 15} more joined)")
+        for s in w.left[:15]:
+            lines.append(f"  - left path: {s.task_code} '{s.name}'")
+        if len(w.left) > 15:
+            lines.append(f"  ... (+{len(w.left) - 15} more left)")
+    lines.append("</windows>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["windows"]))
+    return "\n".join(lines)
+
+
+def build_progress_prompt(
+    res: ProgressResult, template: str | None = None
+) -> str:
+    from .progress import WEIGHT_OPTIONS
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    scheme = WEIGHT_OPTIONS.get(res.weight_scheme, res.weight_scheme)
+    lines = ["<context>Progress S-curve comparison. Planned curve = "
+             "cumulative profile of the baseline; recorded curve = "
+             "cumulative profile built from the update's actual dates and "
+             f"physical percent complete. Weighting: {scheme}. Values are "
+             "cumulative percent of total weight at each month end."
+             "</context>\n"]
+    lines.append("<as_at_latest_data_date>")
+    lines.append(f"- Planned: {res.planned_pct_at_dd}%")
+    lines.append(f"- Recorded: {res.recorded_pct_at_dd}%")
+    if res.time_offset_days is not None:
+        lines.append(f"- Time offset: {res.time_offset_days:+.0f} days "
+                     "(positive = the recorded level of progress was "
+                     "planned to be reached that many days earlier)")
+    lines.append("</as_at_latest_data_date>\n")
+    lines.append("<planned_curve>")
+    for p in res.planned_curve:
+        lines.append(f"- {fmt(p.date)}: {p.cum_pct:.1f}%")
+    lines.append("</planned_curve>\n")
+    if res.recorded_curve:
+        lines.append(f"<recorded_curve source='{res.recorded_label}'>")
+        for p in res.recorded_curve:
+            lines.append(f"- {fmt(p.date)}: {p.cum_pct:.1f}%")
+        lines.append("</recorded_curve>\n")
+    if res.revision_points:
+        lines.append("<revision_points>")
+        for rp in res.revision_points:
+            lines.append(f"- {rp.label}: as at {fmt(rp.data_date)} recorded "
+                         f"{rp.recorded_pct}% vs planned {rp.planned_pct}%")
+        lines.append("</revision_points>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["progress"]))
+    return "\n".join(lines)
+
+
+def build_float_erosion_prompt(
+    res: FloatErosionResult, template: str | None = None
+) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    lines = ["<context>Float erosion across programme revisions. Total "
+             "float in days, per revision (incomplete activities only). "
+             f"'Near-critical' = 0 < TF <= {res.near_days:.0f}d. Erosion "
+             "per window is measured on activities present and incomplete "
+             "in both revisions (negative delta = float consumed)."
+             "</context>\n"]
+    lines.append("<float_profile_by_revision>")
+    for s in res.snapshots:
+        lines.append(
+            f"- {s.label} (data date {fmt(s.data_date)}): "
+            f"{s.incomplete_count} incomplete | median TF "
+            f"{s.median_float}d | min TF {s.min_float}d | "
+            f"critical (TF<=0): {s.critical_count} | negative: "
+            f"{s.negative_count} | near-critical: {s.near_count}"
+        )
+    lines.append("</float_profile_by_revision>\n")
+    for w in res.windows:
+        lines.append(f"<window_{w.index} from='{w.from_label}' "
+                     f"to='{w.to_label}'>")
+        lines.append(f"- matched activities: {w.matched}; median float "
+                     f"change {w.median_delta}d; eroded (>1d lost): "
+                     f"{w.eroded_count}; gained (>1d): {w.gained_count}")
+        for d in w.top_eroders:
+            lines.append(f"  eroded: {d.task_code} '{d.name}' "
+                         f"{d.old_tf:+.0f}d -> {d.new_tf:+.0f}d "
+                         f"({d.delta:+.0f}d)")
+        for d in w.top_gainers:
+            lines.append(f"  gained: {d.task_code} '{d.name}' "
+                         f"{d.old_tf:+.0f}d -> {d.new_tf:+.0f}d "
+                         f"({d.delta:+.0f}d)")
+        lines.append(f"</window_{w.index}>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["float_erosion"]))
+    return "\n".join(lines)
+
+
+def build_resources_prompt(
+    res: ResourceLoadingResult, template: str | None = None
+) -> str:
+    lines = ["<context>Planned resource loading from programme "
+             f"'{res.programme_label}': each assignment's target quantity "
+             "spread uniformly across its activity's scheduled dates, "
+             "bucketed by month. PLANNED loading, not actual expenditure."
+             "</context>\n"]
+    lines.append("<resources>")
+    for r in res.resources:
+        lines.append(f"- {r.short_name} ('{r.name}') [{r.rsrc_type}]: total "
+                     f"planned qty {r.total_qty:,.0f} across "
+                     f"{r.assignment_count} assignments")
+    lines.append("</resources>\n")
+    lines.append("<monthly_loading>")
+    for p in res.histogram:
+        lines.append(f"- {p.month_end:%Y-%m}: {p.resource} "
+                     f"[{p.rsrc_type}] {p.qty:,.0f}")
+    lines.append("</monthly_loading>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["resources"]))
     return "\n".join(lines)

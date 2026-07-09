@@ -25,7 +25,15 @@
       "Bash(git init *)",
       "Bash(git config *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "mcp__visualize__show_widget",
+      "Bash(./test.sh)",
+      "Read(//opt/anaconda3/bin/**)",
+      "Bash(.venv/bin/python -c \"import streamlit, pandas, plotly, pptx\")",
+      "Bash(pip3 install *)",
+      "Bash(gh auth *)",
+      "Bash(git push *)",
+      "Bash(echo \"exit: $?\")"
     ]
   }
 }

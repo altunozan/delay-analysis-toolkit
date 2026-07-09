@@ -22,6 +22,13 @@ from .activity_codes import (
     activity_code_types,
     task_code_assignments,
 )
+from .comparison import (
+    ActivityRef,
+    ComparisonResult,
+    FieldChange,
+    LogicChange,
+    compare_revisions,
+)
 from .critical_path import (
     CriticalPathResult,
     PathActivity,
@@ -29,6 +36,13 @@ from .critical_path import (
     end_activity_candidates,
     extract_critical_path,
     extract_longest_path,
+)
+from .float_erosion import (
+    FloatDelta,
+    FloatErosionResult,
+    FloatSnapshot,
+    WindowErosion,
+    analyse_float_erosion,
 )
 from .inventory import ProgrammeInventory, RevisionInfo, build_inventory
 from .milestones import (
@@ -40,16 +54,38 @@ from .milestones import (
     track_milestone_shifts,
 )
 from .narrative import (
+    build_comparison_prompt,
     build_critical_path_prompt,
+    build_float_erosion_prompt,
+    build_progress_prompt,
+    build_resources_prompt,
+    build_windows_prompt,
     build_inventory_prompt,
     build_milestone_prompt,
     build_variance_prompt,
 )
+from .report_docx import (
+    BasisOfAnalysis,
+    ReportSection,
+    SourceFile,
+    build_assembled_report,
+)
 from .report_xlsx import (
+    build_comparison_xlsx,
     build_critical_path_xlsx,
+    build_float_erosion_xlsx,
+    build_progress_xlsx,
+    build_resources_xlsx,
+    build_windows_xlsx,
     build_inventory_xlsx,
     build_milestone_xlsx,
     build_variance_xlsx,
+)
+from .resources import (
+    HistogramPoint,
+    ResourceInfo,
+    ResourceLoadingResult,
+    extract_resource_loading,
 )
 from .variance import (
     VarianceGroup,
@@ -57,6 +93,19 @@ from .variance import (
     combine_mappings,
     compute_variance,
     compute_variance_by_mapping,
+)
+from .progress import (
+    CurvePoint,
+    ProgressResult,
+    RevisionPoint,
+    WEIGHT_OPTIONS,
+    compute_progress,
+)
+from .windows import (
+    PathShift,
+    WindowRow,
+    WindowsResult,
+    analyse_windows,
 )
 from .wbs import max_wbs_depth, task_wbs_assignments
 
@@ -85,6 +134,12 @@ __all__ = [
     # wbs
     "max_wbs_depth",
     "task_wbs_assignments",
+    # comparison
+    "ActivityRef",
+    "ComparisonResult",
+    "FieldChange",
+    "LogicChange",
+    "compare_revisions",
     # critical path
     "CriticalPathResult",
     "PathActivity",
@@ -92,12 +147,49 @@ __all__ = [
     "end_activity_candidates",
     "extract_critical_path",
     "extract_longest_path",
+    # float erosion
+    "FloatDelta",
+    "FloatErosionResult",
+    "FloatSnapshot",
+    "WindowErosion",
+    "analyse_float_erosion",
+    # progress
+    "CurvePoint",
+    "ProgressResult",
+    "RevisionPoint",
+    "WEIGHT_OPTIONS",
+    "compute_progress",
+    # resources
+    "HistogramPoint",
+    "ResourceInfo",
+    "ResourceLoadingResult",
+    "extract_resource_loading",
+    # windows
+    "PathShift",
+    "WindowRow",
+    "WindowsResult",
+    "analyse_windows",
     # narrative prompts
+    "build_comparison_prompt",
+    "build_float_erosion_prompt",
+    "build_progress_prompt",
+    "build_resources_prompt",
+    "build_windows_prompt",
     "build_critical_path_prompt",
     "build_inventory_prompt",
     "build_milestone_prompt",
     "build_variance_prompt",
+    # assembled report (docx)
+    "BasisOfAnalysis",
+    "ReportSection",
+    "SourceFile",
+    "build_assembled_report",
     # excel
+    "build_comparison_xlsx",
+    "build_float_erosion_xlsx",
+    "build_progress_xlsx",
+    "build_resources_xlsx",
+    "build_windows_xlsx",
     "build_critical_path_xlsx",
     "build_inventory_xlsx",
     "build_milestone_xlsx",
