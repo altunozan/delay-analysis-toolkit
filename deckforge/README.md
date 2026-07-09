@@ -13,6 +13,19 @@ Separate from the delay-analysis toolkit in the parent folder; it only
 streamlit run deckforge/app.py --server.port 8502
 ```
 
+## CLI (headless automation)
+
+```bash
+# Whole deck from a version-controlled YAML definition
+python3 deckforge/build.py deckforge/example_deck.yaml
+# ...rebuild automatically whenever the YAML or its data files change
+python3 deckforge/build.py deck.yaml --watch
+
+# Standard 4-slide forensic review deck straight from two P6 programmes
+python3 deckforge/from_toolkit.py baseline.xer update.xer -o review.pptx \
+    --top 12 --agenda chapters
+```
+
 ## Test (headless)
 
 ```bash
@@ -53,6 +66,20 @@ render_plotly  render_pptx
 | Gantt remarks | Right-hand remark/responsibility column |
 | Gantt shared rows | Items with the same label share a row (actual + striped forecast) |
 | Gantt calendar | Year + month header (quarters on long spans); weekend shading ≤ ~4 months |
+| Line / area / combo | Native charts; combo = bars + overlay lines on a pinned shared axis |
+| Value-axis break | Shape-drawn bars with think-cell squiggle (native charts can't compress an axis) |
+| Pie / doughnut / butterfly / scatter / bubble | Native charts (butterfly negatives shown absolute via number format) |
+| Process chevrons | Shape strip with highlight step |
+| Harvey balls / RAG / checks | Table cell tokens `hb:75`, `rag:green`, `check` → coloured symbols |
+| Units, sorting | k/m/bn scaling via native number formats; category auto-sort |
+| Agenda automation | Front agenda or per-chapter divider slides with the current item highlighted |
+| Same-scale + grids | Harmonised value axes across slides; 2-up / 4-up multi-chart layouts |
+
+## Forensic P6 bridge (`p6_bridge.py`)
+
+With the delay-analysis toolkit alongside: comparison gantt (baseline vs
+current milestones, slip remarks), progress S-curve, milestone slip chart —
+in the app (two-file import) or via `from_toolkit.py`.
 | Marimekko | Grouped shapes |
 | Table / agenda | Native PowerPoint table |
 | Corporate template | Upload a `.pptx`/`.potx`; slides inherit its master |

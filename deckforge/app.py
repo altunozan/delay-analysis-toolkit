@@ -216,6 +216,48 @@ def _p6_import_ui() -> None:
         st.rerun()
 
 
+def _p6_two_file_ui() -> None:
+    """Baseline + update imports: comparison gantt, S-curve, slip chart."""
+    with st.expander("📥 Two-programme forensic import (baseline + update)"):
+        try:
+            import p6_bridge as pb
+        except ImportError:
+            st.info("Needs the delay-analysis toolkit next to DeckForge "
+                    "(dcma/programme packages not found).")
+            return
+        c1, c2 = st.columns(2)
+        up_b = c1.file_uploader("Baseline .xer", type=["xer"], key="p6c_b")
+        up_c = c2.file_uploader("Update .xer", type=["xer"], key="p6c_c")
+        what = st.radio(
+            "Import", ["Comparison gantt", "S-curve", "Milestone slips"],
+            horizontal=True, key="p6c_what")
+        top = st.slider("Max milestones", 5, 40, 12, key="p6c_top",
+                        disabled=what == "S-curve")
+        if up_b is None or up_c is None or not st.button(
+                "Load into datasheet", key="p6c_go"):
+            return
+        try:
+            base = pb.parse_xer(up_b.getvalue())
+            cur = pb.parse_xer(up_c.getvalue())
+            if what == "Comparison gantt":
+                st.session_state["df_gantt"] = pb.comparison_gantt_frame(
+                    base, cur, top=top)
+                target = "Gantt / timeline"
+            elif what == "S-curve":
+                st.session_state["df_line"] = pb.s_curve_frame(base, cur)
+                target = "Line"
+            else:
+                st.session_state["df_bar"] = pb.milestone_slip_frame(
+                    base, cur, top=top)
+                target = "Stacked bar (horizontal, sorted)"
+        except Exception as exc:  # noqa: BLE001 — surface parser errors
+            st.error(f"Import failed: {exc}")
+            return
+        st.success(f"Loaded — switch the chart type to **{target}** to "
+                   "see it.")
+        st.rerun()
+
+
 def chart_builder_tab(theme) -> None:
     c_type, c_title = st.columns([1, 2])
     options = list(CHART_TYPES)
@@ -241,6 +283,8 @@ def chart_builder_tab(theme) -> None:
 
     if kind == "gantt":
         _p6_import_ui()
+    if kind in ("gantt", "line", "bar"):
+        _p6_two_file_ui()
 
     st.markdown("**Datasheet** — edit like a think-cell sheet; the chart "
                 "updates live.")
@@ -549,7 +593,27 @@ def help_tab() -> None:
 | Gantt: shared rows | Same Activity name = same row (actual + forecast) | Multiple bars per row |
 | Gantt: calendar | Automatic month/quarter scale | Year + month header rows |
 | Marimekko | Marimekko type | Grouped shapes |
+| Line / area / combo | Line, Area, Combo types (combo = bars + overlay lines on a pinned shared axis) | **Native editable charts** |
+| Value-axis break | Advanced panel on bar charts | Shape-drawn bars with squiggle |
+| Pie / doughnut | Pie type | **Native chart** |
+| Butterfly / tornado | Butterfly type | **Native chart** (negatives shown absolute) |
+| Scatter / bubble | Scatter type, with quadrant lines | **Native XY/bubble chart** |
+| Process chevrons | Process flow type | Chevron shapes |
+| Harvey balls / RAG / checks | Table cell tokens: `hb:75`, `rag:green`, `check` | Coloured symbols in native table |
+| Unit scaling (k/m/bn) | Advanced panel | Native number formats |
+| Auto-sort | Advanced panel | — |
+| Same-scale charts | Deck tab → Layout → harmonised scales | Pinned axes |
+| Agenda automation | Deck tab → Layout → agenda slides / chapter dividers | Generated slides |
+| Multi-chart slides | Deck tab → Layout → slide groups (2-up / 4-up) | Grid layout |
 | Agenda | Table type | **Native table** |
+
+### Forensic P6 imports (needs the toolkit alongside)
+- **Single file** (Gantt): milestones or longest path → datasheet
+- **Two files** (baseline + update): comparison gantt with slip remarks,
+  progress S-curve, milestone slip chart
+- **CLI**: `python3 deckforge/from_toolkit.py baseline.xer update.xer` builds
+  the standard 4-slide review deck; `python3 deckforge/build.py deck.yaml
+  --watch` rebuilds a YAML-defined deck whenever its data changes.
 
 **Why this beats the manual workflow:** the datasheet *is* the chart —
 regenerate the entire deck after a data change with one click, instead of

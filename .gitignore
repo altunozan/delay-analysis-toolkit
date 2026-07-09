@@ -50,3 +50,5 @@ sample/*.xer
 *.tmp
 deckforge/.deckforge_autosave.pkl
 deckforge/sample_output.pptx
+deckforge/example_deck.pptx
+deckforge/report_deck.pptx

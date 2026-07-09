@@ -234,7 +234,70 @@ def main() -> None:
     except Exception as exc:  # noqa: BLE001 — optional dependency
         print(f"PNG export: SKIPPED ({exc})")
 
+    check_p6_bridge()
+    check_yaml_cli()
+
     print("\nAll DeckForge assertions passed.")
+
+
+def check_p6_bridge() -> None:
+    """Forensic bridge against the real sample XERs (skips without them)."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_p = os.path.join(root, "sample", "Sample Baseline.xer")
+    cur_p = os.path.join(root, "sample", "Sample Update.xer")
+    if not (os.path.exists(base_p) and os.path.exists(cur_p)):
+        print("P6 bridge: SKIPPED (sample XERs not present)")
+        return
+    sys.path.insert(0, root)
+    import p6_bridge as pb
+    from data_io import frame_to_gantt
+    with open(base_p, "rb") as fh:
+        base = pb.parse_xer(fh.read())
+    with open(cur_p, "rb") as fh:
+        cur = pb.parse_xer(fh.read())
+
+    slips = pb.milestone_slip_frame(base, cur, top=10)
+    assert len(slips) == 10 and abs(slips.iloc[0, 1]) >= abs(slips.iloc[-1, 1])
+
+    comp = pb.comparison_gantt_frame(base, cur, top=8)
+    spec = frame_to_gantt(comp, title="cmp", show_remarks=True)
+    assert len(spec.rows()) == 8 and len(spec.items) == 16  # shared rows
+
+    sc = pb.s_curve_frame(base, cur)
+    planned = sc["Planned %"].tolist()
+    assert planned == sorted(planned) and planned[-1] == 100.0
+    actual = sc["Actual %"].dropna().tolist()
+    assert actual == sorted(actual) and 0 <= actual[-1] <= 100
+    # No actuals reported for months after the update's data date.
+    import pandas as pd
+    months = pd.to_datetime(sc["Month"], format="%b %y")
+    dd = cur.project.data_date
+    after = sc.loc[months > pd.Timestamp(dd.year, dd.month, 1), "Actual %"]
+    assert after.isna().all(), "actuals must stop at the data date"
+
+    from from_toolkit import build_report_specs
+    specs = build_report_specs(base, cur, top=8)
+    blob = build_deck(specs, DEFAULT_THEME)
+    assert len(specs) == 4 and len(blob) > 20_000
+    print(f"P6 bridge: OK (slips/comparison/S-curve + {len(specs)}-slide "
+          "report deck)")
+
+
+def check_yaml_cli() -> None:
+    """Batch build from the bundled example definition."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        import yaml  # noqa: F401
+    except ImportError:
+        print("YAML CLI: SKIPPED (PyYAML not installed)")
+        return
+    from build import build_from_file
+    out = build_from_file(os.path.join(here, "example_deck.yaml"))
+    from pptx import Presentation
+    prs = Presentation(out)
+    # title + agenda + 4 grouped slides (pie+process share one) = 6
+    assert len(prs.slides._sldIdLst) == 6, len(prs.slides._sldIdLst)  # noqa: SLF001
+    print("YAML CLI: OK (grouped slides + agenda + title)")
 
 
 if __name__ == "__main__":

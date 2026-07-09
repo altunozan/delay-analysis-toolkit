@@ -1,0 +1,49 @@
+# DeckForge batch-build example — run with:
+#   python3 deckforge/build.py deckforge/example_deck.yaml
+theme: Consulting Blue
+title: Programme review
+agenda: front
+harmonise_bars: false
+output: example_deck.pptx
+
+slides:
+  - type: bar
+    title: Revenue development by workstream
+    unit: m
+    deltas:
+      - {from: FY22, to: FY25, mode: absolute}
+      - {from: FY22, to: FY25, mode: cagr}
+    inline:
+      Category: [FY22, FY23, FY24, FY25]
+      Construction: [420, 465, 512, 590]
+      MEP: [180, 210, 236, 275]
+      Fit-out: [90, 118, 160, 205]
+
+  - type: waterfall
+    title: Delay build-up to forecast completion (days)
+    inline:
+      Step: [Design changes, Late approvals, Weather, Acceleration, Net delay]
+      Value: [45, 62, 18, -25, 0]
+      Is total: [false, false, false, false, true]
+
+  - type: pie
+    title: Cost split by package
+    group: 1
+    inline:
+      Segment: [Structure, MEP, Fit-out, Façade, External]
+      Value: [38, 24, 18, 14, 6]
+
+  - type: process
+    title: Claim preparation process
+    group: 1
+    highlight: 2
+    inline:
+      Step: [Notice, Records, Analysis, Quantum, Submission, Determination]
+
+  - type: table
+    title: Agenda & status
+    inline:
+      Section: ["1", "2", "3"]
+      Topic: [Programme status, Delay events, Decisions required]
+      Status: ["rag:green", "rag:amber", "rag:red"]
+      Progress: ["hb:100", "hb:50", "hb:25"]
