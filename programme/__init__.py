@@ -107,10 +107,17 @@ from .resources import (
 from .sequence_coding import (
     FrontStageBand,
     MappingRow,
+    REVIEW_SYSTEM_PROMPT,
     STAGE_ORDER,
+    UNCLASSIFIED,
+    VIEW_ADVISOR_SYSTEM_PROMPT,
     SequenceMappingProposal,
     SequenceResult,
     analyse_sequence,
+    build_mapping_review_prompt,
+    build_view_advice_prompt,
+    parse_mapping_review,
+    parse_view_advice,
     propose_sequence_mapping,
 )
 from .variance import (
@@ -209,6 +216,13 @@ __all__ = [
     "SequenceMappingProposal",
     "SequenceResult",
     "analyse_sequence",
+    "REVIEW_SYSTEM_PROMPT",
+    "UNCLASSIFIED",
+    "VIEW_ADVISOR_SYSTEM_PROMPT",
+    "build_mapping_review_prompt",
+    "build_view_advice_prompt",
+    "parse_mapping_review",
+    "parse_view_advice",
     "propose_sequence_mapping",
     # windows
     "PathShift",

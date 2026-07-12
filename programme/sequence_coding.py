@@ -247,3 +247,153 @@ def analyse_sequence(
             "unfinished activities as at the data date."
         )
     return result
+
+
+# --------------------------------------------------------------------------- #
+# AI review layer — prompt builders + strict parsers (no API calls here)
+# --------------------------------------------------------------------------- #
+
+REVIEW_SYSTEM_PROMPT = (
+    "You are a construction planning engineer classifying programme "
+    "activities. You return ONLY valid JSON — no commentary, no markdown "
+    "fences. You never invent activity IDs and you only use the stage "
+    "labels you are given, verbatim."
+)
+
+
+def build_mapping_review_prompt(rows: list[MappingRow]) -> str:
+    """Prompt asking the model to correct front/stage assignments."""
+    lines = [
+        "<task>Review the work-front and construction-stage coding of "
+        "these programme activities. The current assignment was made by "
+        "keyword rules and may be wrong or Unclassified. Correct only the "
+        "rows that need it.</task>",
+        "",
+        "<stages>Allowed stage labels (use verbatim):",
+    ]
+    lines += [f"- {s}" for s in STAGE_ORDER]
+    lines += [
+        "</stages>",
+        "",
+        "<front_conventions>Work fronts are short location labels "
+        "(e.g. 'B15', 'Mobilization'). Keep them consistent: merge obvious "
+        "variants of the same location; do not invent new locations not "
+        "implied by the activity.</front_conventions>",
+        "",
+        "<rows>",
+    ]
+    for r in rows:
+        lines.append(f"{r.task_code} | {r.name} | front={r.front} | "
+                     f"stage={r.stage}")
+    lines += [
+        "</rows>",
+        "",
+        '<output>Return ONLY a JSON array of corrections, e.g. '
+        '[{"id": "A1000", "front": "B15", "stage": "Finishes & Fit-Out"}]. '
+        "Include ONLY rows whose front or stage should change; omit "
+        "unchanged rows. Every 'id' must be an Activity ID from <rows>; "
+        "every 'stage' must be one of the allowed labels verbatim. If "
+        "nothing needs changing return [].</output>",
+    ]
+    return "\n".join(lines)
+
+
+def parse_mapping_review(
+    text: str, valid_codes: set[str]
+) -> dict[str, tuple[str | None, str | None]]:
+    """Parse the model's corrections; drop anything invalid.
+
+    Returns {task_code: (front_or_None, stage_or_None)} for accepted rows.
+    """
+    import json
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    start, end = cleaned.find("["), cleaned.rfind("]")
+    if start == -1 or end == -1 or end <= start:
+        return {}
+    try:
+        items = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, tuple[str | None, str | None]] = {}
+    if not isinstance(items, list):
+        return out
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("id", "")).strip()
+        if code not in valid_codes:
+            continue
+        front = item.get("front")
+        stage = item.get("stage")
+        front = str(front).strip()[:40] if front else None
+        if stage is not None and stage not in STAGE_ORDER:
+            stage = None                        # unknown label -> reject
+        if front or stage:
+            out[code] = (front or None, stage)
+    return out
+
+
+VIEW_ADVISOR_SYSTEM_PROMPT = (
+    "You are a data-visualisation advisor for construction programme "
+    "gantt charts. You return ONLY valid JSON — no commentary, no fences."
+)
+
+
+def build_view_advice_prompt(seq: SequenceResult,
+                             front_count: int) -> str:
+    spans = [b for b in seq.bands if b.act_start and b.act_finish]
+    lo = min((b.act_start for b in spans), default=None)
+    hi = max((b.act_finish for b in spans), default=None)
+    return (
+        "<task>Recommend the clearest chart configuration for a "
+        "construction-sequence view of this coded programme.</task>\n"
+        f"<data>work fronts: {front_count}; front x stage bands: "
+        f"{len(seq.bands)}; mapped activities: {seq.mapped_activities}; "
+        f"period: {lo:%Y-%m} to {hi:%Y-%m}</data>\n" if lo and hi else ""
+    ) + (
+        "<options>\n"
+        '- "mode": one of "bands" (y = work front, one bar per front x '
+        'stage), "stage_timeline" (y = stage, one bar per stage), '
+        '"activity_gantt" (one bar per activity, full start-to-finish '
+        "sequence)\n"
+        '- "colour": "Stage" or "Front"\n'
+        '- "max_fronts": integer 5-40 (how many last-finishing fronts to '
+        "show)\n"
+        "</options>\n"
+        '<output>Return ONLY JSON: {"mode": "...", "colour": "...", '
+        '"max_fronts": N, "rationale": "one sentence"}.</output>'
+    )
+
+
+def parse_view_advice(text: str) -> dict | None:
+    import json
+
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start == -1 or end <= start:
+        return None
+    try:
+        obj = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    mode = obj.get("mode")
+    if mode not in ("bands", "stage_timeline", "activity_gantt"):
+        return None
+    colour = obj.get("colour")
+    if colour not in ("Stage", "Front"):
+        colour = "Stage"
+    try:
+        max_fronts = max(5, min(40, int(obj.get("max_fronts", 20))))
+    except (TypeError, ValueError):
+        max_fronts = 20
+    return {"mode": mode, "colour": colour, "max_fronts": max_fronts,
+            "rationale": str(obj.get("rationale", ""))[:300]}

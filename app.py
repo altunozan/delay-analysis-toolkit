@@ -46,13 +46,20 @@ from programme import (
     ReportSection,
     SourceFile,
     WEIGHT_OPTIONS,
+    REVIEW_SYSTEM_PROMPT,
     STAGE_ORDER,
+    UNCLASSIFIED,
+    VIEW_ADVISOR_SYSTEM_PROMPT,
     analyse_asbuilt_path,
     analyse_float_erosion,
     analyse_sequence,
+    build_mapping_review_prompt,
     build_sequence_prompt,
     build_sequence_xlsx,
+    build_view_advice_prompt,
     extract_actual_trace,
+    parse_mapping_review,
+    parse_view_advice,
     propose_sequence_mapping,
     trace_end_candidates,
     triangulate,
@@ -954,15 +961,86 @@ def sequence_tab() -> None:
         st.warning(w)
 
     confirmed = st.session_state.get(f"{map_key}_confirmed", False)
+    editor_ver = st.session_state.get(f"{map_key}_ver", 0)
     with st.expander(
         "Review & amend the proposed mapping"
         + (" — ✅ confirmed" if confirmed else " — ⚠️ not yet confirmed"),
         expanded=not confirmed,
     ):
+        # --- AI review pass: the model proposes corrections; you confirm.
+        st.markdown("**🤖 AI review of the coding** — the model reads "
+                    "every activity and proposes corrections; they land "
+                    "in the table below marked *AI review* and still "
+                    "require your confirmation.")
+        rc1, rc2 = st.columns(2)
+        r_provider = rc1.selectbox(
+            "AI provider", options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"],
+            key="seq_ai_provider")
+        r_info = PROVIDERS[r_provider]
+        r_model = rc2.text_input("Model", value=r_info["default_model"],
+                                 key="seq_ai_model")
+        r_env = os.environ.get(r_info["env_var"], "")
+        if r_provider == "gemini" and not r_env:
+            r_env = os.environ.get("GOOGLE_API_KEY", "")
+        r_key = st.text_input(f"{r_info['label']} API key", type="password",
+                              value=r_env, key="seq_ai_key")
+        scope = st.radio(
+            "Rows to review", ["Unclassified / General only",
+                               "All activities"],
+            horizontal=True, key="seq_ai_scope")
+        targets = [r for r in prop.rows
+                   if scope.startswith("All")
+                   or r.stage == UNCLASSIFIED or r.front == "General"]
+        if st.button(f"Run AI review ({len(targets)} activities)",
+                     disabled=not r_key or not targets, key="seq_ai_go"):
+            BATCH = 120
+            prog_bar = st.progress(0.0)
+            applied = 0
+            failures = []
+            batches = [targets[i:i + BATCH]
+                       for i in range(0, len(targets), BATCH)]
+            by_code = {r.task_code: r for r in prop.rows}
+            for j, batch in enumerate(batches):
+                try:
+                    text = "".join(stream_narrative(
+                        r_provider, r_key,
+                        build_mapping_review_prompt(batch),
+                        r_model or None, system=REVIEW_SYSTEM_PROMPT))
+                    changes = parse_mapping_review(
+                        text, {r.task_code for r in batch})
+                    for code, (front, stage) in changes.items():
+                        row = by_code[code]
+                        if front and front != row.front:
+                            row.front, row.front_evidence = front, "AI review"
+                            applied += 1
+                        if stage and stage != row.stage:
+                            row.stage, row.stage_evidence = stage, "AI review"
+                            applied += 1
+                except NarrativeError as exc:
+                    failures.append(exc.message)
+                    break
+                prog_bar.progress((j + 1) / len(batches))
+            if failures:
+                st.error("AI review stopped: " + failures[0])
+            else:
+                # New proposals invalidate any previous confirmation and
+                # need a fresh editor to show through.
+                st.session_state.pop(f"{map_key}_confirmed", None)
+                st.session_state[f"{map_key}_ver"] = editor_ver + 1
+                st.session_state["seq_ai_summary"] = (
+                    f"AI review proposed {applied} change(s) across "
+                    f"{len(targets)} activities — review below and "
+                    "Confirm.")
+                st.rerun()
+        if st.session_state.get("seq_ai_summary"):
+            st.success(st.session_state.pop("seq_ai_summary"))
+
         st.caption(
             "Edit any Work front or Stage cell. Every row shows the "
-            "evidence behind the proposal. Click Confirm to adopt the "
-            "mapping for the analysis below and the report."
+            "evidence behind the proposal (rules, WBS, AI review, or "
+            "analyst). Click Confirm to adopt the mapping for the "
+            "analysis below and the report."
         )
         df = pd.DataFrame([{
             "Activity ID": r.task_code,
@@ -986,7 +1064,7 @@ def sequence_tab() -> None:
                     disabled=True),
             },
             hide_index=True, use_container_width=True, height=360,
-            key=f"seq_editor_{chosen}",
+            key=f"seq_editor_{chosen}_v{editor_ver}",
         )
         if st.button("✅ Confirm mapping", type="primary",
                      key="seq_confirm"):
@@ -1009,12 +1087,163 @@ def sequence_tab() -> None:
     for w in seq.warnings:
         (st.info if w.startswith("Last-finishing") else st.warning)(w)
 
-    chart = report_charts.sequence_matrix_chart(seq, max_fronts=30)
+    # ---- configurable sequence chart -------------------------------------
+    VIEW_MODES = {
+        "Front × stage bands": "bands",
+        "Stage timeline": "stage_timeline",
+        "Activity gantt (start → finish)": "activity_gantt",
+    }
+    vc1, vc2, vc3 = st.columns([2, 1, 1])
+    view_label = vc1.radio("View", list(VIEW_MODES.keys()),
+                           horizontal=True, key="seq_view")
+    mode = VIEW_MODES[view_label]
+    colour_by = vc2.selectbox("Colour by", ["Stage", "Front"],
+                              key="seq_colour")
+    max_fronts = vc3.slider("Fronts shown", 5, 40, 20, key="seq_maxfronts",
+                            help="Last-finishing work fronts included.")
+    with st.expander("🤖 Let the AI recommend the clearest view"):
+        s_provider = st.selectbox(
+            "Provider", options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"], key="seq_vp")
+        s_env = os.environ.get(PROVIDERS[s_provider]["env_var"], "")
+        if s_provider == "gemini" and not s_env:
+            s_env = os.environ.get("GOOGLE_API_KEY", "")
+        s_key = st.text_input("API key", type="password", value=s_env,
+                              key="seq_vk")
+        if st.button("Recommend the best view", key="seq_vgo",
+                     disabled=not s_key):
+            try:
+                text = "".join(stream_narrative(
+                    s_provider, s_key,
+                    build_view_advice_prompt(seq, len(prop.fronts)),
+                    None, system=VIEW_ADVISOR_SYSTEM_PROMPT))
+                advice = parse_view_advice(text)
+            except NarrativeError as exc:
+                advice = None
+                st.error(exc.message)
+            if advice:
+                inv_modes = {v: k for k, v in VIEW_MODES.items()}
+                st.session_state["seq_view"] = inv_modes[advice["mode"]]
+                st.session_state["seq_colour"] = advice["colour"]
+                st.session_state["seq_maxfronts"] = advice["max_fronts"]
+                st.session_state["seq_view_rationale"] = advice["rationale"]
+                st.rerun()
+            elif advice is None and s_key:
+                st.warning("The model returned no usable recommendation.")
+    if st.session_state.get("seq_view_rationale"):
+        st.caption("🤖 " + st.session_state["seq_view_rationale"])
+
+    keep = [f for f, _ in seq.fronts_by_finish[:max_fronts]]
+    stage_domain = [s for s in seq.stage_order]
+    stage_range = [report_charts.STAGE_COLORS.get(s, "#9e9e9e")
+                   for s in stage_domain]
+
+    def _colour_enc(field_fronts: list[str]):
+        if colour_by == "Stage":
+            return alt.Color("Stage:N",
+                             scale=alt.Scale(domain=stage_domain,
+                                             range=stage_range),
+                             legend=alt.Legend(orient="bottom", columns=3,
+                                               title=None))
+        return alt.Color("Front:N",
+                         scale=alt.Scale(domain=field_fronts,
+                                         scheme="tableau20"),
+                         legend=alt.Legend(orient="bottom", columns=4,
+                                           title=None))
+
+    chart = None
+    if mode == "bands":
+        rows_c = [{"Front": b.front, "Stage": b.stage, "Start": b.act_start,
+                   "Finish": b.act_finish or b.act_start,
+                   "Activities": b.activity_count}
+                  for b in seq.bands
+                  if b.front in keep and b.act_start]
+        if rows_c:
+            chart = (alt.Chart(pd.DataFrame(rows_c))
+                     .mark_bar(height=7, cornerRadius=2, opacity=0.9)
+                     .encode(
+                         x=alt.X("Start:T", title=None,
+                                 axis=alt.Axis(format="%b %Y")),
+                         x2="Finish:T",
+                         y=alt.Y("Front:N", sort=list(reversed(keep)),
+                                 title=None,
+                                 axis=alt.Axis(labelLimit=220)),
+                         color=_colour_enc(keep),
+                         tooltip=["Front", "Stage", "Activities",
+                                  alt.Tooltip("Start:T", format="%d %b %Y"),
+                                  alt.Tooltip("Finish:T",
+                                              format="%d %b %Y")])
+                     .properties(height=max(220, 16 * len(keep))))
+    elif mode == "stage_timeline":
+        agg: dict[str, list] = {}
+        for b in seq.bands:
+            if b.front not in keep or b.act_start is None:
+                continue
+            agg.setdefault(b.stage, []).append(b)
+        rows_c = [{"Stage": s,
+                   "Start": min(b.act_start for b in bs),
+                   "Finish": max((b.act_finish or b.act_start) for b in bs),
+                   "Activities": sum(b.activity_count for b in bs),
+                   "Front": f"{len({b.front for b in bs})} fronts"}
+                  for s, bs in agg.items()]
+        if rows_c:
+            s_order = [s for s in seq.stage_order if s in agg]
+            chart = (alt.Chart(pd.DataFrame(rows_c))
+                     .mark_bar(height=14, cornerRadius=3, opacity=0.9)
+                     .encode(
+                         x=alt.X("Start:T", title=None,
+                                 axis=alt.Axis(format="%b %Y")),
+                         x2="Finish:T",
+                         y=alt.Y("Stage:N", sort=s_order, title=None,
+                                 axis=alt.Axis(labelLimit=260)),
+                         color=alt.Color(
+                             "Stage:N",
+                             scale=alt.Scale(domain=stage_domain,
+                                             range=stage_range),
+                             legend=None),
+                         tooltip=["Stage", "Front", "Activities",
+                                  alt.Tooltip("Start:T", format="%d %b %Y"),
+                                  alt.Tooltip("Finish:T",
+                                              format="%d %b %Y")])
+                     .properties(height=30 * len(rows_c),
+                                 title="Stage timeline across the works"))
+    else:                                  # activity gantt, start → finish
+        acts = sorted(
+            (r for r in prop.rows
+             if r.act_start and r.front in keep),
+            key=lambda r: (r.act_start, r.act_finish or r.act_start))
+        capped = len(acts) > 200
+        acts = acts[:200]
+        rows_c = [{"Activity": f"{r.task_code} · {r.name[:30]}",
+                   "Front": r.front, "Stage": r.stage,
+                   "Start": r.act_start,
+                   "Finish": r.act_finish or r.act_start}
+                  for r in acts]
+        if rows_c:
+            order = [r["Activity"] for r in rows_c]
+            chart = (alt.Chart(pd.DataFrame(rows_c))
+                     .mark_bar(height=4, cornerRadius=1)
+                     .encode(
+                         x=alt.X("Start:T", title=None,
+                                 axis=alt.Axis(format="%b %Y")),
+                         x2="Finish:T",
+                         y=alt.Y("Activity:N", sort=order, title=None,
+                                 axis=alt.Axis(labelLimit=260,
+                                               labelFontSize=7)),
+                         color=_colour_enc(keep),
+                         tooltip=["Activity", "Front", "Stage",
+                                  alt.Tooltip("Start:T", format="%d %b %Y"),
+                                  alt.Tooltip("Finish:T",
+                                              format="%d %b %Y")])
+                     .properties(height=max(300, 8 * len(order)),
+                                 title="As-built sequence, start → finish"
+                                       + (" (first 200 by actual start)"
+                                          if capped else "")))
     if chart is not None:
         st.altair_chart(chart, use_container_width=True)
-        st.caption("Bars = earliest actual start → latest actual finish "
-                   "per work front and stage; fronts ordered by last "
-                   "recorded finish (latest at the bottom).")
+        st.caption("Bars = actual dates as recorded. Switch view, colour, "
+                   "and front count above — or let the AI recommend the "
+                   "clearest configuration.")
 
     with st.expander("Front × stage bands (table)"):
         st.dataframe(pd.DataFrame([{

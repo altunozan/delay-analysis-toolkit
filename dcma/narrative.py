@@ -173,7 +173,8 @@ def build_report_prompt(
 # --------------------------------------------------------------------------- #
 # Provider streaming backends
 # --------------------------------------------------------------------------- #
-def _stream_anthropic(api_key: str, model: str, prompt: str) -> Iterator[str]:
+def _stream_anthropic(api_key: str, model: str, prompt: str,
+                      system: str | None = None) -> Iterator[str]:
     import anthropic
 
     client = anthropic.Anthropic(api_key=api_key)
@@ -182,7 +183,7 @@ def _stream_anthropic(api_key: str, model: str, prompt: str) -> Iterator[str]:
             model=model,
             max_tokens=16000,
             thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
+            system=system or SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
         ) as stream:
             yield from stream.text_stream
@@ -198,7 +199,8 @@ def _stream_anthropic(api_key: str, model: str, prompt: str) -> Iterator[str]:
         raise NarrativeError(f"Anthropic API error ({exc.status_code}): {exc.message}")
 
 
-def _stream_openai(api_key: str, model: str, prompt: str) -> Iterator[str]:
+def _stream_openai(api_key: str, model: str, prompt: str,
+                   system: str | None = None) -> Iterator[str]:
     try:
         import openai
     except ImportError:
@@ -209,7 +211,7 @@ def _stream_openai(api_key: str, model: str, prompt: str) -> Iterator[str]:
         stream = client.chat.completions.create(
             model=model,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system or SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             stream=True,
@@ -229,7 +231,8 @@ def _stream_openai(api_key: str, model: str, prompt: str) -> Iterator[str]:
         raise NarrativeError(f"OpenAI API error ({exc.status_code}): {exc.message}")
 
 
-def _stream_gemini(api_key: str, model: str, prompt: str) -> Iterator[str]:
+def _stream_gemini(api_key: str, model: str, prompt: str,
+                   system: str | None = None) -> Iterator[str]:
     try:
         from google import genai
         from google.genai import errors as genai_errors
@@ -243,7 +246,7 @@ def _stream_gemini(api_key: str, model: str, prompt: str) -> Iterator[str]:
             model=model,
             contents=prompt,
             config=genai_types.GenerateContentConfig(
-                system_instruction=SYSTEM_PROMPT,
+                system_instruction=system or SYSTEM_PROMPT,
             ),
         )
         for chunk in stream:
@@ -282,15 +285,18 @@ def stream_narrative(
     api_key: str,
     prompt: str,
     model: str | None = None,
+    system: str | None = None,
 ) -> Iterator[str]:
     """Yield narrative text chunks from the chosen provider.
 
+    ``system`` overrides the default forensic-narrative system prompt for
+    non-narrative tasks (e.g. structured classification).
     Raises NarrativeError with a user-facing message on any failure.
     """
     if provider not in _BACKENDS:
         raise NarrativeError(f"Unknown provider: {provider}")
     model = model or PROVIDERS[provider]["default_model"]
-    return _BACKENDS[provider](api_key, model, prompt)
+    return _BACKENDS[provider](api_key, model, prompt, system)
 
 
 def generate_narrative(

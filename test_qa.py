@@ -256,6 +256,30 @@ sq2 = analyse_sequence(sp.rows, "U", mapping_confirmed=True)
 check("A17f sequence: confirmed mapping drops it",
       not any("AUTO-PROPOSED" in c for c in sq2.caveats))
 
+
+# A18. AI-review prompt/parser layer (offline)
+from programme import (build_mapping_review_prompt, parse_mapping_review,
+                       build_view_advice_prompt, parse_view_advice)
+pmr = build_mapping_review_prompt(sp.rows[:5])
+check("A18 review prompt lists stages and rows",
+      "Allowed stage labels" in pmr and sp.rows[0].task_code in pmr)
+good = parse_mapping_review(
+    '[{"id": "%s", "stage": "Finishes & Fit-Out"}]' % sp.rows[0].task_code,
+    {r.task_code for r in sp.rows[:5]})
+check("A18b parser accepts valid correction", len(good) == 1)
+check("A18c parser rejects unknown ids and stages",
+      parse_mapping_review('[{"id":"ZZZ","stage":"Finishes & Fit-Out"},'
+                           '{"id":"%s","stage":"Made Up"}]'
+                           % sp.rows[0].task_code,
+                           {sp.rows[0].task_code}) == {})
+check("A18d parser survives garbage", parse_mapping_review("oops", {"A"}) == {})
+adv = parse_view_advice('{"mode":"bands","colour":"Stage","max_fronts":10,"rationale":"r"}')
+check("A18e view advice parses and clamps",
+      adv is not None and adv["mode"] == "bands"
+      and parse_view_advice('{"mode":"nope"}') is None)
+check("A18f view advice prompt built",
+      "activity_gantt" in build_view_advice_prompt(sq, 30))
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
