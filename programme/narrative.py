@@ -133,11 +133,22 @@ Windows where forecast-critical work did not progress or coverage was low —
 periods where the true driver may sit off the forecast path. Report these
 with the same weight as the corroborated findings.
 
-### 5. Remaining Path
+### 5. Independent Check — Actual-Date Trace
+Where provided: the chain traced backward through recorded actual dates
+(logic-evidenced hand-offs only, unless stated otherwise), where it stopped
+and why, and the size of the hand-off gaps — long gaps between logically
+linked work indicate stalling and should be stated plainly.
+
+### 6. Method Agreement
+Where provided: how far the two independent reconstructions identify the
+same activities. Method-invariant findings carry the most weight; state the
+divergences and what they localise for analyst review.
+
+### 7. Remaining Path
 Work on the latest forecast path still to be performed (the reconstruction
 covers only the works to the latest data date).
 
-### 6. Limitations
+### 8. Limitations
 Every standing caveat and warning provided, in full.""",
     "comparison": """\
 ## Programme Revision Comparison
@@ -742,7 +753,10 @@ def build_resources_prompt(
 
 
 def build_asbuilt_prompt(
-    res: AsBuiltPathResult, template: str | None = None
+    res: AsBuiltPathResult,
+    trace=None,
+    tri=None,
+    template: str | None = None,
 ) -> str:
     def fmt(d):
         return f"{d:%Y-%m-%d}" if d else "unknown"
@@ -793,9 +807,38 @@ def build_asbuilt_prompt(
         lines.append(f"... (+{len(res.persistence) - 80} more)")
     lines.append("</persistence_index>\n")
 
+    if trace is not None:
+        lines.append("<actual_date_trace terminal='"
+                     f"{trace.terminal_code}'>")
+        for a in trace.activities:
+            af = fmt(a.act_finish) if a.act_finish else "in progress"
+            lines.append(f"- {a.task_code} '{a.name}': performed "
+                         f"{fmt(a.act_start)} -> {af}")
+        for lk in trace.links:
+            lines.append(f"  link {lk.pred_code} -> {lk.succ_code} "
+                         f"[{lk.kind}] gap {lk.gap_days:+.0f}d, "
+                         f"{'programmed logic' if lk.had_logic else 'NO logic'}, "
+                         f"confidence {lk.score:.2f}")
+        lines.append("</actual_date_trace>\n")
+    if tri is not None and tri.agreement_pct is not None:
+        lines.append("<method_agreement>")
+        lines.append(f"- Agreement: {tri.agreement_pct:.0f}% of the union; "
+                     f"{len(tri.both)} activities identified by BOTH "
+                     "methods")
+        lines.append(f"- Stitched-only: {len(tri.stitched_only)}; "
+                     f"trace-only: {len(tri.trace_only)}")
+        for code in tri.trace_only[:10]:
+            lines.append(f"  trace-only: {code} '{tri.names.get(code,'')}'")
+        lines.append("</method_agreement>\n")
     lines.append("<caveats>")
     lines.extend(f"- {c}" for c in res.caveats)
     lines.extend(f"- {w}" for w in res.warnings)
+    if trace is not None:
+        lines.extend(f"- {c}" for c in trace.caveats)
+        lines.extend(f"- {w}" for w in trace.warnings)
+    if tri is not None:
+        lines.extend(f"- {c}" for c in tri.caveats)
+        lines.extend(f"- {w}" for w in tri.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["asbuilt_path"]))
     return "\n".join(lines)

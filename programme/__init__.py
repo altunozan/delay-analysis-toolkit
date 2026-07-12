@@ -23,11 +23,17 @@ from .activity_codes import (
     task_code_assignments,
 )
 from .asbuilt_path import (
+    ActualTraceResult,
     AsBuiltPathResult,
     PersistenceEntry,
     StitchActivity,
     StitchWindow,
+    TraceLink,
+    TriangulationResult,
     analyse_asbuilt_path,
+    extract_actual_trace,
+    trace_end_candidates,
+    triangulate,
 )
 from .comparison import (
     ActivityRef,
@@ -148,7 +154,13 @@ __all__ = [
     "PersistenceEntry",
     "StitchActivity",
     "StitchWindow",
+    "ActualTraceResult",
+    "TraceLink",
+    "TriangulationResult",
     "analyse_asbuilt_path",
+    "extract_actual_trace",
+    "trace_end_candidates",
+    "triangulate",
     # comparison
     "ActivityRef",
     "ComparisonResult",

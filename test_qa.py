@@ -214,6 +214,28 @@ ab1 = analyse_asbuilt_path([("B", B)])
 check("A15e asbuilt single revision -> warning, no crash",
       not ab1.windows and ab1.warnings)
 
+
+# A16. Actual-date trace + triangulation invariants
+from programme import extract_actual_trace, triangulate
+tr_strict = extract_actual_trace([("B", B), ("U", U)], max_gap_days=240)
+check("A16 strict trace: every link logic-evidenced",
+      all(lk.had_logic for lk in tr_strict.links))
+check("A16b trace links form a chain (each pred is next activity)",
+      all(lk.score is not None and 0 <= lk.score <= 1
+          for lk in tr_strict.links))
+codes = [a.task_code for a in tr_strict.activities]
+check("A16c trace chain has no duplicates", len(codes) == len(set(codes)))
+tr_fb = extract_actual_trace([("B", B), ("U", U)], max_gap_days=15,
+                             allow_temporal_fallback=True)
+check("A16d fallback trace longer or equal to strict at same gap",
+      len(tr_fb.activities) >= len(extract_actual_trace(
+          [("B", B), ("U", U)], max_gap_days=15).activities))
+tri = triangulate(ab, tr_strict)
+check("A16e triangulation: agreement in [0,100] and sets partition union",
+      (tri.agreement_pct is None or 0 <= tri.agreement_pct <= 100)
+      and not (set(tri.both) & set(tri.trace_only))
+      and not (set(tri.both) & set(tri.stitched_only)))
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

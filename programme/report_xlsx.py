@@ -568,8 +568,9 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
 # --------------------------------------------------------------------------- #
 # Module 12 — As-built critical path
 # --------------------------------------------------------------------------- #
-def build_asbuilt_xlsx(res, narrative: str | None = None) -> bytes:
-    """res: programme.asbuilt_path.AsBuiltPathResult"""
+def build_asbuilt_xlsx(res, narrative: str | None = None,
+                       trace=None, tri=None) -> bytes:
+    """res: AsBuiltPathResult; trace: ActualTraceResult; tri: Triangulation"""
     wb = Workbook()
     ws = wb.active
     ws.title = "Stitched Path"
@@ -624,7 +625,53 @@ def build_asbuilt_xlsx(res, narrative: str | None = None) -> bytes:
                 c.fill = SLIP_FILL
     _autofit(s3, {1: 8, 2: 26, 3: 26, 4: 26, 5: 16, 6: 18, 7: 11})
 
-    _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    if trace is not None and trace.links:
+        s4 = wb.create_sheet("Actual-Date Trace")
+        _header_row(s4, 1, ["Predecessor", "Pred name", "Kind", "Successor",
+                            "Succ name", "Gap (d)", "Programmed logic",
+                            "Confidence"])
+        for i, lk in enumerate(trace.links, start=2):
+            vals = [lk.pred_code, lk.pred_name, lk.kind, lk.succ_code,
+                    lk.succ_name, lk.gap_days,
+                    "Yes" if lk.had_logic else "NO", lk.score]
+            for col, v in enumerate(vals, start=1):
+                c = s4.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 7:
+                    c.fill = GAIN_FILL if lk.had_logic else SLIP_FILL
+        _autofit(s4, {1: 18, 2: 38, 3: 12, 4: 18, 5: 38, 6: 9, 7: 16,
+                      8: 11})
+        s4.freeze_panes = "A2"
+
+    if tri is not None and tri.agreement_pct is not None:
+        s5 = wb.create_sheet("Method Agreement")
+        s5["A1"] = (f"Agreement: {tri.agreement_pct:.0f}% of the union — "
+                    f"{len(tri.both)} activities identified by BOTH methods")
+        s5["A1"].font = Font(bold=True)
+        _header_row(s5, 3, ["Activity ID", "Activity", "Identified by"])
+        row = 4
+        groups = [(tri.both, "Both methods", True),
+                  (tri.trace_only, "Actual-date trace only", False),
+                  (tri.stitched_only, "Stitched path only", False)]
+        for codes, label, highlight in groups:
+            for code in codes:
+                vals = [code, tri.names.get(code, ""), label]
+                for col, v in enumerate(vals, start=1):
+                    c = s5.cell(row=row, column=col, value=v)
+                    c.border = THIN_BORDER
+                    if col == 3 and highlight:
+                        c.fill = GAIN_FILL
+                row += 1
+        _autofit(s5, {1: 18, 2: 48, 3: 24})
+        s5.freeze_panes = "A4"
+
+    extra = []
+    if trace is not None:
+        extra += list(trace.warnings) + list(trace.caveats)
+    if tri is not None:
+        extra += list(tri.warnings) + list(tri.caveats)
+    _notes_sheet(wb, res.warnings + res.caveats + extra,
+                 "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
     buf = io.BytesIO()

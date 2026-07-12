@@ -247,3 +247,265 @@ def analyse_asbuilt_path(
             "data date only."
         )
     return result
+
+# --------------------------------------------------------------------------- #
+# Independent check — backward trace on ACTUAL dates, with scored links
+# --------------------------------------------------------------------------- #
+
+TRACE_CAVEATS = [
+    "The actual-date trace walks backward from the latest actualised "
+    "activity, at each step following the candidate predecessor whose "
+    "recorded dates most tightly precede the activity (smallest hand-off "
+    "gap), strengthened where a logic relationship between the pair existed "
+    "in any programme revision. It is independent of any revision's "
+    "forecast criticality.",
+    "Each link carries a confidence score (temporal tightness + logic "
+    "evidence). Links flagged weak — a large gap or no logic in any "
+    "revision — mark hand-offs where the true driver may be a resource, "
+    "access, or off-programme constraint; these call for analyst review.",
+]
+
+
+@dataclass
+class TraceLink:
+    pred_code: str
+    pred_name: str
+    succ_code: str
+    succ_name: str
+    kind: str                   # "finish-start" | "parallel"
+    gap_days: float             # succ act_start - pred act_finish
+    had_logic: bool             # relationship existed in any revision
+    score: float                # 0..1 composite confidence
+    alternatives: int           # other candidates within the gap window
+
+
+@dataclass
+class ActualTraceResult:
+    terminal_code: str | None = None
+    activities: list[StitchActivity] = field(default_factory=list)  # chain
+    links: list[TraceLink] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
+
+    @property
+    def codes(self) -> set[str]:
+        return {a.task_code for a in self.activities}
+
+
+def extract_actual_trace(
+    revisions: list[tuple[str, XerData]],
+    *,
+    end_task_code: str | None = None,
+    max_gap_days: float = 15.0,
+    overlap_tolerance_days: float = 2.0,
+    weak_score: float = 0.5,
+    allow_temporal_fallback: bool = False,
+    config: DCMAConfig | None = None,
+) -> ActualTraceResult:
+    """Backward trace through ACTUAL dates in the latest revision.
+
+    Candidate drivers of an activity: predecessors whose actual finish sits
+    within ``max_gap_days`` before its actual start (finish-start hand-off,
+    small overlaps tolerated), or which were running when it started
+    (parallel), scored by temporal tightness + logic evidence.
+
+    By default only candidates with a programmed relationship (in any
+    revision) may continue the chain — where none exists within the gap
+    window, the trace STOPS and reports the break rather than inventing a
+    hand-off from date coincidence. Set ``allow_temporal_fallback=True`` to
+    continue through the tightest temporal neighbour instead; such links
+    are flagged weak.
+    """
+    result = ActualTraceResult()
+    result.caveats.extend(TRACE_CAVEATS)
+    if not revisions:
+        result.warnings.append("No revisions supplied.")
+        return result
+
+    _, latest = revisions[-1]
+    acts = {t.task_code: t for t in latest.tasks
+            if not t.is_loe_or_wbs and t.act_start is not None}
+    if not acts:
+        result.warnings.append(
+            "The latest revision records no actualised activities — "
+            "nothing to trace."
+        )
+        return result
+
+    # Logic evidence: relationship code-pairs seen in ANY revision.
+    logic_pairs: set[tuple[str, str]] = set()
+    for _, data in revisions:
+        id_to_code = {t.task_id: t.task_code for t in data.tasks}
+        for r in data.relationships:
+            p, s = id_to_code.get(r.pred_task_id), id_to_code.get(r.task_id)
+            if p and s:
+                logic_pairs.add((p, s))
+
+    # Terminal: latest actual finish; a finish milestone within a week of
+    # the latest date is preferred over an ordinary activity.
+    if end_task_code and end_task_code in acts:
+        terminal = acts[end_task_code]
+    else:
+        if end_task_code:
+            result.warnings.append(
+                f"End activity '{end_task_code}' has no actual dates in the "
+                "latest revision — using the latest actual finisher."
+            )
+        finished = [t for t in acts.values() if t.act_finish]
+        if not finished:
+            result.warnings.append("No actually finished activities.")
+            return result
+        latest_fin = max(t.act_finish for t in finished)
+        tail = [t for t in finished
+                if (latest_fin - t.act_finish).days <= 7]
+        milestones = [t for t in tail if t.is_milestone]
+        terminal = max(milestones or tail, key=lambda t: t.act_finish)
+    result.terminal_code = terminal.task_code
+
+    def candidates(succ):
+        out = []
+        for p in acts.values():
+            if p.task_code == succ.task_code or p.act_finish is None:
+                continue
+            gap = (succ.act_start - p.act_finish).total_seconds() / 86400.0
+            if -overlap_tolerance_days <= gap <= max_gap_days:
+                kind = "finish-start"
+            elif (p.act_start <= succ.act_start
+                    and p.act_finish >= succ.act_start):
+                kind, gap = "parallel", 0.0
+            else:
+                continue
+            t_score = max(0.0, 1.0 - max(gap, 0.0) / max_gap_days)
+            if kind == "parallel":
+                t_score *= 0.6            # weaker evidence than a hand-off
+            logic = (p.task_code, succ.task_code) in logic_pairs
+            score = 0.6 * t_score + 0.4 * (1.0 if logic else 0.0)
+            out.append((score, gap, kind, logic, p))
+        out.sort(key=lambda c: -c[0])
+        return out
+
+    chain: list = []
+    seen: set[str] = set()
+    cur = terminal
+    while cur is not None and cur.task_code not in seen and len(chain) < 500:
+        seen.add(cur.task_code)
+        chain.append(cur)
+        cands = candidates(cur)
+        if not cands:
+            break
+        # Logic-first: if any candidate follows a programmed relationship,
+        # only those compete. Without logic evidence the chain BREAKS
+        # unless the analyst opted into the temporal fallback.
+        with_logic = [c for c in cands if c[3]]
+        if not with_logic and not allow_temporal_fallback:
+            result.warnings.append(
+                f"Trace stopped at {cur.task_code} '{cur.name}': "
+                f"{len(cands)} activities finished nearby in time but none "
+                "carries a programmed relationship to it in any revision — "
+                "the records alone cannot evidence the driving hand-off "
+                "here (analyst input required to extend the chain)."
+            )
+            break
+        pool = with_logic or cands
+        score, gap, kind, logic, best = pool[0]
+        result.links.append(TraceLink(
+            pred_code=best.task_code, pred_name=best.name,
+            succ_code=cur.task_code, succ_name=cur.name,
+            kind=kind, gap_days=round(gap, 1), had_logic=logic,
+            score=round(score, 2), alternatives=len(cands) - 1))
+        cur = best if best.task_code not in seen else None
+
+    chain.reverse()
+    result.activities = [StitchActivity(
+        task_code=t.task_code, name=t.name,
+        act_start=t.act_start, act_finish=t.act_finish,
+        forecast_by="actual-date trace") for t in chain]
+
+    weak = [lk for lk in result.links if lk.score < weak_score]
+    if weak:
+        worst = sorted(weak, key=lambda lk: lk.score)[:6]
+        result.warnings.append(
+            f"{len(weak)} of {len(result.links)} traced hand-offs are "
+            f"weakly evidenced (score < {weak_score:.1f}): "
+            + "; ".join(f"{lk.pred_code}->{lk.succ_code} (gap "
+                        f"{lk.gap_days:+.0f}d, "
+                        f"{'logic' if lk.had_logic else 'NO logic'})"
+                        for lk in worst)
+            + " — analyst review recommended at these points."
+        )
+    no_logic = sum(1 for lk in result.links if not lk.had_logic)
+    if result.links:
+        result.warnings.append(
+            f"Logic corroboration: {len(result.links) - no_logic} of "
+            f"{len(result.links)} traced hand-offs follow a relationship "
+            "that existed in at least one programme revision."
+        )
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# Method triangulation — agreement between the two reconstructions
+# --------------------------------------------------------------------------- #
+
+@dataclass
+class TriangulationResult:
+    agreement_pct: float | None = None    # Jaccard of the two methods
+    both: list[str] = field(default_factory=list)
+    stitched_only: list[str] = field(default_factory=list)
+    trace_only: list[str] = field(default_factory=list)
+    names: dict[str, str] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
+
+
+def triangulate(stitched: AsBuiltPathResult,
+                trace: ActualTraceResult) -> TriangulationResult:
+    """Where do the two independent reconstructions agree?"""
+    tri = TriangulationResult()
+    tri.caveats.append(
+        "The two reconstructions are methodologically independent: the "
+        "stitched path reads contemporaneous forecast criticality; the "
+        "trace reads only recorded actual dates (with logic as secondary "
+        "evidence). Activities identified by both are method-invariant "
+        "findings; divergences localise where analyst judgement is needed."
+    )
+    a = {x.task_code: x.name for x in stitched.stitched}
+    b = {x.task_code: x.name for x in trace.activities}
+    tri.names = {**a, **b}
+    both = a.keys() & b.keys()
+    union = a.keys() | b.keys()
+    tri.both = sorted(both)
+    tri.stitched_only = sorted(a.keys() - b.keys())
+    tri.trace_only = sorted(b.keys() - a.keys())
+    if union:
+        tri.agreement_pct = round(100.0 * len(both) / len(union), 1)
+    if tri.agreement_pct is not None:
+        trace_share = (100.0 * len(both) / len(b)) if b else 0.0
+        tri.warnings.append(
+            f"Method agreement: {len(both)} activities identified by BOTH "
+            f"reconstructions ({tri.agreement_pct:.0f}% of the union; "
+            f"{trace_share:.0f}% of the traced chain is corroborated by "
+            "the contemporaneous method)."
+        )
+    if tri.trace_only:
+        tri.warnings.append(
+            f"{len(tri.trace_only)} activities appear only in the "
+            "actual-date trace — candidates for driving work that sat off "
+            "the forecast critical path: "
+            + ", ".join(tri.trace_only[:8])
+            + (" …" if len(tri.trace_only) > 8 else "")
+        )
+    return tri
+
+
+def trace_end_candidates(
+    revisions: list[tuple[str, XerData]], limit: int = 40
+) -> list[tuple[str, str, datetime | None]]:
+    """Candidate trace terminals: actually finished, latest first."""
+    if not revisions:
+        return []
+    _, latest = revisions[-1]
+    done = [t for t in latest.tasks
+            if not t.is_loe_or_wbs and t.act_finish is not None]
+    done.sort(key=lambda t: (t.act_finish, t.is_milestone), reverse=True)
+    return [(t.task_code, t.name, t.act_finish) for t in done[:limit]]
