@@ -21,7 +21,7 @@ from datetime import datetime
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Pt, RGBColor
+from docx.shared import Inches, Pt, RGBColor
 
 ACCENT = RGBColor(0x1F, 0x38, 0x64)
 
@@ -39,6 +39,7 @@ class ReportSection:
     narrative_md: str | None = None       # analyst-generated narrative
     key_findings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)   # feeds Limitations
+    images: list[tuple[bytes, str]] = field(default_factory=list)  # (png, caption)
 
 
 @dataclass
@@ -153,12 +154,22 @@ def build_assembled_report(
     doc.add_page_break()
 
     # --- module chapters ---------------------------------------------------
+    fig_no = 0
     for i, s in enumerate(sections, start=1):
         doc.add_heading(f"{i}. {s.title}", level=1)
         if s.key_findings:
             doc.add_heading("Key figures", level=2)
             for kf in s.key_findings:
                 _add_md_paragraph(doc, kf, style="List Bullet")
+        for png, caption in s.images:
+            fig_no += 1
+            doc.add_picture(io.BytesIO(png), width=Inches(6.3))
+            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cap = doc.add_paragraph()
+            cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run = cap.add_run(f"Figure {fig_no} — {caption}")
+            run.italic = True
+            run.font.size = Pt(9)
         if s.narrative_md:
             _add_markdown(doc, s.narrative_md, base_heading_level=2)
         else:

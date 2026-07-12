@@ -1,0 +1,230 @@
+"""Chart builders for the assembled Word report (Module 11).
+
+Rebuilds each module's headline chart as a standalone Altair spec and
+renders it to PNG via vl-convert, so the Word report carries the same
+visuals as the app. Print-friendly (light background), UI-independent.
+"""
+
+from __future__ import annotations
+
+import altair as alt
+import pandas as pd
+
+PLANNED_C = "#3b76c4"
+RECORDED_C = "#cf222e"
+GOOD_C = "#1a7f37"
+ACCENT_C = "#e8a33d"
+
+
+def chart_png(chart: alt.Chart, scale: float = 2.0) -> bytes:
+    import vl_convert as vlc
+    return vlc.vegalite_to_png(chart.to_json(), scale=scale)
+
+
+def milestone_chart(series, top_n: int = 10) -> alt.Chart | None:
+    """Forecast/actual date per data date for the most-slipped milestones."""
+    tracked = [s for s in series if s.total_shift_days is not None]
+    tracked.sort(key=lambda s: -(s.total_shift_days or 0))
+    rows = []
+    for s in tracked[:top_n]:
+        for p in s.points:
+            if p.value_date is None:
+                continue
+            rows.append({
+                "Data date": p.data_date,
+                "Milestone date": p.value_date,
+                "Milestone": f"{s.key} · {s.name[:32]}",
+            })
+    if not rows:
+        return None
+    return (alt.Chart(pd.DataFrame(rows))
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("Data date:T", axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Milestone date:T", scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="%b %Y")),
+                color=alt.Color("Milestone:N",
+                                legend=alt.Legend(orient="bottom",
+                                                  columns=2, title=None)))
+            .properties(width=620, height=300,
+                        title="Milestone forecast movement by data date"))
+
+
+def comparison_chart(cmp) -> alt.Chart | None:
+    counts = {k: v for k, v in cmp.category_counts.items() if v}
+    if not counts:
+        return None
+    df = pd.DataFrame([{"Category": k, "Count": v}
+                       for k, v in counts.items()])
+    return (alt.Chart(df).mark_bar(cornerRadius=2)
+            .encode(
+                x=alt.X("Count:Q", title=None),
+                y=alt.Y("Category:N", sort="-x", title=None,
+                        axis=alt.Axis(labelLimit=300)),
+                color=alt.condition(
+                    "datum.Category == 'Actual dates changed retrospectively'",
+                    alt.value(RECORDED_C), alt.value(PLANNED_C)))
+            .properties(width=560, height=26 * len(df),
+                        title=f"Changes: {cmp.old_label} → {cmp.new_label}"))
+
+
+def windows_trajectory_chart(res) -> alt.Chart | None:
+    traj = []
+    for w in res.windows:
+        if w.start and w.finish_old:
+            traj.append({"Data date": w.start, "Completion": w.finish_old})
+    last = res.windows[-1] if res.windows else None
+    if last and last.end and last.finish_new:
+        traj.append({"Data date": last.end, "Completion": last.finish_new})
+    if len(traj) < 2:
+        return None
+    return (alt.Chart(pd.DataFrame(traj))
+            .mark_line(point=True, interpolate="step-after", color=RECORDED_C)
+            .encode(
+                x=alt.X("Data date:T", axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Completion:T", title="Scheduled completion",
+                        scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="%b %Y")))
+            .properties(width=620, height=280,
+                        title="Completion trajectory across data dates"))
+
+
+def windows_movement_chart(res) -> alt.Chart | None:
+    mv = [{"Window": f"W{w.index}", "Movement (d)": w.movement_days}
+          for w in res.windows if w.movement_days is not None]
+    if not mv:
+        return None
+    return (alt.Chart(pd.DataFrame(mv)).mark_bar(cornerRadius=2)
+            .encode(
+                x=alt.X("Window:N", sort=None, title=None),
+                y=alt.Y("Movement (d):Q"),
+                color=alt.condition("datum['Movement (d)'] > 0",
+                                    alt.value(RECORDED_C),
+                                    alt.value(GOOD_C)))
+            .properties(width=620, height=240,
+                        title="Completion movement per window"))
+
+
+def scurve_chart(pr) -> alt.Chart | None:
+    rows = ([{"Date": p.date, "Cum %": p.cum_pct, "Series": "Planned"}
+             for p in pr.planned_curve]
+            + [{"Date": p.date, "Cum %": p.cum_pct, "Series": "As-recorded"}
+               for p in pr.recorded_curve])
+    if not rows:
+        return None
+    layers = [alt.Chart(pd.DataFrame(rows)).mark_line(point=True)
+              .encode(
+                  x=alt.X("Date:T", title=None,
+                          axis=alt.Axis(format="%b %Y")),
+                  y=alt.Y("Cum %:Q", title="Cumulative progress (%)",
+                          scale=alt.Scale(domain=[0, 100])),
+                  color=alt.Color("Series:N", title=None,
+                                  scale=alt.Scale(
+                                      domain=["Planned", "As-recorded"],
+                                      range=[PLANNED_C, RECORDED_C]),
+                                  legend=alt.Legend(orient="bottom")))]
+    pts = [{"Date": rp.data_date, "Cum %": rp.recorded_pct}
+           for rp in pr.revision_points
+           if rp.data_date and rp.recorded_pct is not None]
+    if pts:
+        layers.append(alt.Chart(pd.DataFrame(pts)).mark_point(
+            shape="diamond", size=140, filled=True, color=ACCENT_C)
+            .encode(x="Date:T", y="Cum %:Q"))
+    return alt.layer(*layers).properties(
+        width=620, height=300, title="Progress S-curve (planned vs as-recorded)")
+
+
+def float_chart(fe) -> alt.Chart | None:
+    rows = [{"Revision": s.label[:28], "order": i,
+             "Median TF (d)": s.median_float,
+             "Negative-float count": s.negative_count}
+            for i, s in enumerate(fe.snapshots) if s.median_float is not None]
+    if not rows:
+        return None
+    df = pd.DataFrame(rows)
+    base = alt.Chart(df).encode(
+        x=alt.X("Revision:N", sort=alt.SortField("order"), title=None))
+    bars = base.mark_bar(color=RECORDED_C, opacity=0.75).encode(
+        y=alt.Y("Negative-float count:Q",
+                axis=alt.Axis(titleColor=RECORDED_C)))
+    line = base.mark_line(point=True, color=PLANNED_C).encode(
+        y=alt.Y("Median TF (d):Q", axis=alt.Axis(titleColor=PLANNED_C)))
+    return alt.layer(bars, line).resolve_scale(y="independent").properties(
+        width=620, height=260, title="Float profile by revision")
+
+
+def resources_chart(rl, top_n: int = 8) -> alt.Chart | None:
+    keep = {r.short_name for r in rl.resources[:top_n]}
+    rows = [{"Month": p.month_end, "Resource": p.resource,
+             "Quantity": round(p.qty, 1)}
+            for p in rl.histogram if p.resource in keep]
+    if not rows:
+        return None
+    return (alt.Chart(pd.DataFrame(rows)).mark_bar()
+            .encode(
+                x=alt.X("yearmonth(Month):T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Quantity:Q", title="Planned quantity / month"),
+                color=alt.Color("Resource:N",
+                                legend=alt.Legend(orient="bottom",
+                                                  title=None)))
+            .properties(width=620, height=280,
+                        title="Planned resource loading by month"))
+
+
+def critical_path_chart(cp, max_rows: int = 60) -> alt.Chart | None:
+    """Compact gantt of the critical chain in early-start order."""
+    shown = [a for a in cp.critical
+             if a.early_start and (a.early_finish or a.is_milestone)]
+    shown = shown[:max_rows]
+    if not shown:
+        return None
+    order, bars, points = [], [], []
+    for a in shown:
+        lbl = f"{a.task_code} · {a.name[:34]}"
+        order.append(lbl)
+        if a.is_milestone:
+            points.append({"Activity": lbl,
+                           "Date": a.early_finish or a.early_start})
+        elif a.early_finish:
+            bars.append({"Activity": lbl, "Start": a.early_start,
+                         "Finish": a.early_finish})
+    y = alt.Y("Activity:N", sort=order, title=None,
+              axis=alt.Axis(labelLimit=280, labelFontSize=8))
+    layers = []
+    if bars:
+        layers.append(alt.Chart(pd.DataFrame(bars))
+                      .mark_bar(height=5, color=RECORDED_C)
+                      .encode(x=alt.X("Start:T", title=None,
+                                      axis=alt.Axis(format="%b %Y")),
+                              x2="Finish:T", y=y))
+    if points:
+        layers.append(alt.Chart(pd.DataFrame(points))
+                      .mark_point(shape="diamond", size=60, filled=True,
+                                  color=RECORDED_C)
+                      .encode(x="Date:T", y=y))
+    if not layers:
+        return None
+    title = "Planned critical path (early-start order)"
+    if len(cp.critical) > max_rows:
+        title += f" — first {max_rows} of {len(cp.critical)} activities"
+    return alt.layer(*layers).properties(
+        width=620, height=max(180, 11 * len(order)), title=title)
+
+def variance_chart(var) -> alt.Chart | None:
+    rows = [{"Group": g.code_value[:40],
+             "Finish delta (d)": g.finish_delta_days}
+            for g in var.groups if g.finish_delta_days is not None]
+    if not rows:
+        return None
+    df = pd.DataFrame(rows).sort_values("Finish delta (d)", ascending=False)
+    return (alt.Chart(df).mark_bar(cornerRadius=2)
+            .encode(
+                x=alt.X("Finish delta (d):Q"),
+                y=alt.Y("Group:N", sort="-x", title=None,
+                        axis=alt.Axis(labelLimit=280)),
+                color=alt.condition("datum['Finish delta (d)'] > 0",
+                                    alt.value(RECORDED_C),
+                                    alt.value(GOOD_C)))
+            .properties(width=560, height=max(120, 24 * len(df)),
+                        title=f"Finish slippage by {var.code_type_name}"))

@@ -36,6 +36,7 @@ from dcma.narrative import (
     build_report_prompt,
     stream_narrative,
 )
+from programme import report_charts
 from programme.narrative import DEFAULT_TEMPLATES
 from dcma.report_xlsx import build_xlsx_report
 from programme.variance import DIMENSION_SEPARATOR
@@ -956,11 +957,12 @@ def report_tab() -> None:
     def fmt_d(d):
         return f"{d:%d %b %Y}" if d else "—"
 
-    candidates: list[tuple[str, ReportSection, list[str]]] = []
+    # Each candidate: label, section, settings, canonical narrative key,
+    # prompt builder (for batch AI generation), chart builders.
+    candidates: list[dict] = []
 
     # Inventory
-    sec = ReportSection("Information Relied Upon",
-                        _stored_narrative("nar_inventory"))
+    sec = ReportSection("Information Relied Upon")
     span = [r.data_date for r in inv.revisions if r.data_date]
     sec.key_findings = [
         f"{len(inv.revisions)} programme revision(s) received, data dates "
@@ -969,28 +971,34 @@ def report_tab() -> None:
         f"Baseline: {base_name}; current: {curr_name}.",
     ]
     sec.caveats = list(inv.missing) + list(inv.warnings)
-    candidates.append(("Data inventory", sec, []))
+    candidates.append(dict(
+        label="Data inventory", sec=sec, settings=[],
+        nar_key="nar_inventory",
+        prompt=lambda inv=inv: build_inventory_prompt(inv),
+        charts=[]))
 
     # DCMA on baseline
     results = run_all_checks(pool[base_name], DCMAConfig())
     fails = [r for r in results if r.status == CheckStatus.FAIL]
     passes = [r for r in results if r.status == CheckStatus.PASS]
-    sec = ReportSection("Programme Examination (DCMA 14-Point)",
-                        _stored_narrative("nar_dcma"))
+    sec = ReportSection("Programme Examination (DCMA 14-Point)")
     sec.key_findings = [
         f"Baseline '{base_name}': {len(passes)} of 14 checks passed.",
         "Checks not met: " + ", ".join(f"{r.number} {r.name}"
                                        for r in fails) + "."
         if fails else "All checks met.",
     ]
-    candidates.append(("DCMA 14-point", sec,
-                       [f"DCMA — programme: {base_name}; standard "
-                        "thresholds"]))
+    candidates.append(dict(
+        label="DCMA 14-point", sec=sec,
+        settings=[f"DCMA — programme: {base_name}; standard thresholds"],
+        nar_key=f"nar_dcma_{base_name}",
+        prompt=lambda d=pool[base_name], r=results:
+            build_report_prompt(d, r, DCMA_DEFAULT_TEMPLATE),
+        charts=[]))
 
     # Baseline critical path (longest path, default terminal)
     cp = extract_longest_path(pool[base_name], base_name)
-    sec = ReportSection("Baseline Planned Critical Path",
-                        _stored_narrative("nar_cp_"))
+    sec = ReportSection("Baseline Planned Critical Path")
     sec.key_findings = [
         f"Longest path traced backward from {cp.end_choice}: "
         f"{len(cp.critical)} activities, {len(cp.links)} driving links.",
@@ -998,10 +1006,14 @@ def report_tab() -> None:
         f"{len(cp.near_critical)} activities.",
     ]
     sec.caveats = list(cp.caveats) + list(cp.warnings)
-    candidates.append(("Critical path", sec,
-                       [f"Critical path — method: backward driving-logic "
-                        f"trace from {cp.end_choice} (programme: "
-                        f"{base_name})"]))
+    candidates.append(dict(
+        label="Critical path", sec=sec,
+        settings=[f"Critical path — method: backward driving-logic trace "
+                  f"from {cp.end_choice} (programme: {base_name})"],
+        nar_key=f"nar_cp_{base_name}",
+        prompt=lambda cp=cp: build_critical_path_prompt(cp),
+        charts=[(lambda cp=cp: report_charts.critical_path_chart(cp),
+                 "Planned critical path, early-start order")]))
 
     if multi:
         # Milestones
@@ -1011,8 +1023,8 @@ def report_tab() -> None:
         tracked = [s for s in ms.series if s.total_shift_days is not None]
         slipped = [s for s in tracked if s.total_shift_days > 7]
         worst = max(tracked, key=lambda s: s.total_shift_days, default=None)
-        sec = ReportSection("Milestone Slippage",
-                            _stored_narrative("nar_milestones"))
+        top_series = sorted(tracked, key=lambda s: -s.total_shift_days)[:10]
+        sec = ReportSection("Milestone Slippage")
         sec.key_findings = [
             f"{len(tracked)} milestones tracked across revisions; "
             f"{len(slipped)} slipped by more than 7 days.",
@@ -1022,16 +1034,44 @@ def report_tab() -> None:
                 f"Largest shift: {worst.key} '{worst.name}' "
                 f"({worst.total_shift_days:+.0f} days).")
         sec.caveats = list(ms.warnings)
-        candidates.append(("Milestone shifts", sec,
-                           ["Milestones — matched by Activity ID with "
-                            "fuzzy-name proposals excluded unless "
-                            "confirmed"]))
+        candidates.append(dict(
+            label="Milestone shifts", sec=sec,
+            settings=["Milestones — matched by Activity ID with fuzzy-name "
+                      "proposals excluded unless confirmed"],
+            nar_key="nar_milestones",
+            prompt=lambda ms=ms, ts=top_series:
+                build_milestone_prompt(ms, ts),
+            charts=[(lambda s=ms.series: report_charts.milestone_chart(s),
+                     "Forecast movement of the most-slipped milestones")]))
+
+        # As-planned vs as-recorded (WBS level 1)
+        wbs_map_b = task_wbs_assignments(pool[base_name], level=1)
+        wbs_map_c = task_wbs_assignments(pool[curr_name], level=1)
+        var = compute_variance_by_mapping(
+            pool[base_name], pool[curr_name], wbs_map_b, wbs_map_c,
+            "WBS level 1")
+        worst_g = max((g for g in var.groups
+                       if g.finish_delta_days is not None),
+                      key=lambda g: g.finish_delta_days, default=None)
+        sec = ReportSection("As-Planned vs As-Recorded (by WBS)")
+        if worst_g:
+            sec.key_findings.append(
+                f"Worst group by finish slippage: '{worst_g.code_value}' "
+                f"({worst_g.finish_delta_days:+.0f} days).")
+        sec.caveats = list(var.caveats) + list(var.warnings)
+        candidates.append(dict(
+            label="Planned vs recorded", sec=sec,
+            settings=[f"Variance — breakdown: WBS level 1; '{base_name}' "
+                      f"vs '{curr_name}'"],
+            nar_key="nar_variance",
+            prompt=lambda var=var: build_variance_prompt(var),
+            charts=[(lambda var=var: report_charts.variance_chart(var),
+                     "Finish slippage by WBS group")]))
 
         # Revision comparison (baseline -> current)
         cmp = compare_revisions(pool[base_name], pool[curr_name],
                                 base_name, curr_name)
-        sec = ReportSection("Programme Revision Comparison",
-                            _stored_narrative("nar_cmp_"))
+        sec = ReportSection("Programme Revision Comparison")
         sec.key_findings = [
             f"{cmp.total_changes} recorded changes between '{base_name}' "
             f"and '{curr_name}'.",
@@ -1042,29 +1082,40 @@ def report_tab() -> None:
             f"{len(cmp.actual_date_changes)}.",
         ]
         sec.caveats = list(cmp.caveats) + list(cmp.warnings)
-        candidates.append(("Revision comparison", sec,
-                           [f"Comparison — '{base_name}' vs '{curr_name}', "
-                            "matched by Activity ID"]))
+        candidates.append(dict(
+            label="Revision comparison", sec=sec,
+            settings=[f"Comparison — '{base_name}' vs '{curr_name}', "
+                      "matched by Activity ID"],
+            nar_key=f"nar_cmp_{base_name}_{curr_name}",
+            prompt=lambda cmp=cmp: build_comparison_prompt(cmp),
+            charts=[(lambda cmp=cmp: report_charts.comparison_chart(cmp),
+                     "Changes by category")]))
 
         # Windows
         wres = analyse_windows(ordered)
-        sec = ReportSection("Windows / Period Movement",
-                            _stored_narrative("nar_windows"))
+        sec = ReportSection("Windows / Period Movement")
         if wres.total_movement_days is not None:
             sec.key_findings.append(
                 f"Cumulative completion movement "
                 f"{wres.total_movement_days:+.0f} days across "
                 f"{len(wres.windows)} window(s).")
         sec.caveats = list(wres.caveats) + list(wres.warnings)
-        candidates.append(("Windows analysis", sec,
-                           ["Windows — driving path per revision traced "
-                            "from its latest finisher"]))
+        candidates.append(dict(
+            label="Windows analysis", sec=sec,
+            settings=["Windows — driving path per revision traced from "
+                      "its latest finisher"],
+            nar_key="nar_windows",
+            prompt=lambda wres=wres: build_windows_prompt(wres),
+            charts=[
+                (lambda w=wres: report_charts.windows_trajectory_chart(w),
+                 "Completion trajectory across data dates"),
+                (lambda w=wres: report_charts.windows_movement_chart(w),
+                 "Completion movement per window")]))
 
         # S-curve
         updates = [(n, d) for n, d in ordered if n != base_name]
         pr = compute_progress(pool[base_name], base_name, updates)
-        sec = ReportSection("Progress S-Curve",
-                            _stored_narrative("nar_progress"))
+        sec = ReportSection("Progress S-Curve")
         if pr.recorded_pct_at_dd is not None:
             sec.key_findings.append(
                 f"Recorded {pr.recorded_pct_at_dd:.1f}% vs planned "
@@ -1072,15 +1123,19 @@ def report_tab() -> None:
                 + (f" (≈ {pr.time_offset_days:+.0f} days in time)."
                    if pr.time_offset_days is not None else "."))
         sec.caveats = list(pr.caveats) + list(pr.warnings)
-        candidates.append(("Progress S-curve", sec,
-                           ["S-curve — weighting: activity duration; "
-                            "monthly buckets"]))
+        candidates.append(dict(
+            label="Progress S-curve", sec=sec,
+            settings=["S-curve — weighting: activity duration; monthly "
+                      "buckets"],
+            nar_key="nar_progress_duration",
+            prompt=lambda pr=pr: build_progress_prompt(pr),
+            charts=[(lambda pr=pr: report_charts.scurve_chart(pr),
+                     "Planned vs as-recorded cumulative progress")]))
 
         # Float erosion
         fe = analyse_float_erosion(ordered)
         lasts = fe.snapshots[-1]
-        sec = ReportSection("Float Erosion",
-                            _stored_narrative("nar_float"))
+        sec = ReportSection("Float Erosion")
         sec.key_findings = [
             f"Latest revision: median float "
             f"{lasts.median_float:+.0f}d, {lasts.negative_count} "
@@ -1089,14 +1144,18 @@ def report_tab() -> None:
             "Float profile not computable.",
         ]
         sec.caveats = list(fe.caveats) + list(fe.warnings)
-        candidates.append(("Float erosion", sec,
-                           ["Float erosion — near-critical threshold 10d"]))
+        candidates.append(dict(
+            label="Float erosion", sec=sec,
+            settings=["Float erosion — near-critical threshold 10d"],
+            nar_key="nar_float",
+            prompt=lambda fe=fe: build_float_erosion_prompt(fe),
+            charts=[(lambda fe=fe: report_charts.float_chart(fe),
+                     "Float profile by revision")]))
 
     # Resources (baseline)
     rl = extract_resource_loading(pool[base_name], base_name)
     if rl.histogram:
-        sec = ReportSection("Planned Resource Loading",
-                            _stored_narrative("nar_res_"))
+        sec = ReportSection("Planned Resource Loading")
         top = rl.resources[0]
         sec.key_findings = [
             f"{len(rl.resources)} resources with planned loading; largest: "
@@ -1105,34 +1164,96 @@ def report_tab() -> None:
             "assignments).",
         ]
         sec.caveats = list(rl.caveats) + list(rl.warnings)
-        candidates.append(("Resource loading", sec,
-                           [f"Resources — programme: {base_name}; planned "
-                            "quantities spread across scheduled dates"]))
+        candidates.append(dict(
+            label="Resource loading", sec=sec,
+            settings=[f"Resources — programme: {base_name}; planned "
+                      "quantities spread across scheduled dates"],
+            nar_key=f"nar_res_{base_name}",
+            prompt=lambda rl=rl: build_resources_prompt(rl),
+            charts=[(lambda rl=rl: report_charts.resources_chart(rl),
+                     "Planned resource loading by month")]))
+
+    # Attach any narrative already generated (here or in the module tabs).
+    # Parameterised panels (per-programme keys) also match by prefix.
+    prefix_fallbacks = {"nar_dcma_", "nar_cp_", "nar_cmp_",
+                        "nar_progress_", "nar_res_"}
+    for c in candidates:
+        nar = _stored_narrative(c["nar_key"])
+        if nar is None:
+            pref = next((p for p in prefix_fallbacks
+                         if c["nar_key"].startswith(p)), None)
+            if pref:
+                nar = _stored_narrative(pref)
+        c["sec"].narrative_md = nar
 
     # ---- selection UI -----------------------------------------------------
     st.subheader("Sections to include")
-    included: list[ReportSection] = []
-    settings: list[str] = []
+    selected: list[dict] = []
     cols = st.columns(3)
-    for i, (label, sec, setting_lines) in enumerate(candidates):
-        has_nar = sec.narrative_md is not None
+    for i, c in enumerate(candidates):
+        has_nar = c["sec"].narrative_md is not None
         tick = cols[i % 3].checkbox(
-            f"{label} {'📝' if has_nar else '▫️'}",
-            value=True, key=f"rep_inc_{label}",
-            help=("Narrative generated — will be included."
+            f"{c['label']} {'📝' if has_nar else '▫️'}",
+            value=True, key=f"rep_inc_{c['label']}",
+            help=("AI narrative available — will be included in full."
                   if has_nar else
-                  "No narrative generated yet — key figures and caveats "
-                  "only. Generate one in the module's tab to include it."))
+                  "No narrative yet — generate below, or in the module's "
+                  "tab; otherwise key figures only."))
         if tick:
-            included.append(sec)
-            settings.extend(setting_lines)
-    st.caption("📝 = analyst narrative available · ▫️ = key figures only")
+            selected.append(c)
+    st.caption("📝 = AI narrative available · ▫️ = key figures only")
 
-    if not included:
+    if not selected:
         st.warning("Select at least one section.")
         return
 
-    # ---- basis of analysis -------------------------------------------------
+    # ---- batch AI narrative generation ------------------------------------
+    missing = [c for c in selected if c["sec"].narrative_md is None]
+    with st.expander(
+        f"🤖 Generate AI narratives for the report "
+        f"({len(missing)} section(s) without one)",
+        expanded=bool(missing),
+    ):
+        pcol1, pcol2 = st.columns(2)
+        provider = pcol1.selectbox(
+            "AI provider", options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"], key="rep_provider")
+        pinfo = PROVIDERS[provider]
+        model = pcol2.text_input("Model", value=pinfo["default_model"],
+                                 key="rep_model")
+        env_key = os.environ.get(pinfo["env_var"], "")
+        if provider == "gemini" and not env_key:
+            env_key = os.environ.get("GOOGLE_API_KEY", "")
+        api_key = st.text_input(f"{pinfo['label']} API key", type="password",
+                                value=env_key, key="rep_key")
+        regen = st.checkbox("Regenerate sections that already have a "
+                            "narrative", value=False, key="rep_regen")
+        targets = selected if regen else missing
+        if st.button(f"Generate {len(targets)} narrative(s)",
+                     type="primary", disabled=not api_key or not targets,
+                     key="rep_generate"):
+            prog = st.progress(0.0)
+            status = st.empty()
+            failures = []
+            for j, c in enumerate(targets):
+                status.write(f"Drafting: **{c['label']}** …")
+                try:
+                    text = "".join(stream_narrative(
+                        provider, api_key, c["prompt"](), model or None))
+                    st.session_state[c["nar_key"]] = text
+                except NarrativeError as exc:
+                    failures.append(f"{c['label']}: {exc.message}")
+                prog.progress((j + 1) / len(targets))
+            status.empty()
+            if failures:
+                st.error("Some narratives failed — " + "; ".join(failures))
+            else:
+                st.rerun()
+
+    # ---- assemble ----------------------------------------------------------
+    include_charts = st.toggle("Embed module charts in the report",
+                               value=True, key="rep_charts")
+
     hashes = st.session_state.get("xer_hashes", {})
     basis = BasisOfAnalysis(
         files=[SourceFile(
@@ -1143,22 +1264,41 @@ def report_tab() -> None:
                   else "Current" if r.is_current else "Update"),
             activity_count=r.activity_count,
         ) for r in inv.revisions],
-        settings=settings,
+        settings=[s for c in selected for s in c["settings"]],
     )
 
-    n_narr = sum(1 for s in included if s.narrative_md)
+    n_narr = sum(1 for c in selected if c["sec"].narrative_md)
     st.markdown(
-        f"**{len(included)}** sections selected — {n_narr} with analyst "
-        f"narratives, {len(included) - n_narr} figures-only."
+        f"**{len(selected)}** sections selected — **{n_narr}** with AI "
+        f"narratives, {len(selected) - n_narr} figures-only."
     )
-    st.download_button(
-        "⬇️ Assemble & download report (Word)",
-        data=build_assembled_report(title, project, author, included, basis),
-        file_name="preliminary_delay_analysis_report.docx",
-        mime=("application/vnd.openxmlformats-officedocument."
-              "wordprocessingml.document"),
-        type="primary",
-    )
+    if st.button("🛠️ Assemble report", type="primary", key="rep_build"):
+        with st.spinner("Rendering charts and assembling the document..."):
+            sections = []
+            for c in selected:
+                sec = c["sec"]
+                sec.images = []
+                if include_charts:
+                    for chart_fn, caption in c["charts"]:
+                        try:
+                            chart = chart_fn()
+                            if chart is not None:
+                                sec.images.append(
+                                    (report_charts.chart_png(chart), caption))
+                        except Exception as exc:  # noqa: BLE001
+                            st.warning(f"Chart skipped for {c['label']}: "
+                                       f"{exc}")
+                sections.append(sec)
+            st.session_state["rep_docx"] = build_assembled_report(
+                title, project, author, sections, basis)
+    if "rep_docx" in st.session_state:
+        st.download_button(
+            "⬇️ Download report (Word)",
+            data=st.session_state["rep_docx"],
+            file_name="preliminary_delay_analysis_report.docx",
+            mime=("application/vnd.openxmlformats-officedocument."
+                  "wordprocessingml.document"),
+        )
 
 
 # ====================================================================== #
