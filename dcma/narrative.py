@@ -19,22 +19,29 @@ from .rationale import CHECK_RATIONALE
 from .xer_parser import XerData
 
 # Provider registry: display name, default model, env var for the key.
-PROVIDERS: dict[str, dict[str, str]] = {
+PROVIDERS: dict[str, dict] = {
     "anthropic": {
         "label": "Anthropic (Claude)",
         "default_model": "claude-opus-4-8",
+        "models": ["claude-opus-4-8", "claude-sonnet-5",
+                   "claude-haiku-4-5-20251001"],
         "env_var": "ANTHROPIC_API_KEY",
         "key_hint": "console.anthropic.com",
     },
     "openai": {
         "label": "OpenAI (ChatGPT)",
         "default_model": "gpt-5.1",
+        "models": ["gpt-5.1", "gpt-5.1-mini", "gpt-5", "gpt-4o",
+                   "gpt-4o-mini"],
         "env_var": "OPENAI_API_KEY",
         "key_hint": "platform.openai.com",
     },
     "gemini": {
         "label": "Google (Gemini)",
         "default_model": "gemini-flash-latest",
+        "models": ["gemini-flash-latest", "gemini-flash-lite-latest",
+                   "gemini-pro-latest", "gemini-3-flash-preview",
+                   "gemini-3-pro-preview"],
         "env_var": "GEMINI_API_KEY",
         "key_hint": "aistudio.google.com",
     },

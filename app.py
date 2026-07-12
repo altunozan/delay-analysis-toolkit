@@ -132,6 +132,21 @@ def get_parsed_files() -> list[tuple[str, object]]:
     return st.session_state.get("xer_pool", [])
 
 
+def model_selector(container, pinfo: dict, state_key: str) -> str:
+    """Model dropdown per provider, with a Custom escape hatch."""
+    options = list(pinfo.get("models", [pinfo["default_model"]]))
+    options.append("Custom…")
+    sel = container.selectbox(
+        "Model", options, key=f"{state_key}_modelsel",
+        help="Common models for this provider; pick Custom… to type any "
+             "model ID available to your key.")
+    if sel == "Custom…":
+        return container.text_input(
+            "Custom model ID", value=pinfo["default_model"],
+            key=f"{state_key}_modelcustom")
+    return sel
+
+
 def ai_narrative_panel(
     state_key: str,
     prompt_builder,
@@ -163,12 +178,7 @@ def ai_narrative_panel(
             key=f"{state_key}_provider",
         )
         pinfo = PROVIDERS[provider]
-        model = pcol2.text_input(
-            "Model",
-            value=pinfo["default_model"],
-            help="Override with any model ID available to your key.",
-            key=f"{state_key}_model",
-        )
+        model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
         env_key = os.environ.get(pinfo["env_var"], "")
         if provider == "gemini" and not env_key:
             env_key = os.environ.get("GOOGLE_API_KEY", "")
@@ -978,8 +988,7 @@ def sequence_tab() -> None:
             format_func=lambda p: PROVIDERS[p]["label"],
             key="seq_ai_provider")
         r_info = PROVIDERS[r_provider]
-        r_model = rc2.text_input("Model", value=r_info["default_model"],
-                                 key="seq_ai_model")
+        r_model = model_selector(rc2, r_info, f"seq_ai_{r_provider}")
         r_env = os.environ.get(r_info["env_var"], "")
         if r_provider == "gemini" and not r_env:
             r_env = os.environ.get("GOOGLE_API_KEY", "")
@@ -1091,7 +1100,7 @@ def sequence_tab() -> None:
     VIEW_MODES = {
         "Front × stage bands": "bands",
         "Stage timeline": "stage_timeline",
-        "Activity gantt (start → finish)": "activity_gantt",
+        "Sequence gantt (Front › Stage)": "sequence_gantt",
     }
     vc1, vc2, vc3 = st.columns([2, 1, 1])
     view_label = vc1.radio("View", list(VIEW_MODES.keys()),
@@ -1207,38 +1216,48 @@ def sequence_tab() -> None:
                                               format="%d %b %Y")])
                      .properties(height=30 * len(rows_c),
                                  title="Stage timeline across the works"))
-    else:                                  # activity gantt, start → finish
-        acts = sorted(
-            (r for r in prop.rows
-             if r.act_start and r.front in keep),
-            key=lambda r: (r.act_start, r.act_finish or r.act_start))
-        capped = len(acts) > 200
-        acts = acts[:200]
-        rows_c = [{"Activity": f"{r.task_code} · {r.name[:30]}",
-                   "Front": r.front, "Stage": r.stage,
-                   "Start": r.act_start,
-                   "Finish": r.act_finish or r.act_start}
-                  for r in acts]
+    else:                        # sequence gantt at CODE level: Front › Stage
+        by_front: dict[str, list] = {}
+        for b in seq.bands:
+            if b.front in keep and b.act_start:
+                by_front.setdefault(b.front, []).append(b)
+        # Fronts in chronological order of their first recorded start so
+        # the gantt reads start -> finish down the page.
+        front_seq = sorted(by_front,
+                           key=lambda f: min(b.act_start
+                                             for b in by_front[f]))
+        rows_c, order = [], []
+        for front in front_seq:
+            bands_f = sorted(
+                by_front[front],
+                key=lambda b: (seq.stage_order.index(b.stage)
+                               if b.stage in seq.stage_order else 99))
+            for b in bands_f:
+                label = f"{front} › {b.stage}"
+                order.append(label)
+                rows_c.append({
+                    "Row": label, "Front": front, "Stage": b.stage,
+                    "Start": b.act_start,
+                    "Finish": b.act_finish or b.act_start,
+                    "Activities": b.activity_count})
         if rows_c:
-            order = [r["Activity"] for r in rows_c]
             chart = (alt.Chart(pd.DataFrame(rows_c))
-                     .mark_bar(height=4, cornerRadius=1)
+                     .mark_bar(height=8, cornerRadius=2)
                      .encode(
                          x=alt.X("Start:T", title=None,
                                  axis=alt.Axis(format="%b %Y")),
                          x2="Finish:T",
-                         y=alt.Y("Activity:N", sort=order, title=None,
-                                 axis=alt.Axis(labelLimit=260,
-                                               labelFontSize=7)),
+                         y=alt.Y("Row:N", sort=order, title=None,
+                                 axis=alt.Axis(labelLimit=300,
+                                               labelFontSize=9)),
                          color=_colour_enc(keep),
-                         tooltip=["Activity", "Front", "Stage",
+                         tooltip=["Front", "Stage", "Activities",
                                   alt.Tooltip("Start:T", format="%d %b %Y"),
                                   alt.Tooltip("Finish:T",
                                               format="%d %b %Y")])
-                     .properties(height=max(300, 8 * len(order)),
-                                 title="As-built sequence, start → finish"
-                                       + (" (first 200 by actual start)"
-                                          if capped else "")))
+                     .properties(height=max(300, 13 * len(order)),
+                                 title="As-built sequence gantt — "
+                                       "Front › Stage, start → finish"))
     if chart is not None:
         st.altair_chart(chart, use_container_width=True)
         st.caption("Bars = actual dates as recorded. Switch view, colour, "
@@ -1852,8 +1871,7 @@ def report_tab() -> None:
             "AI provider", options=list(PROVIDERS.keys()),
             format_func=lambda p: PROVIDERS[p]["label"], key="rep_provider")
         pinfo = PROVIDERS[provider]
-        model = pcol2.text_input("Model", value=pinfo["default_model"],
-                                 key="rep_model")
+        model = model_selector(pcol2, pinfo, f"rep_{provider}")
         env_key = os.environ.get(pinfo["env_var"], "")
         if provider == "gemini" and not env_key:
             env_key = os.environ.get("GOOGLE_API_KEY", "")

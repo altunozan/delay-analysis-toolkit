@@ -278,7 +278,7 @@ check("A18e view advice parses and clamps",
       adv is not None and adv["mode"] == "bands"
       and parse_view_advice('{"mode":"nope"}') is None)
 check("A18f view advice prompt built",
-      "activity_gantt" in build_view_advice_prompt(sq, 30))
+      "sequence_gantt" in build_view_advice_prompt(sq, 30))
 
 print("\n== B. Edge cases / degenerate inputs ==")
 

@@ -358,8 +358,8 @@ def build_view_advice_prompt(seq: SequenceResult,
         "<options>\n"
         '- "mode": one of "bands" (y = work front, one bar per front x '
         'stage), "stage_timeline" (y = stage, one bar per stage), '
-        '"activity_gantt" (one bar per activity, full start-to-finish '
-        "sequence)\n"
+        '"sequence_gantt" (one row per Front > Stage code pair, the full '
+        "start-to-finish coded sequence)\n"
         '- "colour": "Stage" or "Front"\n'
         '- "max_fronts": integer 5-40 (how many last-finishing fronts to '
         "show)\n"
@@ -386,7 +386,7 @@ def parse_view_advice(text: str) -> dict | None:
     if not isinstance(obj, dict):
         return None
     mode = obj.get("mode")
-    if mode not in ("bands", "stage_timeline", "activity_gantt"):
+    if mode not in ("bands", "stage_timeline", "sequence_gantt"):
         return None
     colour = obj.get("colour")
     if colour not in ("Stage", "Front"):
