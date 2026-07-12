@@ -46,9 +46,14 @@ from programme import (
     ReportSection,
     SourceFile,
     WEIGHT_OPTIONS,
+    STAGE_ORDER,
     analyse_asbuilt_path,
     analyse_float_erosion,
+    analyse_sequence,
+    build_sequence_prompt,
+    build_sequence_xlsx,
     extract_actual_trace,
+    propose_sequence_mapping,
     trace_end_candidates,
     triangulate,
     analyse_windows,
@@ -908,6 +913,141 @@ def variance_tab() -> None:
 
 
 # ====================================================================== #
+# Tab 13 — Sequence Coding (Module 13)
+# ====================================================================== #
+
+def sequence_tab() -> None:
+    st.caption(
+        "Recode the programme into work fronts × construction stages when "
+        "activity codes and WBS fall short. The tool proposes the coding "
+        "with evidence per assignment; you confirm or amend it — the final "
+        "mapping is disclosed with the report."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]
+    default_idx = len(names) - 1          # latest revision: most actuals
+    chosen = st.selectbox("Programme", names, index=default_idx,
+                          key="seq_prog",
+                          help="Defaults to the latest revision (the one "
+                               "with the most actual dates).")
+    data = dict(files)[chosen]
+
+    map_key = f"seq_rows_{chosen}"
+    if map_key not in st.session_state or st.button(
+            "↺ Re-propose mapping from file evidence", key="seq_repropose"):
+        prop = propose_sequence_mapping(data, chosen)
+        st.session_state[map_key] = prop
+        st.session_state.pop(f"{map_key}_confirmed", None)
+    prop = st.session_state[map_key]
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Activities mapped", len(prop.rows))
+    m2.metric("Work fronts", len(prop.fronts))
+    m3.metric("Stage coverage", f"{prop.stage_coverage_pct:.0f}%")
+    m4.metric("Front coverage", f"{prop.front_coverage_pct:.0f}%")
+    for w in prop.warnings:
+        st.warning(w)
+
+    confirmed = st.session_state.get(f"{map_key}_confirmed", False)
+    with st.expander(
+        "Review & amend the proposed mapping"
+        + (" — ✅ confirmed" if confirmed else " — ⚠️ not yet confirmed"),
+        expanded=not confirmed,
+    ):
+        st.caption(
+            "Edit any Work front or Stage cell. Every row shows the "
+            "evidence behind the proposal. Click Confirm to adopt the "
+            "mapping for the analysis below and the report."
+        )
+        df = pd.DataFrame([{
+            "Activity ID": r.task_code,
+            "Activity": r.name,
+            "Work front": r.front,
+            "Stage": r.stage,
+            "Front evidence": r.front_evidence,
+            "Stage evidence": r.stage_evidence,
+        } for r in prop.rows])
+        edited = st.data_editor(
+            df,
+            column_config={
+                "Activity ID": st.column_config.TextColumn(disabled=True),
+                "Activity": st.column_config.TextColumn(disabled=True),
+                "Work front": st.column_config.TextColumn(),
+                "Stage": st.column_config.SelectboxColumn(
+                    options=STAGE_ORDER),
+                "Front evidence": st.column_config.TextColumn(
+                    disabled=True),
+                "Stage evidence": st.column_config.TextColumn(
+                    disabled=True),
+            },
+            hide_index=True, use_container_width=True, height=360,
+            key=f"seq_editor_{chosen}",
+        )
+        if st.button("✅ Confirm mapping", type="primary",
+                     key="seq_confirm"):
+            for r, (_, row) in zip(prop.rows, edited.iterrows()):
+                new_front = str(row["Work front"]).strip() or r.front
+                new_stage = row["Stage"] or r.stage
+                if new_front != r.front:
+                    r.front, r.front_evidence = new_front, "analyst"
+                if new_stage != r.stage:
+                    r.stage, r.stage_evidence = new_stage, "analyst"
+            st.session_state[f"{map_key}_confirmed"] = True
+            st.rerun()
+
+    seq = analyse_sequence(prop.rows, chosen, mapping_confirmed=confirmed)
+    if not confirmed:
+        st.info("The analysis below uses the auto-proposed mapping. "
+                "Confirm the mapping above to remove this caveat from the "
+                "report.")
+
+    for w in seq.warnings:
+        (st.info if w.startswith("Last-finishing") else st.warning)(w)
+
+    chart = report_charts.sequence_matrix_chart(seq, max_fronts=30)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+        st.caption("Bars = earliest actual start → latest actual finish "
+                   "per work front and stage; fronts ordered by last "
+                   "recorded finish (latest at the bottom).")
+
+    with st.expander("Front × stage bands (table)"):
+        st.dataframe(pd.DataFrame([{
+            "Work front": b.front,
+            "Stage": b.stage,
+            "Activities": b.activity_count,
+            "Complete": b.complete_count,
+            "Actual start": (f"{b.act_start:%Y-%m-%d}"
+                             if b.act_start else "—"),
+            "Actual finish": (f"{b.act_finish:%Y-%m-%d}"
+                              if b.act_finish else "—"),
+        } for b in seq.bands]), use_container_width=True,
+            hide_index=True, height=340)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in seq.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_seq_{chosen}",
+        lambda tmpl, s=seq: build_sequence_prompt(s, tmpl),
+        "sequence",
+        DEFAULT_TEMPLATES["sequence"],
+    )
+    st.download_button(
+        "⬇️ Download sequence report (Excel, incl. disclosed mapping)",
+        data=build_sequence_xlsx(seq, prop.rows, narrative),
+        file_name="sequence_coding_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
 # Tab 12 — As-Built Critical Path (Module 12)
 # ====================================================================== #
 
@@ -1404,6 +1544,38 @@ def report_tab() -> None:
             prompt=lambda rl=rl: build_resources_prompt(rl),
             charts=[(lambda rl=rl: report_charts.resources_chart(rl),
                      "Planned resource loading by month")]))
+
+    # Sequence coding (latest revision; analyst-confirmed mapping if any)
+    seq_prop = st.session_state.get(f"seq_rows_{curr_name}")
+    seq_confirmed = st.session_state.get(f"seq_rows_{curr_name}_confirmed",
+                                         False)
+    if seq_prop is None:
+        seq_prop = propose_sequence_mapping(pool[curr_name], curr_name)
+    seqr = analyse_sequence(seq_prop.rows, curr_name,
+                            mapping_confirmed=seq_confirmed)
+    if seqr.bands:
+        sec = ReportSection("Construction Sequence (Analyst Coding)")
+        sec.key_findings = [
+            f"{seqr.mapped_activities} actualised activities coded into "
+            f"{len(seq_prop.fronts)} work fronts × construction stages "
+            f"(mapping {'analyst-confirmed' if seq_confirmed else 'auto-proposed'}).",
+        ]
+        if seqr.fronts_by_finish:
+            tops = [f for f, fin in seqr.fronts_by_finish[:3] if fin]
+            sec.key_findings.append(
+                "Last-finishing fronts as recorded: " + ", ".join(tops)
+                + ".")
+        sec.caveats = list(seqr.caveats) + list(seqr.warnings)
+        candidates.append(dict(
+            label="Sequence coding", sec=sec,
+            settings=[f"Sequence coding — programme: {curr_name}; mapping "
+                      f"{'confirmed by analyst' if seq_confirmed else 'auto-proposed'} "
+                      "(full mapping disclosed in the module workbook)"],
+            nar_key=f"nar_seq_{curr_name}",
+            prompt=lambda s=seqr: build_sequence_prompt(s),
+            charts=[(lambda s=seqr:
+                     report_charts.sequence_matrix_chart(s),
+                     "Construction sequence by work front (actual dates)")]))
 
     # Attach any narrative already generated (here or in the module tabs).
     # Parameterised panels (per-programme keys) also match by prefix.
@@ -2315,7 +2487,7 @@ def main() -> None:
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 
     (intake, dcma, cpath, milestones, variance, compare, windows,
-     scurve, floats, resources, asbuilt, report) = st.tabs([
+     scurve, floats, resources, asbuilt, sequence, report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
         "🧭 Baseline Critical Path",
@@ -2327,6 +2499,7 @@ def main() -> None:
         "🎈 Float Erosion",
         "👷 Resource Loading",
         "🛤️ As-Built Critical Path",
+        "🧩 Sequence Coding",
         "📄 Report Assembler",
     ])
     with intake:
@@ -2351,6 +2524,8 @@ def main() -> None:
         resources_tab()
     with asbuilt:
         asbuilt_tab()
+    with sequence:
+        sequence_tab()
     with report:
         report_tab()
 

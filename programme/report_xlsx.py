@@ -677,3 +677,59 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Module 13 — Sequence coding
+# --------------------------------------------------------------------------- #
+def build_sequence_xlsx(seq, mapping_rows, narrative: str | None = None) -> bytes:
+    """seq: SequenceResult; mapping_rows: list[MappingRow] (disclosed)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sequence Bands"
+    _title(ws, "Construction Sequence by Work Front (Actual Dates)", 6)
+    ws.cell(row=3, column=1, value=(
+        "Mapping " + ("CONFIRMED by analyst"
+                      if seq.mapping_confirmed else
+                      "AUTO-PROPOSED (not analyst-confirmed)")
+        + f" — {seq.mapped_activities} actualised activities mapped"
+    )).font = Font(italic=True)
+    _header_row(ws, 5, ["Work front", "Stage", "Activities", "Complete",
+                        "Actual start", "Actual finish"])
+    r = 6
+    for b in sorted(seq.bands,
+                    key=lambda b: (b.front,
+                                   seq.stage_order.index(b.stage)
+                                   if b.stage in seq.stage_order else 99)):
+        vals = [b.front, b.stage, b.activity_count, b.complete_count,
+                _fmt(b.act_start), _fmt(b.act_finish)]
+        for col, v in enumerate(vals, start=1):
+            ws.cell(row=r, column=col, value=v).border = THIN_BORDER
+        r += 1
+    _autofit(ws, {1: 26, 2: 30, 3: 11, 4: 10, 5: 12, 6: 13})
+    ws.freeze_panes = "A6"
+
+    s2 = wb.create_sheet("Fronts by Finish")
+    _header_row(s2, 1, ["Work front", "Last recorded finish"])
+    for i, (f, fin) in enumerate(seq.fronts_by_finish, start=2):
+        s2.cell(row=i, column=1, value=f).border = THIN_BORDER
+        s2.cell(row=i, column=2, value=_fmt(fin)).border = THIN_BORDER
+    _autofit(s2, {1: 30, 2: 20})
+
+    # The disclosed mapping — the Basis-of-Analysis artefact.
+    s3 = wb.create_sheet("Mapping (Disclosed)")
+    _header_row(s3, 1, ["Activity ID", "Activity", "Work front",
+                        "Front evidence", "Stage", "Stage evidence"])
+    for i, m in enumerate(mapping_rows, start=2):
+        vals = [m.task_code, m.name, m.front, m.front_evidence,
+                m.stage, m.stage_evidence]
+        for col, v in enumerate(vals, start=1):
+            s3.cell(row=i, column=col, value=v).border = THIN_BORDER
+    _autofit(s3, {1: 18, 2: 46, 3: 22, 4: 20, 5: 30, 6: 22})
+    s3.freeze_panes = "A2"
+
+    _notes_sheet(wb, seq.warnings + seq.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

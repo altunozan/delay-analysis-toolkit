@@ -236,6 +236,26 @@ check("A16e triangulation: agreement in [0,100] and sets partition union",
       and not (set(tri.both) & set(tri.trace_only))
       and not (set(tri.both) & set(tri.stitched_only)))
 
+
+# A17. Sequence coding invariants
+from programme import propose_sequence_mapping, analyse_sequence
+sp = propose_sequence_mapping(U, "U")
+check("A17 sequence: every activity gets a front and a stage",
+      all(r.front and r.stage for r in sp.rows))
+check("A17b sequence: coverage percentages in [0,100]",
+      0 <= sp.stage_coverage_pct <= 100 and 0 <= sp.front_coverage_pct <= 100)
+sq = analyse_sequence(sp.rows, "U")
+check("A17c sequence: band bounds ordered (start <= finish)",
+      all(b.act_start is None or b.act_finish is None
+          or b.act_start <= b.act_finish for b in sq.bands))
+check("A17d sequence: mapped count == actualised rows",
+      sq.mapped_activities == sum(1 for r in sp.rows if r.act_start))
+check("A17e sequence: unconfirmed mapping carries the extra caveat",
+      any("AUTO-PROPOSED" in c for c in sq.caveats))
+sq2 = analyse_sequence(sp.rows, "U", mapping_confirmed=True)
+check("A17f sequence: confirmed mapping drops it",
+      not any("AUTO-PROPOSED" in c for c in sq2.caveats))
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

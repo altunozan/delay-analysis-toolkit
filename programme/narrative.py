@@ -18,6 +18,7 @@ from .variance import VarianceResult
 from .float_erosion import FloatErosionResult
 from .progress import ProgressResult
 from .resources import ResourceLoadingResult
+from .sequence_coding import SequenceResult
 from .windows import WindowsResult
 
 # Non-negotiable rules — always in the prompt, never user-editable, so a
@@ -179,6 +180,30 @@ explicitly that no actualised dates were altered — a positive indicator for
 the contemporaneity of the records.
 
 ### 6. Limitations
+Every standing caveat and warning provided, in full.""",
+    "sequence": """\
+## Construction Sequence Review (Analyst Coding)
+
+### 1. Executive Summary
+2-3 sentences: the work fronts and stages the programme was recoded into,
+the coverage of the coding, and which fronts finished last as recorded.
+
+### 2. Basis of the Coding
+State plainly how the coding was derived (activity-ID tokens, WBS, name
+keywords), its coverage figures, and whether the analyst confirmed it. The
+full mapping is disclosed with the report.
+
+### 3. Sequence by Work Front
+The story the actual-date bands tell: how the stages ran within and across
+the fronts — which fronts progressed steadily, which stalled, where stages
+overlapped. Group into a readable account, not a band list.
+
+### 4. Late-Running Fronts
+The fronts finishing last as recorded, with dates — the candidates for the
+works that drove completion. Fronts that finished early deserve equal
+mention.
+
+### 5. Limitations
 Every standing caveat and warning provided, in full.""",
     "resources": """\
 ## Planned Resource Loading Review
@@ -841,4 +866,44 @@ def build_asbuilt_prompt(
         lines.extend(f"- {w}" for w in tri.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["asbuilt_path"]))
+    return "\n".join(lines)
+
+
+def build_sequence_prompt(
+    seq: SequenceResult, template: str | None = None
+) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "—"
+    lines = ["<context>Construction-sequence recoding of programme "
+             f"'{seq.programme_label}': every activity assigned to a work "
+             "front (from activity-ID tokens / WBS) and a construction "
+             "stage (name keywords), analyst-editable; bands bracket "
+             "earliest actual start to latest actual finish per front and "
+             "stage. Mapping "
+             + ("CONFIRMED by the analyst."
+                if seq.mapping_confirmed else
+                "AUTO-PROPOSED, not yet analyst-confirmed.")
+             + "</context>\n"]
+    lines.append("<fronts_by_recorded_finish>")
+    for f, fin in seq.fronts_by_finish:
+        lines.append(f"- {f}: last recorded finish {fmt(fin)}")
+    lines.append("</fronts_by_recorded_finish>\n")
+    lines.append("<front_stage_bands>")
+    cur = None
+    for b in sorted(seq.bands,
+                    key=lambda b: (b.front,
+                                   seq.stage_order.index(b.stage)
+                                   if b.stage in seq.stage_order else 99)):
+        if b.front != cur:
+            cur = b.front
+            lines.append(f"Front {b.front}:")
+        lines.append(f"  - {b.stage}: {fmt(b.act_start)} -> "
+                     f"{fmt(b.act_finish)} ({b.activity_count} acts, "
+                     f"{b.complete_count} complete)")
+    lines.append("</front_stage_bands>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in seq.caveats)
+    lines.extend(f"- {w}" for w in seq.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["sequence"]))
     return "\n".join(lines)

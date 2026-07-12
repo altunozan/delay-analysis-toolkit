@@ -272,3 +272,61 @@ def asbuilt_persistence_chart(res, max_rows: int = 70) -> alt.Chart | None:
                          alt.Tooltip("Finish:T", format="%d %b %Y")])
             .properties(width=620, height=max(200, 10 * len(order)),
                         title=title))
+
+# Fixed stage palette: 9 hues in fixed order + neutral for Unclassified.
+STAGE_COLORS = {
+    "Design, Submittals & Approvals": "#3b76c4",
+    "Procurement & Fabrication": "#8a63d2",
+    "Enabling, Access & MEP": "#0e8388",
+    "Structure & Screed": "#8d6e63",
+    "Ceilings & Closures": "#e8a33d",
+    "Walls, Glazing & Cladding": "#c2185b",
+    "Joinery, Doors & Flooring": "#5c9e31",
+    "Finishes & Fit-Out": "#f4511e",
+    "Snagging & Handover": "#546e7a",
+    "Unclassified": "#9e9e9e",
+}
+
+
+def sequence_matrix_chart(seq, max_fronts: int = 25) -> alt.Chart | None:
+    """Front x stage actual bands: y = work front, colour = stage."""
+    keep = [f for f, _ in seq.fronts_by_finish[:max_fronts]]
+    if not keep:
+        return None
+    order = list(reversed(keep))          # earliest-finishing at top
+    rows = []
+    for b in seq.bands:
+        if b.front not in keep or b.act_start is None:
+            continue
+        rows.append({
+            "Front": b.front,
+            "Stage": b.stage,
+            "Start": b.act_start,
+            "Finish": b.act_finish or b.act_start,
+            "Activities": b.activity_count,
+        })
+    if not rows:
+        return None
+    stages = [s for s in seq.stage_order
+              if any(r["Stage"] == s for r in rows)]
+    return (alt.Chart(pd.DataFrame(rows))
+            .mark_bar(height=7, cornerRadius=2, opacity=0.9)
+            .encode(
+                x=alt.X("Start:T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                x2="Finish:T",
+                y=alt.Y("Front:N", sort=order, title=None,
+                        axis=alt.Axis(labelLimit=220)),
+                color=alt.Color(
+                    "Stage:N",
+                    scale=alt.Scale(domain=stages,
+                                    range=[STAGE_COLORS.get(s, "#9e9e9e")
+                                           for s in stages]),
+                    legend=alt.Legend(orient="bottom", columns=3,
+                                      title=None)),
+                tooltip=["Front", "Stage", "Activities",
+                         alt.Tooltip("Start:T", format="%d %b %Y"),
+                         alt.Tooltip("Finish:T", format="%d %b %Y")])
+            .properties(width=620, height=max(220, 16 * len(keep)),
+                        title="Construction sequence by work front "
+                              "(actual dates)"))

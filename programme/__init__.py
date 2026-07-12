@@ -73,6 +73,7 @@ from .narrative import (
     build_float_erosion_prompt,
     build_progress_prompt,
     build_resources_prompt,
+    build_sequence_prompt,
     build_windows_prompt,
     build_inventory_prompt,
     build_milestone_prompt,
@@ -91,6 +92,7 @@ from .report_xlsx import (
     build_float_erosion_xlsx,
     build_progress_xlsx,
     build_resources_xlsx,
+    build_sequence_xlsx,
     build_windows_xlsx,
     build_inventory_xlsx,
     build_milestone_xlsx,
@@ -101,6 +103,15 @@ from .resources import (
     ResourceInfo,
     ResourceLoadingResult,
     extract_resource_loading,
+)
+from .sequence_coding import (
+    FrontStageBand,
+    MappingRow,
+    STAGE_ORDER,
+    SequenceMappingProposal,
+    SequenceResult,
+    analyse_sequence,
+    propose_sequence_mapping,
 )
 from .variance import (
     VarianceGroup,
@@ -191,6 +202,14 @@ __all__ = [
     "ResourceInfo",
     "ResourceLoadingResult",
     "extract_resource_loading",
+    # sequence coding
+    "FrontStageBand",
+    "MappingRow",
+    "STAGE_ORDER",
+    "SequenceMappingProposal",
+    "SequenceResult",
+    "analyse_sequence",
+    "propose_sequence_mapping",
     # windows
     "PathShift",
     "WindowRow",
@@ -202,6 +221,7 @@ __all__ = [
     "build_float_erosion_prompt",
     "build_progress_prompt",
     "build_resources_prompt",
+    "build_sequence_prompt",
     "build_windows_prompt",
     "build_critical_path_prompt",
     "build_inventory_prompt",
@@ -218,6 +238,7 @@ __all__ = [
     "build_float_erosion_xlsx",
     "build_progress_xlsx",
     "build_resources_xlsx",
+    "build_sequence_xlsx",
     "build_windows_xlsx",
     "build_critical_path_xlsx",
     "build_inventory_xlsx",
