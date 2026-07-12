@@ -34,7 +34,7 @@ PROVIDERS: dict[str, dict[str, str]] = {
     },
     "gemini": {
         "label": "Google (Gemini)",
-        "default_model": "gemini-2.5-pro",
+        "default_model": "gemini-flash-latest",
         "env_var": "GEMINI_API_KEY",
         "key_hint": "aistudio.google.com",
     },
@@ -256,9 +256,17 @@ def _stream_gemini(api_key: str, model: str, prompt: str) -> Iterator[str]:
         if code in (401, 403) or "API key not valid" in msg:
             raise NarrativeError("Invalid Gemini API key. Check the key and try again.")
         if code == 429:
-            raise NarrativeError("Rate limited by Gemini. Wait a moment and retry.")
+            raise NarrativeError(
+                "Rate limited by Gemini — free-tier quota for this model "
+                "may be exhausted. Try model 'gemini-flash-latest' or wait "
+                "and retry."
+            )
         if code == 404:
-            raise NarrativeError(f"Model '{model}' not found on Gemini.")
+            raise NarrativeError(
+                f"Gemini rejected model '{model}': {msg} "
+                "Try 'gemini-flash-latest' (always points at the newest "
+                "Flash model available to your account)."
+            )
         raise NarrativeError(f"Gemini API error ({code}): {getattr(exc, 'message', exc)}")
 
 
