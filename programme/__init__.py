@@ -22,6 +22,13 @@ from .activity_codes import (
     activity_code_types,
     task_code_assignments,
 )
+from .asbuilt_path import (
+    AsBuiltPathResult,
+    PersistenceEntry,
+    StitchActivity,
+    StitchWindow,
+    analyse_asbuilt_path,
+)
 from .comparison import (
     ActivityRef,
     ComparisonResult,
@@ -54,6 +61,7 @@ from .milestones import (
     track_milestone_shifts,
 )
 from .narrative import (
+    build_asbuilt_prompt,
     build_comparison_prompt,
     build_critical_path_prompt,
     build_float_erosion_prompt,
@@ -71,6 +79,7 @@ from .report_docx import (
     build_assembled_report,
 )
 from .report_xlsx import (
+    build_asbuilt_xlsx,
     build_comparison_xlsx,
     build_critical_path_xlsx,
     build_float_erosion_xlsx,
@@ -134,6 +143,12 @@ __all__ = [
     # wbs
     "max_wbs_depth",
     "task_wbs_assignments",
+    # as-built path
+    "AsBuiltPathResult",
+    "PersistenceEntry",
+    "StitchActivity",
+    "StitchWindow",
+    "analyse_asbuilt_path",
     # comparison
     "ActivityRef",
     "ComparisonResult",
@@ -170,6 +185,7 @@ __all__ = [
     "WindowsResult",
     "analyse_windows",
     # narrative prompts
+    "build_asbuilt_prompt",
     "build_comparison_prompt",
     "build_float_erosion_prompt",
     "build_progress_prompt",
@@ -185,6 +201,7 @@ __all__ = [
     "SourceFile",
     "build_assembled_report",
     # excel
+    "build_asbuilt_xlsx",
     "build_comparison_xlsx",
     "build_float_erosion_xlsx",
     "build_progress_xlsx",

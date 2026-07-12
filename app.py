@@ -46,8 +46,11 @@ from programme import (
     ReportSection,
     SourceFile,
     WEIGHT_OPTIONS,
+    analyse_asbuilt_path,
     analyse_float_erosion,
     analyse_windows,
+    build_asbuilt_prompt,
+    build_asbuilt_xlsx,
     build_assembled_report,
     build_comparison_prompt,
     build_float_erosion_prompt,
@@ -902,6 +905,107 @@ def variance_tab() -> None:
 
 
 # ====================================================================== #
+# Tab 12 — As-Built Critical Path (Module 12)
+# ====================================================================== #
+
+def asbuilt_tab() -> None:
+    st.caption(
+        "The as-built critical path reconstructed from the contemporaneous "
+        "programmes: forecast-critical work confirmed as performed, window "
+        "by window, plus the criticality persistence index."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** tab "
+                "first — the reconstruction reads criticality from each "
+                "revision in force at the time.")
+        return
+
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    core_freq = st.slider(
+        "Persistent-core threshold (% of eligible revisions critical)",
+        10, 100, 50, 5,
+        help="An activity joins the persistent core when it was on the "
+             "forecast path in at least this share of the revisions in "
+             "which it remained to be performed.") / 100.0
+    res = analyse_asbuilt_path(ordered, core_min_frequency=core_freq)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Windows", len(res.windows))
+    m2.metric("Stitched activities", len(res.stitched))
+    m3.metric("Persistent core", len(res.core_codes))
+    m4.metric("Remaining on path", res.remaining_path_count)
+
+    for w in res.warnings:
+        (st.info if w.startswith("Corroboration") else st.warning)(w)
+
+    chart = report_charts.asbuilt_persistence_chart(res, max_rows=90)
+    if chart is not None:
+        st.altair_chart(chart, use_container_width=True)
+        st.caption("Bars = actual dates as last recorded; darker red = on "
+                   "the forecast critical path in a larger share of "
+                   "revisions (the empirical spine of the as-built path).")
+
+    st.subheader("Stitched contemporaneous path")
+    core = set(res.core_codes)
+    for w in res.windows:
+        cov = (f"{w.coverage_pct:.0f}%" if w.coverage_pct is not None
+               else "—")
+        with st.expander(
+            f"Window {w.index}: {w.from_label} → {w.to_label} — "
+            f"{len(w.activities)} of {w.forecast_critical_count} "
+            f"forecast-critical performed, coverage {cov}",
+            expanded=len(res.windows) == 1,
+        ):
+            if w.activities:
+                st.dataframe(pd.DataFrame([{
+                    "Activity ID": a.task_code,
+                    "Activity": a.name,
+                    "Actual start": (f"{a.act_start:%Y-%m-%d}"
+                                     if a.act_start else "—"),
+                    "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
+                                      if a.act_finish else "in progress"),
+                    "Persistent core": "✓" if a.task_code in core else "",
+                } for a in w.activities]), use_container_width=True,
+                    hide_index=True, height=300)
+            else:
+                st.write("No forecast-critical work recorded as performed "
+                         "in this window.")
+
+    with st.expander("Persistence index (all ever-critical activities)"):
+        st.dataframe(pd.DataFrame([{
+            "Activity ID": e.task_code,
+            "Activity": e.name,
+            "On path": f"{e.times_on_path}/{e.times_eligible}",
+            "Frequency": f"{e.frequency:.0%}",
+            "Actual start": (f"{e.act_start:%Y-%m-%d}"
+                             if e.act_start else "—"),
+            "Actual finish": (f"{e.act_finish:%Y-%m-%d}"
+                              if e.act_finish else "—"),
+        } for e in res.persistence]), use_container_width=True,
+            hide_index=True, height=340)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        "nar_asbuilt",
+        lambda tmpl: build_asbuilt_prompt(res, tmpl),
+        "asbuilt_path",
+        DEFAULT_TEMPLATES["asbuilt_path"],
+    )
+    st.download_button(
+        "⬇️ Download as-built path report (Excel)",
+        data=build_asbuilt_xlsx(res, narrative),
+        file_name="asbuilt_critical_path_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
 # Tab 11 — Report Assembler (Module 11)
 # ====================================================================== #
 
@@ -1151,6 +1255,32 @@ def report_tab() -> None:
             prompt=lambda fe=fe: build_float_erosion_prompt(fe),
             charts=[(lambda fe=fe: report_charts.float_chart(fe),
                      "Float profile by revision")]))
+
+        # As-built critical path (contemporaneous reconstruction)
+        ab = analyse_asbuilt_path(ordered)
+        sec = ReportSection("As-Built Critical Path")
+        sec.key_findings = [
+            f"{len(ab.stitched)} activities on the stitched contemporaneous "
+            f"path across {len(ab.windows)} window(s); persistent core "
+            f"{len(ab.core_codes)} of {len(ab.persistence)} ever-critical "
+            "activities.",
+        ]
+        covs = [w.coverage_pct for w in ab.windows
+                if w.coverage_pct is not None]
+        if covs:
+            sec.key_findings.append(
+                f"Driving-work coverage: {min(covs):.0f}%–{max(covs):.0f}% "
+                "of each window with forecast-critical work active.")
+        sec.caveats = list(ab.caveats) + list(ab.warnings)
+        candidates.append(dict(
+            label="As-built critical path", sec=sec,
+            settings=["As-built path — contemporaneous stitching; "
+                      "persistent core at ≥50% of eligible revisions"],
+            nar_key="nar_asbuilt",
+            prompt=lambda ab=ab: build_asbuilt_prompt(ab),
+            charts=[(lambda ab=ab:
+                     report_charts.asbuilt_persistence_chart(ab),
+                     "Criticality persistence on actual dates")]))
 
     # Resources (baseline)
     rl = extract_resource_loading(pool[base_name], base_name)
@@ -2083,7 +2213,7 @@ def main() -> None:
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 
     (intake, dcma, cpath, milestones, variance, compare, windows,
-     scurve, floats, resources, report) = st.tabs([
+     scurve, floats, resources, asbuilt, report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
         "🧭 Baseline Critical Path",
@@ -2094,6 +2224,7 @@ def main() -> None:
         "📈 Progress S-Curve",
         "🎈 Float Erosion",
         "👷 Resource Loading",
+        "🛤️ As-Built Critical Path",
         "📄 Report Assembler",
     ])
     with intake:
@@ -2116,6 +2247,8 @@ def main() -> None:
         float_erosion_tab()
     with resources:
         resources_tab()
+    with asbuilt:
+        asbuilt_tab()
     with report:
         report_tab()
 

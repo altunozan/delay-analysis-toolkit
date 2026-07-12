@@ -33,7 +33,9 @@
       "Bash(pip3 install *)",
       "Bash(gh auth *)",
       "Bash(git push *)",
-      "Bash(echo \"exit: $?\")"
+      "Bash(echo \"exit: $?\")",
+      "Skill(dataviz)",
+      "Skill(dataviz:*)"
     ]
   }
 }

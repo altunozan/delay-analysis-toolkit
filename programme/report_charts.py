@@ -228,3 +228,47 @@ def variance_chart(var) -> alt.Chart | None:
                                     alt.value(GOOD_C)))
             .properties(width=560, height=max(120, 24 * len(df)),
                         title=f"Finish slippage by {var.code_type_name}"))
+
+def asbuilt_persistence_chart(res, max_rows: int = 70) -> alt.Chart | None:
+    """Actual-date gantt of ever-critical activities; colour = persistence.
+
+    Sequential encoding (one hue, light->dark): darker red = on the
+    forecast critical path in a larger share of revisions.
+    """
+    rows = []
+    for e in res.persistence:
+        if e.act_start is None:
+            continue
+        rows.append({
+            "Activity": f"{e.task_code} · {e.name[:34]}",
+            "Start": e.act_start,
+            "Finish": e.act_finish or e.act_start,
+            "Persistence": round(100 * e.frequency),
+            "On path": f"{e.times_on_path}/{e.times_eligible} revisions",
+        })
+    if not rows:
+        return None
+    rows.sort(key=lambda r: r["Start"])
+    rows = rows[:max_rows]
+    order = [r["Activity"] for r in rows]
+    title = "As-built criticality persistence (actual dates)"
+    if len(res.persistence) > max_rows:
+        title += f" — first {max_rows} by actual start"
+    return (alt.Chart(pd.DataFrame(rows))
+            .mark_bar(height=6, cornerRadius=2)
+            .encode(
+                x=alt.X("Start:T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                x2="Finish:T",
+                y=alt.Y("Activity:N", sort=order, title=None,
+                        axis=alt.Axis(labelLimit=280, labelFontSize=8)),
+                color=alt.Color(
+                    "Persistence:Q",
+                    scale=alt.Scale(scheme="reds", domain=[0, 100]),
+                    legend=alt.Legend(title="% of revisions critical",
+                                      orient="bottom", gradientLength=220)),
+                tooltip=["Activity", "On path",
+                         alt.Tooltip("Start:T", format="%d %b %Y"),
+                         alt.Tooltip("Finish:T", format="%d %b %Y")])
+            .properties(width=620, height=max(200, 10 * len(order)),
+                        title=title))

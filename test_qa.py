@@ -196,6 +196,24 @@ hist_total = sum(p.qty for p in rl.histogram)
 check("A14b histogram sums to totals", abs(hist_total - mod_total) < 1.0,
       f"hist={hist_total:,.0f} vs {mod_total:,.0f}")
 
+
+# A15. As-built path invariants
+from programme import analyse_asbuilt_path
+ab = analyse_asbuilt_path([("B", B), ("U", U)])
+check("A15 asbuilt: stitched activities were forecast critical",
+      all(a.forecast_by == "B" for w in ab.windows for a in w.activities))
+check("A15b asbuilt: persistence freq within [0,1] and on<=eligible",
+      all(0 <= e.frequency <= 1 and e.times_on_path <= e.times_eligible
+          for e in ab.persistence))
+check("A15c asbuilt: coverage within [0,100]",
+      all(w.coverage_pct is None or 0 <= w.coverage_pct <= 100
+          for w in ab.windows))
+check("A15d asbuilt: core subset of persistence",
+      set(ab.core_codes) <= {e.task_code for e in ab.persistence})
+ab1 = analyse_asbuilt_path([("B", B)])
+check("A15e asbuilt single revision -> warning, no crash",
+      not ab1.windows and ab1.warnings)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

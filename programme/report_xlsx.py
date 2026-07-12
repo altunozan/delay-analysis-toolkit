@@ -564,3 +564,69 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Module 12 — As-built critical path
+# --------------------------------------------------------------------------- #
+def build_asbuilt_xlsx(res, narrative: str | None = None) -> bytes:
+    """res: programme.asbuilt_path.AsBuiltPathResult"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Stitched Path"
+    _title(ws, "As-Built Critical Path (Contemporaneous Reconstruction)", 7)
+    core = set(res.core_codes)
+
+    _header_row(ws, 4, ["Window", "Forecast by", "Activity ID", "Activity",
+                        "Actual start", "Actual finish", "Persistent core"])
+    row = 5
+    for w in res.windows:
+        for a in w.activities:
+            vals = [f"W{w.index}", a.forecast_by, a.task_code, a.name,
+                    _fmt(a.act_start), _fmt(a.act_finish),
+                    "Yes" if a.task_code in core else ""]
+            for col, v in enumerate(vals, start=1):
+                c = ws.cell(row=row, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 7 and v == "Yes":
+                    c.fill = GAIN_FILL
+            row += 1
+    _autofit(ws, {1: 8, 2: 26, 3: 18, 4: 48, 5: 12, 6: 12, 7: 14})
+    ws.freeze_panes = "A5"
+
+    s2 = wb.create_sheet("Persistence Index")
+    _header_row(s2, 1, ["Activity ID", "Activity", "On path (revisions)",
+                        "Eligible (revisions)", "Frequency",
+                        "Actual start", "Actual finish"])
+    for i, e in enumerate(res.persistence, start=2):
+        vals = [e.task_code, e.name, e.times_on_path, e.times_eligible,
+                f"{e.frequency:.0%}", _fmt(e.act_start), _fmt(e.act_finish)]
+        for col, v in enumerate(vals, start=1):
+            c = s2.cell(row=i, column=col, value=v)
+            c.border = THIN_BORDER
+            if col == 5 and e.frequency >= 0.5:
+                c.fill = GAIN_FILL
+    _autofit(s2, {1: 18, 2: 48, 3: 18, 4: 18, 5: 11, 6: 12, 7: 12})
+    s2.freeze_panes = "A2"
+
+    s3 = wb.create_sheet("Window Summary")
+    _header_row(s3, 1, ["Window", "From", "To", "Period",
+                        "Forecast critical", "Performed in window",
+                        "Coverage %"])
+    for i, w in enumerate(res.windows, start=2):
+        period = (f"{_fmt(w.start)} -> {_fmt(w.end)}")
+        vals = [w.index, w.from_label, w.to_label, period,
+                w.forecast_critical_count, len(w.activities),
+                w.coverage_pct]
+        for col, v in enumerate(vals, start=1):
+            c = s3.cell(row=i, column=col, value=v)
+            c.border = THIN_BORDER
+            if (col == 7 and isinstance(v, (int, float)) and v < 50):
+                c.fill = SLIP_FILL
+    _autofit(s3, {1: 8, 2: 26, 3: 26, 4: 26, 5: 16, 6: 18, 7: 11})
+
+    _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -9,6 +9,7 @@ modules share one backend.
 
 from __future__ import annotations
 
+from .asbuilt_path import AsBuiltPathResult
 from .comparison import ComparisonResult
 from .critical_path import CriticalPathResult
 from .inventory import ProgrammeInventory
@@ -106,6 +107,37 @@ groups, do starts slip more than finishes, is any part of the works
 recovering between the two programmes?
 
 ### 5. Limitations
+Every standing caveat and warning provided, in full.""",
+    "asbuilt_path": """\
+## As-Built Critical Path (Contemporaneous Reconstruction)
+
+### 1. Executive Summary
+2-3 sentences: the period reconstructed, how the as-built critical path was
+derived (contemporaneous forecast criticality confirmed by recorded
+performance), and how well corroborated it is (persistent core share,
+coverage).
+
+### 2. The Driving Chain, Window by Window
+Per window: what the then-current programme forecast as critical, which of
+that work the records show was performed, and the share of the window with
+driving work active. Tell it as a construction story (stages of work), not
+an activity list.
+
+### 3. The Persistent Core
+The activities critical in revision after revision — the empirical spine of
+the as-built path. State the corroboration level plainly. Activities on the
+path in only one revision are weakly corroborated; say so.
+
+### 4. Gaps and Counter-Indications
+Windows where forecast-critical work did not progress or coverage was low —
+periods where the true driver may sit off the forecast path. Report these
+with the same weight as the corroborated findings.
+
+### 5. Remaining Path
+Work on the latest forecast path still to be performed (the reconstruction
+covers only the works to the latest data date).
+
+### 6. Limitations
 Every standing caveat and warning provided, in full.""",
     "comparison": """\
 ## Programme Revision Comparison
@@ -706,4 +738,64 @@ def build_resources_prompt(
     lines.extend(f"- {w}" for w in res.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["resources"]))
+    return "\n".join(lines)
+
+
+def build_asbuilt_prompt(
+    res: AsBuiltPathResult, template: str | None = None
+) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    lines = ["<context>As-built critical path reconstructed from the "
+             "project's own contemporaneous programmes: an activity is on "
+             "the as-built path for a window when the programme in force at "
+             "the window's start forecast it critical (backward driving-"
+             "logic trace) AND the closing revision records it as performed "
+             "in that window. The persistence index counts, per activity, "
+             "the revisions in which it sat on the forecast path while "
+             "still to be performed.</context>\n"]
+
+    core = set(res.core_codes)
+    lines.append("<summary>")
+    lines.append(f"- Revisions used: {res.revision_count}; windows: "
+                 f"{len(res.windows)}")
+    lines.append(f"- Ever forecast-critical activities: "
+                 f"{len(res.persistence)}; persistent core: "
+                 f"{len(res.core_codes)}")
+    lines.append(f"- Latest-path activities still to perform: "
+                 f"{res.remaining_path_count}")
+    lines.append("</summary>\n")
+
+    for w in res.windows:
+        lines.append(f"<window_{w.index} from='{w.from_label}' "
+                     f"to='{w.to_label}' period='{fmt(w.start)} to "
+                     f"{fmt(w.end)}'>")
+        cov = (f"{w.coverage_pct:.0f}%" if w.coverage_pct is not None
+               else "n/a")
+        lines.append(f"- Forecast critical at window start: "
+                     f"{w.forecast_critical_count}; performed in window: "
+                     f"{len(w.activities)}; driving-work coverage: {cov}")
+        for a in w.activities[:60]:
+            af = fmt(a.act_finish) if a.act_finish else "in progress"
+            tag = " [CORE]" if a.task_code in core else ""
+            lines.append(f"  - {a.task_code} '{a.name}'{tag}: performed "
+                         f"{fmt(a.act_start)} -> {af}")
+        if len(w.activities) > 60:
+            lines.append(f"  ... (+{len(w.activities) - 60} more)")
+        lines.append(f"</window_{w.index}>\n")
+
+    lines.append("<persistence_index>")
+    for e in res.persistence[:80]:
+        lines.append(f"- {e.task_code} '{e.name}': on forecast path "
+                     f"{e.times_on_path} of {e.times_eligible} eligible "
+                     f"revisions ({e.frequency:.0%})")
+    if len(res.persistence) > 80:
+        lines.append(f"... (+{len(res.persistence) - 80} more)")
+    lines.append("</persistence_index>\n")
+
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["asbuilt_path"]))
     return "\n".join(lines)
