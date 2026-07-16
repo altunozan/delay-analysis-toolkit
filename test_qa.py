@@ -344,15 +344,12 @@ check("A20e seq config ids accepted",
       is not None)
 
 
-# A21. Full dimension menu (module 14 expansion)
+# A21. Dimension menu = WBS levels + activity codes + TASK UDFs only
 hd2 = available_dimensions(U)
-kinds = {d.dim_id.partition(":")[0] for d in hd2}
-check("A21 built-in dimensions offered",
-      {"wbs", "token", "cal", "rsrc", "atype", "status"} <= kinds)
-for _did in ("token:1", "cal:", "rsrc:", "atype:", "status:"):
-    _hh = build_hierarchy(U, [_did], "U", dim_labels=[_did])
-    check(f"A21b {_did} groups completely",
-          _hh.is_complete and _hh.placed_activities == _hh.source_activities)
+kinds2 = {d.dim_id.partition(":")[0] for d in hd2}
+check("A21 only the three families offered", kinds2 <= {"wbs", "code", "udf"})
+check("A21b all WBS levels present",
+      {f"wbs:{i}" for i in range(1, 6)} <= {d.dim_id for d in hd2})
 # synthetic TASK UDF proves the udf: path end-to-end
 _t0 = U.tasks[0]
 U.raw_tables.setdefault("UDFTYPE", []).append(
@@ -370,9 +367,22 @@ check("A21d UDF hierarchy: tagged task grouped, rest Unassigned",
       _hu.is_complete and "Zone QA" in _hu.root.children
       and _hu.root.children["Zone QA"].activity_count == 1)
 U.raw_tables["UDFTYPE"].pop(); U.raw_tables["UDFVALUE"].pop()
-check("A21e new kinds valid in saved configs",
-      config_from_json('{"dimensions": ["udf:9", "cal:", "token:1"]}')
-      is not None)
+# synthetic global + project code types both surface, scope-labelled
+U.raw_tables.setdefault("ACTVTYPE", []).append(
+    {"actv_code_type_id": "801", "actv_code_type": "Zone",
+     "actv_code_type_scope": "AS_Global"})
+U.raw_tables["ACTVTYPE"].append(
+    {"actv_code_type_id": "802", "actv_code_type": "Package",
+     "actv_code_type_scope": "AS_Project"})
+hd4 = available_dimensions(U)
+lbls = {d.dim_id: d.label for d in hd4}
+check("A21e global + project codes both offered, scope in label",
+      "[Global]" in lbls.get("code:801", "")
+      and "[Project]" in lbls.get("code:802", ""))
+U.raw_tables["ACTVTYPE"] = []
+check("A21f config kinds restricted",
+      config_from_json('{"dimensions": ["cal:"]}') is None
+      and config_from_json('{"dimensions": ["udf:9", "wbs:2"]}') is not None)
 
 print("\n== B. Edge cases / degenerate inputs ==")
 
