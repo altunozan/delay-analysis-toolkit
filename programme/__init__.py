@@ -60,6 +60,7 @@ from .float_erosion import (
 from .gantt_html import build_gantt_html
 from .hierarchy import (
     Dimension,
+    sequence_dimension_mappings,
     GanttActivity,
     GanttNode,
     HierarchyResult,
@@ -102,6 +103,7 @@ from .report_xlsx import (
     build_comparison_xlsx,
     build_critical_path_xlsx,
     build_float_erosion_xlsx,
+    build_hierarchy_xlsx,
     build_progress_xlsx,
     build_resources_xlsx,
     build_sequence_xlsx,
@@ -190,6 +192,8 @@ __all__ = [
     "config_from_json",
     "config_to_json",
     "tree_to_dict",
+    "sequence_dimension_mappings",
+    "build_hierarchy_xlsx",
     # as-built path
     "AsBuiltPathResult",
     "PersistenceEntry",

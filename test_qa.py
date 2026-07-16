@@ -318,6 +318,31 @@ cfg = config_from_json(config_to_json("v", ["wbs:2"], ["WBS Level 2"]))
 check("A19h config round-trips", cfg is not None and cfg[1] == ["wbs:2"])
 check("A19i bad config rejected", config_from_json('{"dimensions":["x:1"]}') is None)
 
+
+# A20. Sequence dims + hierarchy xlsx
+from programme import sequence_dimension_mappings, build_hierarchy_xlsx
+ex = sequence_dimension_mappings(U, sp.rows)
+hs = build_hierarchy(U, ["seq:front", "seq:stage"], "U",
+                     dim_labels=["Front", "Stage"], extra_mappings=ex)
+check("A20 seq-dims hierarchy places all activities",
+      hs.is_complete and hs.placed_activities == hs.source_activities)
+xh = build_hierarchy_xlsx(hs)
+from openpyxl import load_workbook as _lw
+import io as _io2
+_wbh = _lw(_io2.BytesIO(xh))
+check("A20b hierarchy xlsx sheets",
+      set(_wbh.sheetnames) >= {"Hierarchy", "Flat Table"})
+outl = sum(1 for rd in _wbh["Hierarchy"].row_dimensions.values()
+           if rd.outline_level)
+check("A20c hierarchy xlsx has collapsible outlines", outl > 100)
+flat_rows = _wbh["Flat Table"].max_row - 1
+check("A20d flat table row per activity",
+      flat_rows == hs.placed_activities,
+      f"flat={flat_rows} vs placed={hs.placed_activities}")
+check("A20e seq config ids accepted",
+      config_from_json('{"dimensions": ["seq:front"], "labels": ["F"]}')
+      is not None)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

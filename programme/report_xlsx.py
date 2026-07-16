@@ -733,3 +733,111 @@ def build_sequence_xlsx(seq, mapping_rows, narrative: str | None = None) -> byte
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Module 14 — Hierarchy rebuild (outline gantt table)
+# --------------------------------------------------------------------------- #
+def build_hierarchy_xlsx(h, narrative: str | None = None) -> bytes:
+    """h: programme.hierarchy.HierarchyResult.
+
+    Sheet 1 mirrors the viewer: indented groups with rollup dates and
+    Excel's own collapsible +/- row outlines; activities beneath. Sheet 2
+    is a flat table (one dimension column per level) for pivoting.
+    """
+    from .hierarchy import UNASSIGNED  # noqa: F401  (documented grouping)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Hierarchy"
+    _title(ws, "Rebuilt Programme Hierarchy", 7)
+    ws.cell(row=3, column=1, value=(
+        f"Programme: {h.programme_label} — levels: "
+        + " › ".join(h.dimension_labels)
+        + f" | {h.placed_activities} activities, validation "
+        + ("complete" if h.is_complete else "FAILED"))).font = Font(
+        italic=True)
+
+    headers = ["Hierarchy / Activity", "Activity ID", "Start", "Finish",
+               "Activities", "Complete", "Status"]
+    _header_row(ws, 5, headers)
+    ws.sheet_properties.outlinePr.summaryBelow = False
+
+    GROUP_FILLS = [PatternFill("solid", fgColor=c)
+                   for c in ("D9E2F3", "E8EEF9", "F3F7FC", "FAFCFE")]
+    row_idx = 6
+
+    def walk(node, depth):
+        nonlocal row_idx
+        for child in sorted(node.children.values(),
+                            key=lambda c: (c.start or datetime.max, c.name)):
+            vals = ["    " * depth + child.name, "",
+                    _fmt(child.start), _fmt(child.finish),
+                    child.activity_count, child.complete_count, ""]
+            for col, v in enumerate(vals, start=1):
+                c = ws.cell(row=row_idx, column=col, value=v)
+                c.border = THIN_BORDER
+                c.font = Font(bold=True, color="1F3864")
+                c.fill = GROUP_FILLS[min(depth, len(GROUP_FILLS) - 1)]
+            if depth:
+                ws.row_dimensions[row_idx].outline_level = min(depth, 7)
+            row_idx += 1
+            walk(child, depth + 1)
+            for a in sorted(child.activities,
+                            key=lambda a: (a.start or datetime.max,
+                                           a.task_code)):
+                vals = ["    " * (depth + 1)
+                        + ("◆ " if a.is_milestone else "") + a.name,
+                        a.task_code, _fmt(a.start), _fmt(a.finish),
+                        "", "", a.status]
+                for col, v in enumerate(vals, start=1):
+                    c = ws.cell(row=row_idx, column=col, value=v)
+                    c.border = THIN_BORDER
+                    if col == 7:
+                        c.fill = (GAIN_FILL if a.status == "complete"
+                                  else SLIP_FILL
+                                  if a.status == "in progress" else None
+                                  ) or PatternFill()
+                ws.row_dimensions[row_idx].outline_level = min(depth + 1, 7)
+                row_idx += 1
+
+    walk(h.root, 0)
+    _autofit(ws, {1: 64, 2: 18, 3: 11, 4: 11, 5: 10, 6: 10, 7: 12})
+    ws.freeze_panes = "A6"
+
+    # --- flat sheet for pivoting ------------------------------------------
+    s2 = wb.create_sheet("Flat Table")
+    _header_row(s2, 1, list(h.dimension_labels)
+                + ["Activity ID", "Activity", "Start", "Finish",
+                   "Milestone", "Status"])
+    r2 = 2
+
+    def flat(node, path):
+        nonlocal r2
+        for child in node.children.values():
+            flat(child, path + [child.name])
+            for a in child.activities:
+                vals = (path + [child.name]
+                        + [a.task_code, a.name, _fmt(a.start),
+                           _fmt(a.finish),
+                           "Yes" if a.is_milestone else "",
+                           a.status])
+                for col, v in enumerate(vals, start=1):
+                    s2.cell(row=r2, column=col, value=v).border = THIN_BORDER
+                r2 += 1
+
+    flat(h.root, [])
+    _autofit(s2, {i: 24 for i in range(1, len(h.dimension_labels) + 1)}
+             | {len(h.dimension_labels) + 1: 18,
+                len(h.dimension_labels) + 2: 48,
+                len(h.dimension_labels) + 3: 11,
+                len(h.dimension_labels) + 4: 11,
+                len(h.dimension_labels) + 5: 10,
+                len(h.dimension_labels) + 6: 12})
+    s2.freeze_panes = "A2"
+
+    _notes_sheet(wb, h.warnings + h.caveats, "Validation & Caveats")
+    _narrative_sheet(wb, narrative)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

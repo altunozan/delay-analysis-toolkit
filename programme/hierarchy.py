@@ -82,13 +82,39 @@ def _strict_wbs_level(data: XerData, level: int) -> dict[str, str]:
     return out
 
 
-def _dimension_mapping(data: XerData, dim_id: str) -> dict[str, str]:
+def _dimension_mapping(
+    data: XerData, dim_id: str,
+    extra: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
+    if extra and dim_id in extra:
+        return extra[dim_id]
     kind, _, key = dim_id.partition(":")
     if kind == "wbs":
         return _strict_wbs_level(data, int(key))
     if kind == "code":
         return task_code_assignments(data, key)
     raise ValueError(f"Unknown dimension id: {dim_id}")
+
+
+def sequence_dimension_mappings(data: XerData, rows) -> dict[str, dict[str, str]]:
+    """Module 13 sequence coding as hierarchy dimensions.
+
+    ``rows`` — MappingRow list (session version if the analyst confirmed or
+    ran the AI review; otherwise a fresh auto-proposal). Returns mappings
+    keyed "seq:front" / "seq:stage" as task_id -> value.
+    """
+    code_to_id = {t.task_code: t.task_id for t in data.tasks}
+    front: dict[str, str] = {}
+    stage: dict[str, str] = {}
+    for r in rows:
+        tid = code_to_id.get(r.task_code)
+        if tid is None:
+            continue
+        if r.front:
+            front[tid] = r.front
+        if r.stage:
+            stage[tid] = r.stage
+    return {"seq:front": front, "seq:stage": stage}
 
 
 # --------------------------------------------------------------------------- #
@@ -142,6 +168,7 @@ def build_hierarchy(
     programme_label: str,
     *,
     dim_labels: list[str] | None = None,
+    extra_mappings: dict[str, dict[str, str]] | None = None,
 ) -> HierarchyResult:
     """Group every activity under the ordered dimensions (read-only)."""
     labels = dim_labels or dim_ids
@@ -154,7 +181,8 @@ def build_hierarchy(
         "summary bars bracket the earliest start and latest finish of the "
         "activities beneath them."
     )
-    mappings = [_dimension_mapping(data, d) for d in dim_ids]
+    mappings = [_dimension_mapping(data, d, extra_mappings)
+                for d in dim_ids]
     result.unassigned_per_level = [0] * len(dim_ids)
 
     seen_ids: set[str] = set()
@@ -268,7 +296,7 @@ def config_from_json(text: str) -> tuple[str, list[str], list[str]] | None:
     try:
         obj = json.loads(text)
         dims = [str(d) for d in obj["dimensions"]]
-        if not dims or not all(d.partition(":")[0] in ("wbs", "code")
+        if not dims or not all(d.partition(":")[0] in ("wbs", "code", "seq")
                                for d in dims):
             return None
         labels = [str(x) for x in obj.get("labels", dims)]

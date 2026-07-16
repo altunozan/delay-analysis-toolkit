@@ -57,6 +57,7 @@ from programme import (
     available_dimensions,
     build_gantt_html,
     build_hierarchy,
+    build_hierarchy_xlsx,
     build_mapping_review_prompt,
     config_from_json,
     config_to_json,
@@ -65,6 +66,7 @@ from programme import (
     build_sequence_xlsx,
     build_view_advice_prompt,
     extract_actual_trace,
+    sequence_dimension_mappings,
     parse_mapping_review,
     parse_view_advice,
     propose_sequence_mapping,
@@ -959,10 +961,29 @@ def hierarchy_tab() -> None:
     data = dict(files)[chosen]
 
     dims = available_dimensions(data)
-    if not dims:
+    label_to_id = {d.label: d.dim_id for d in dims}
+
+    # Module 13 sequence coding as extra dimensions — uses the session
+    # mapping (incl. AI-review / analyst edits) when one exists, else a
+    # fresh deterministic proposal.
+    seq_prop = st.session_state.get(f"seq_rows_{chosen}")
+    seq_confirmed = st.session_state.get(f"seq_rows_{chosen}_confirmed",
+                                         False)
+    if seq_prop is None:
+        seq_prop = propose_sequence_mapping(data, chosen)
+    extra_maps = sequence_dimension_mappings(data, seq_prop.rows)
+    seq_state = ("analyst-confirmed" if seq_confirmed
+                 else "incl. AI review" if any(
+                     r.front_evidence == "AI review"
+                     or r.stage_evidence == "AI review"
+                     for r in seq_prop.rows)
+                 else "auto-proposed")
+    label_to_id[f"Sequence: Work front ({seq_state})"] = "seq:front"
+    label_to_id[f"Sequence: Stage ({seq_state})"] = "seq:stage"
+
+    if not label_to_id:
         st.warning("No WBS levels or activity codes found in this file.")
         return
-    label_to_id = {d.label: d.dim_id for d in dims}
 
     structure = st.radio(
         "Structure", ["Reconstructed hierarchy", "Original WBS"],
@@ -982,7 +1003,7 @@ def hierarchy_tab() -> None:
         stored = [lbl for lbl in st.session_state.get("hier_dims", [])
                   if lbl in label_to_id]
         st.session_state["hier_dims"] = (
-            stored or [d.label for d in dims[:2]])
+            stored or list(label_to_id.keys())[:2])
         sel_labels = st.multiselect(
             "Hierarchy levels (top → bottom, in the order you click them)",
             options=list(label_to_id.keys()),
@@ -998,7 +1019,8 @@ def hierarchy_tab() -> None:
         dim_labels = [f"WBS Level {i}" for i in range(1, depth + 1)]
         st.caption("Showing the file's own WBS, level by level.")
 
-    h = build_hierarchy(data, dim_ids, chosen, dim_labels=dim_labels)
+    h = build_hierarchy(data, dim_ids, chosen, dim_labels=dim_labels,
+                        extra_mappings=extra_maps)
 
     # --- validation --------------------------------------------------------
     v1, v2, v3, v4 = st.columns(4)
@@ -1047,14 +1069,25 @@ def hierarchy_tab() -> None:
                         st.rerun()
 
     # --- the collapsible gantt ----------------------------------------------
+    dd = (f"{data.project.data_date:%Y-%m-%d}"
+          if data.project and data.project.data_date else None)
     st_components.html(
-        build_gantt_html(tree_to_dict(h.root)),
+        build_gantt_html(tree_to_dict(h.root), data_date=dd,
+                         title=" › ".join(
+                             lbl.split(" (")[0] for lbl in dim_labels)),
         height=720, scrolling=False)
     st.caption(
         "Click any group to expand/collapse · search auto-expands matching "
-        "branches · summary bars bracket earliest start → latest finish of "
-        "everything beneath · milestones shown as diamonds."
+        "branches · summary brackets span earliest start → latest finish of "
+        "everything beneath · ◆ milestones · dashed red line = data date."
     )
+    st.download_button(
+        "⬇️ Export rebuilt hierarchy (Excel, collapsible outline)",
+        data=build_hierarchy_xlsx(h),
+        file_name="hierarchy_rebuild.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Sheet 1 mirrors this view with Excel's own +/- row groups; "
+             "Sheet 2 is a flat table for pivoting.")
 
 
 # ====================================================================== #
