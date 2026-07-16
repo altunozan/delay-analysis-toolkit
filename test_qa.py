@@ -343,6 +343,37 @@ check("A20e seq config ids accepted",
       config_from_json('{"dimensions": ["seq:front"], "labels": ["F"]}')
       is not None)
 
+
+# A21. Full dimension menu (module 14 expansion)
+hd2 = available_dimensions(U)
+kinds = {d.dim_id.partition(":")[0] for d in hd2}
+check("A21 built-in dimensions offered",
+      {"wbs", "token", "cal", "rsrc", "atype", "status"} <= kinds)
+for _did in ("token:1", "cal:", "rsrc:", "atype:", "status:"):
+    _hh = build_hierarchy(U, [_did], "U", dim_labels=[_did])
+    check(f"A21b {_did} groups completely",
+          _hh.is_complete and _hh.placed_activities == _hh.source_activities)
+# synthetic TASK UDF proves the udf: path end-to-end
+_t0 = U.tasks[0]
+U.raw_tables.setdefault("UDFTYPE", []).append(
+    {"udf_type_id": "999", "table_name": "TASK",
+     "udf_type_label": "QA Zone", "udf_type_name": "qa_zone",
+     "logical_data_type": "FT_TEXT"})
+U.raw_tables.setdefault("UDFVALUE", []).append(
+    {"udf_type_id": "999", "fk_id": _t0.task_id, "udf_text": "Zone QA",
+     "udf_number": "", "udf_date": "", "udf_code_id": ""})
+hd3 = available_dimensions(U)
+check("A21c TASK UDF surfaces as a dimension",
+      any(d.dim_id == "udf:999" and "QA Zone" in d.label for d in hd3))
+_hu = build_hierarchy(U, ["udf:999"], "U", dim_labels=["QA Zone"])
+check("A21d UDF hierarchy: tagged task grouped, rest Unassigned",
+      _hu.is_complete and "Zone QA" in _hu.root.children
+      and _hu.root.children["Zone QA"].activity_count == 1)
+U.raw_tables["UDFTYPE"].pop(); U.raw_tables["UDFVALUE"].pop()
+check("A21e new kinds valid in saved configs",
+      config_from_json('{"dimensions": ["udf:9", "cal:", "token:1"]}')
+      is not None)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

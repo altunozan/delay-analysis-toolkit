@@ -43,7 +43,9 @@ class Dimension:
 
 
 def available_dimensions(data: XerData) -> list[Dimension]:
-    """Every WBS level and activity-code type present in this file."""
+    """Every grouping field this file can offer: all WBS levels, every
+    activity-code type, every TASK user-defined field, plus the practical
+    built-ins (ID prefix, calendar, primary resource, type, status)."""
     dims: list[Dimension] = []
     for lvl in range(1, max_wbs_depth(data) + 1):
         dims.append(Dimension(f"wbs:{lvl}", f"WBS Level {lvl}"))
@@ -51,7 +53,92 @@ def available_dimensions(data: XerData) -> list[Dimension]:
         dims.append(Dimension(f"code:{ct.type_id}",
                               f"Code: {ct.name} "
                               f"({ct.assigned_task_count} assigned)"))
+    for type_id, label, assigned in _task_udf_types(data):
+        dims.append(Dimension(f"udf:{type_id}",
+                              f"UDF: {label} ({assigned} assigned)"))
+    dims.append(Dimension("token:1", "Activity ID prefix (before first '-')"))
+    dims.append(Dimension("cal:", "Calendar"))
+    dims.append(Dimension("rsrc:", "Primary resource"))
+    dims.append(Dimension("atype:", "Activity type (task / milestone / LOE)"))
+    dims.append(Dimension("status:", "Status (complete / in progress / "
+                                     "not started)"))
     return dims
+
+
+def _task_udf_types(data: XerData) -> list[tuple[str, str, int]]:
+    """TASK-table user-defined fields: (udf_type_id, label, assigned)."""
+    counts: dict[str, int] = {}
+    for row in data.raw_tables.get("UDFVALUE", []):
+        tid = (row.get("udf_type_id") or "").strip()
+        if tid:
+            counts[tid] = counts.get(tid, 0) + 1
+    out = []
+    for row in data.raw_tables.get("UDFTYPE", []):
+        if (row.get("table_name") or "").strip() != "TASK":
+            continue
+        tid = (row.get("udf_type_id") or "").strip()
+        label = ((row.get("udf_type_label") or "").strip()
+                 or (row.get("udf_type_name") or "").strip() or tid)
+        out.append((tid, label, counts.get(tid, 0)))
+    return out
+
+
+def _udf_mapping(data: XerData, udf_type_id: str) -> dict[str, str]:
+    """task_id -> UDF value as text (text, else number, else date)."""
+    out: dict[str, str] = {}
+    for row in data.raw_tables.get("UDFVALUE", []):
+        if (row.get("udf_type_id") or "").strip() != udf_type_id:
+            continue
+        fk = (row.get("fk_id") or "").strip()
+        val = ((row.get("udf_text") or "").strip()
+               or (row.get("udf_number") or "").strip()
+               or (row.get("udf_date") or "").strip()[:10])
+        if fk and val:
+            out[fk] = val
+    return out
+
+
+def _builtin_mapping(data: XerData, kind: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    if kind == "token":
+        for t in data.tasks:
+            parts = t.task_code.split("-")
+            if len(parts) >= 2 and parts[0].strip():
+                out[t.task_id] = parts[0].strip().upper()
+    elif kind == "cal":
+        for t in data.tasks:
+            cal = data.calendars.get(t.clndr_id)
+            if cal is not None and cal.name:
+                out[t.task_id] = cal.name
+    elif kind == "rsrc":
+        rsrc_names = {(r.get("rsrc_id") or "").strip():
+                      ((r.get("rsrc_short_name") or "").strip()
+                       or (r.get("rsrc_name") or "").strip())
+                      for r in data.raw_tables.get("RSRC", [])}
+        best: dict[str, tuple[float, str]] = {}
+        for row in data.raw_tables.get("TASKRSRC", []):
+            tid = (row.get("task_id") or "").strip()
+            name = rsrc_names.get((row.get("rsrc_id") or "").strip())
+            if not tid or not name:
+                continue
+            try:
+                qty = float(row.get("target_qty") or 0.0)
+            except ValueError:
+                qty = 0.0
+            if tid not in best or qty > best[tid][0]:
+                best[tid] = (qty, name)
+        out = {tid: name for tid, (_, name) in best.items()}
+    elif kind == "atype":
+        for t in data.tasks:
+            out[t.task_id] = ("Milestone" if t.is_milestone
+                              else "Level of Effort" if t.is_loe_or_wbs
+                              else "Task")
+    elif kind == "status":
+        for t in data.tasks:
+            out[t.task_id] = ("complete" if t.is_complete
+                              else "in progress" if t.act_start is not None
+                              else "not started")
+    return out
 
 
 def _strict_wbs_level(data: XerData, level: int) -> dict[str, str]:
@@ -93,6 +180,10 @@ def _dimension_mapping(
         return _strict_wbs_level(data, int(key))
     if kind == "code":
         return task_code_assignments(data, key)
+    if kind == "udf":
+        return _udf_mapping(data, key)
+    if kind in ("token", "cal", "rsrc", "atype", "status"):
+        return _builtin_mapping(data, kind)
     raise ValueError(f"Unknown dimension id: {dim_id}")
 
 
@@ -296,7 +387,9 @@ def config_from_json(text: str) -> tuple[str, list[str], list[str]] | None:
     try:
         obj = json.loads(text)
         dims = [str(d) for d in obj["dimensions"]]
-        if not dims or not all(d.partition(":")[0] in ("wbs", "code", "seq")
+        valid_kinds = ("wbs", "code", "seq", "udf", "token", "cal",
+                       "rsrc", "atype", "status")
+        if not dims or not all(d.partition(":")[0] in valid_kinds
                                for d in dims):
             return None
         labels = [str(x) for x in obj.get("labels", dims)]
