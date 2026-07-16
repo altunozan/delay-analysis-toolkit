@@ -18,12 +18,16 @@ import io
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.shared import Inches, Pt, RGBColor
+if TYPE_CHECKING:
+    from docx import Document
 
-ACCENT = RGBColor(0x1F, 0x38, 0x64)
+# python-docx is imported lazily inside build_assembled_report(), not here,
+# so a missing/broken install of this one optional dependency can't take
+# down `import programme` (and therefore the whole app) at startup — only
+# the report-assembly feature itself.
+ACCENT_RGB = (0x1F, 0x38, 0x64)
 
 STANDING_REPORT_CAVEAT = (
     "This document is a preliminary factual screening assembled from the "
@@ -119,6 +123,11 @@ def build_assembled_report(
     basis: BasisOfAnalysis,
 ) -> bytes:
     """Assemble the full preliminary report as a .docx (returns bytes)."""
+    from docx import Document
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Inches, Pt, RGBColor
+
+    accent = RGBColor(*ACCENT_RGB)
     doc = Document()
     styles = doc.styles["Normal"]
     styles.font.name = "Calibri"
@@ -130,7 +139,7 @@ def build_assembled_report(
     run = t.add_run(report_title or "Preliminary Delay Analysis Report")
     run.font.size = Pt(24)
     run.font.bold = True
-    run.font.color.rgb = ACCENT
+    run.font.color.rgb = accent
     for line in (project_name, author,
                  f"Issued {basis.generated_at:%d %B %Y}",
                  "PRELIMINARY — for review and discussion"):
