@@ -22,6 +22,7 @@ import os
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as st_components
 
 from dcma import DCMAConfig, parse_xer, run_all_checks
 from dcma.checks import CheckStatus
@@ -53,7 +54,13 @@ from programme import (
     analyse_asbuilt_path,
     analyse_float_erosion,
     analyse_sequence,
+    available_dimensions,
+    build_gantt_html,
+    build_hierarchy,
     build_mapping_review_prompt,
+    config_from_json,
+    config_to_json,
+    tree_to_dict,
     build_sequence_prompt,
     build_sequence_xlsx,
     build_view_advice_prompt,
@@ -926,6 +933,127 @@ def variance_tab() -> None:
         data=build_variance_xlsx(var, narrative),
         file_name="planned_vs_recorded_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab 14 — Hierarchy Rebuild + collapsible gantt viewer (Module 14)
+# ====================================================================== #
+
+def hierarchy_tab() -> None:
+    st.caption(
+        "Reorganise the programme under a hierarchy of your own choosing — "
+        "any ordered mix of WBS levels and activity codes — and browse it "
+        "as a collapsible gantt. A read-only overlay: no dates, logic, or "
+        "codes are changed."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]
+    chosen = st.selectbox("Programme", names, index=len(names) - 1,
+                          key="hier_prog")
+    data = dict(files)[chosen]
+
+    dims = available_dimensions(data)
+    if not dims:
+        st.warning("No WBS levels or activity codes found in this file.")
+        return
+    label_to_id = {d.label: d.dim_id for d in dims}
+
+    structure = st.radio(
+        "Structure", ["Reconstructed hierarchy", "Original WBS"],
+        horizontal=True, key="hier_structure",
+        help="Original WBS shows the file's own arrangement; Reconstructed "
+             "uses the levels you pick below, in the order you pick them.")
+
+    # Apply a loaded config BEFORE the multiselect widget is instantiated.
+    pending = st.session_state.pop("hier_pending_cfg", None)
+    if pending:
+        valid = [lbl for lbl in pending if lbl in label_to_id]
+        st.session_state["hier_dims"] = valid
+
+    if structure == "Reconstructed hierarchy":
+        # Sanitise any stored selection against this file's dimensions and
+        # seed a sensible default — never pass default= alongside the key.
+        stored = [lbl for lbl in st.session_state.get("hier_dims", [])
+                  if lbl in label_to_id]
+        st.session_state["hier_dims"] = (
+            stored or [d.label for d in dims[:2]])
+        sel_labels = st.multiselect(
+            "Hierarchy levels (top → bottom, in the order you click them)",
+            options=list(label_to_id.keys()),
+            max_selections=5, key="hier_dims")
+        if not sel_labels:
+            st.info("Pick at least one hierarchy level.")
+            return
+        dim_ids = [label_to_id[lbl] for lbl in sel_labels]
+        dim_labels = list(sel_labels)
+    else:
+        depth = min(len([d for d in dims if d.dim_id.startswith("wbs:")]), 6)
+        dim_ids = [f"wbs:{i}" for i in range(1, depth + 1)]
+        dim_labels = [f"WBS Level {i}" for i in range(1, depth + 1)]
+        st.caption("Showing the file's own WBS, level by level.")
+
+    h = build_hierarchy(data, dim_ids, chosen, dim_labels=dim_labels)
+
+    # --- validation --------------------------------------------------------
+    v1, v2, v3, v4 = st.columns(4)
+    v1.metric("Source activities", h.source_activities)
+    v2.metric("Placed in hierarchy", h.placed_activities)
+    v3.metric("Duplicated", h.duplicate_ids)
+    v4.metric("Validation", "✅ complete" if h.is_complete else "❌ FAILED")
+    for w in h.warnings:
+        (st.error if "FAILED" in w else st.warning)(w)
+
+    with st.expander("Structure preview (top two levels)"):
+        lines = []
+        for c in list(h.root.children.values())[:40]:
+            span = (f"{c.start:%Y-%m-%d} → {c.finish:%Y-%m-%d}"
+                    if c.start and c.finish else "no dates")
+            lines.append(f"**{c.name}** — {c.activity_count} activities, "
+                         f"{span}")
+            for g in list(c.children.values())[:8]:
+                lines.append(f"&nbsp;&nbsp;&nbsp;└─ {g.name} "
+                             f"({g.activity_count})")
+            if len(c.children) > 8:
+                lines.append(f"&nbsp;&nbsp;&nbsp;└─ … "
+                             f"+{len(c.children) - 8} more groups")
+        st.markdown("\n\n".join(lines) if lines else "No groups.")
+
+    # --- save / reuse the configuration ------------------------------------
+    if structure == "Reconstructed hierarchy":
+        with st.expander("Save / reuse this hierarchy configuration"):
+            cfg_name = st.text_input("Configuration name",
+                                     "My hierarchy view", key="hier_cfgname")
+            c1, c2 = st.columns(2)
+            c1.download_button(
+                "⬇️ Save configuration (JSON)",
+                data=config_to_json(cfg_name, dim_ids, dim_labels),
+                file_name="hierarchy_config.json", mime="application/json")
+            up = c2.file_uploader("Load configuration", type=["json"],
+                                  key="hier_cfgup")
+            if up is not None:
+                parsed = config_from_json(up.getvalue().decode("utf-8"))
+                if parsed is None:
+                    st.error("Not a valid hierarchy configuration file.")
+                else:
+                    name, ids, labels = parsed
+                    if st.button(f"Apply '{name}'", key="hier_apply"):
+                        st.session_state["hier_pending_cfg"] = labels
+                        st.rerun()
+
+    # --- the collapsible gantt ----------------------------------------------
+    st_components.html(
+        build_gantt_html(tree_to_dict(h.root)),
+        height=720, scrolling=False)
+    st.caption(
+        "Click any group to expand/collapse · search auto-expands matching "
+        "branches · summary bars bracket earliest start → latest finish of "
+        "everything beneath · milestones shown as diamonds."
     )
 
 
@@ -2734,7 +2862,8 @@ def main() -> None:
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 
     (intake, dcma, cpath, milestones, variance, compare, windows,
-     scurve, floats, resources, asbuilt, sequence, report) = st.tabs([
+     scurve, floats, resources, asbuilt, sequence, hierarchy,
+     report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
         "🧭 Baseline Critical Path",
@@ -2747,6 +2876,7 @@ def main() -> None:
         "👷 Resource Loading",
         "🛤️ As-Built Critical Path",
         "🧩 Sequence Coding",
+        "🗂️ Hierarchy Rebuild",
         "📄 Report Assembler",
     ])
     with intake:
@@ -2773,6 +2903,8 @@ def main() -> None:
         asbuilt_tab()
     with sequence:
         sequence_tab()
+    with hierarchy:
+        hierarchy_tab()
     with report:
         report_tab()
 

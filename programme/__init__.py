@@ -57,6 +57,18 @@ from .float_erosion import (
     WindowErosion,
     analyse_float_erosion,
 )
+from .gantt_html import build_gantt_html
+from .hierarchy import (
+    Dimension,
+    GanttActivity,
+    GanttNode,
+    HierarchyResult,
+    available_dimensions,
+    build_hierarchy,
+    config_from_json,
+    config_to_json,
+    tree_to_dict,
+)
 from .inventory import ProgrammeInventory, RevisionInfo, build_inventory
 from .milestones import (
     MilestoneMatch,
@@ -167,6 +179,17 @@ __all__ = [
     # wbs
     "max_wbs_depth",
     "task_wbs_assignments",
+    # hierarchy rebuild + gantt viewer
+    "Dimension",
+    "GanttActivity",
+    "GanttNode",
+    "HierarchyResult",
+    "available_dimensions",
+    "build_hierarchy",
+    "build_gantt_html",
+    "config_from_json",
+    "config_to_json",
+    "tree_to_dict",
     # as-built path
     "AsBuiltPathResult",
     "PersistenceEntry",

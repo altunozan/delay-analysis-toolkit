@@ -280,6 +280,44 @@ check("A18e view advice parses and clamps",
 check("A18f view advice prompt built",
       "sequence_gantt" in build_view_advice_prompt(sq, 30))
 
+
+# A19. Hierarchy rebuild invariants
+from programme import (available_dimensions, build_hierarchy, tree_to_dict,
+                       build_gantt_html, config_to_json, config_from_json)
+hd = available_dimensions(B)
+check("A19 dimensions discovered (5 WBS levels, no codes in sample)",
+      len([d for d in hd if d.dim_id.startswith("wbs:")]) == 5)
+hh = build_hierarchy(B, ["wbs:2", "wbs:3"], "B",
+                     dim_labels=["WBS Level 2", "WBS Level 3"])
+check("A19b every source activity placed exactly once",
+      hh.is_complete and hh.placed_activities == hh.source_activities)
+# leaf-count == placed (no duplication anywhere in the tree)
+def _leaves(n):
+    return len(n.activities) + sum(_leaves(c) for c in n.children.values())
+check("A19c tree leaf count == placed", _leaves(hh.root) == hh.placed_activities)
+# rollup: root span brackets every activity date
+def _acts(n):
+    yield from n.activities
+    for c in n.children.values():
+        yield from _acts(c)
+all_starts = [a.start for a in _acts(hh.root) if a.start]
+all_fins = [a.finish for a in _acts(hh.root) if a.finish]
+root_kids = list(hh.root.children.values())
+check("A19d rollup start == min child start",
+      min(k.start for k in root_kids if k.start) == min(all_starts))
+check("A19e rollup finish == max child finish",
+      max(k.finish for k in root_kids if k.finish) == max(all_fins))
+# source data untouched: parse count unchanged after building
+check("A19f source untouched (task count stable)",
+      hh.source_activities == sum(1 for t in B.tasks
+                                  if t.task_type != "TT_WBS"))
+html = build_gantt_html(tree_to_dict(hh.root))
+check("A19g gantt html self-contained", "<script>" in html
+      and "http" not in html.split("</style>")[0].lower())
+cfg = config_from_json(config_to_json("v", ["wbs:2"], ["WBS Level 2"]))
+check("A19h config round-trips", cfg is not None and cfg[1] == ["wbs:2"])
+check("A19i bad config rejected", config_from_json('{"dimensions":["x:1"]}') is None)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
