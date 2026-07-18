@@ -50,6 +50,15 @@ from .critical_path import (
     extract_critical_path,
     extract_longest_path,
 )
+from .events_extract import (
+    EXTRACTION_SYSTEM_PROMPT,
+    EventCandidate,
+    RP52R06_CAVEAT,
+    build_event_extraction_prompt,
+    parse_event_candidates,
+    read_document,
+    recommended_analysis_schedule,
+)
 from .explain import (
     DriverShift,
     ExplainResult,
@@ -252,6 +261,14 @@ __all__ = [
     "end_activity_candidates",
     "extract_critical_path",
     "extract_longest_path",
+    # event extraction (TIA intake)
+    "EXTRACTION_SYSTEM_PROMPT",
+    "EventCandidate",
+    "RP52R06_CAVEAT",
+    "build_event_extraction_prompt",
+    "parse_event_candidates",
+    "read_document",
+    "recommended_analysis_schedule",
     # explain this delay
     "DriverShift",
     "ExplainResult",

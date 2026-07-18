@@ -51,6 +51,11 @@ from programme import (
     build_fragnet_prompt,
     build_fragnet_variant_prompt,
     build_tia_prompt,
+    EXTRACTION_SYSTEM_PROMPT,
+    build_event_extraction_prompt,
+    parse_event_candidates,
+    read_document,
+    recommended_analysis_schedule,
     event_from_dict,
     event_to_dict,
     register_from_json,
@@ -2943,6 +2948,94 @@ def tia_tab() -> None:
             elif not loaded:
                 st.error("Not a valid event register file.")
 
+    # ---- correspondence intake + AI event extraction ---------------------
+    st.subheader("0 · Correspondence & event extraction")
+    with st.expander(
+        "Upload letters / instructions / notices, or paste a dated "
+        "narrative — the AI proposes candidate events with verbatim, "
+        "verified quotations", expanded=False,
+    ):
+        ups = st.file_uploader(
+            "Documents (txt, docx, pdf)", type=["txt", "docx", "pdf"],
+            accept_multiple_files=True, key="tia_docs")
+        pasted = st.text_area(
+            "Or a short dated narrative of the event(s)",
+            key="tia_narrative", height=100,
+            placeholder="e.g. On 12 Mar 2018 the Engineer issued EI-88 "
+                        "requiring additional ceiling works; access was "
+                        "not released until 2 Apr 2018 …")
+        docs: list[tuple[str, str]] = []
+        for up in ups or []:
+            text = read_document(up.name, up.getvalue())
+            if text.strip():
+                docs.append((up.name, text))
+            else:
+                st.warning(f"Could not read any text from '{up.name}'.")
+        if pasted.strip():
+            docs.append(("analyst narrative", pasted.strip()))
+        xc1, xc2 = st.columns(2)
+        x_provider = xc1.selectbox(
+            "AI provider", options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"], key="tia_x_prov")
+        x_info = PROVIDERS[x_provider]
+        x_model = model_selector(xc2, x_info, f"tia_x_{x_provider}")
+        x_env = os.environ.get(x_info["env_var"], "")
+        if x_provider == "gemini" and not x_env:
+            x_env = os.environ.get("GOOGLE_API_KEY", "")
+        x_key = st.text_input(f"{x_info['label']} API key", type="password",
+                              value=x_env, key="tia_x_key")
+        if st.button(f"Extract candidate events from {len(docs)} "
+                     "document(s)", key="tia_x_go", type="primary",
+                     disabled=not x_key or not docs):
+            try:
+                text = "".join(stream_narrative(
+                    x_provider, x_key,
+                    build_event_extraction_prompt(docs),
+                    x_model or None, system=EXTRACTION_SYSTEM_PROMPT))
+                cands, dropped = parse_event_candidates(text, docs)
+            except NarrativeError as exc:
+                cands, dropped = [], 0
+                st.error(exc.message)
+            st.session_state["tia_candidates"] = cands
+            st.session_state["tia_cand_dropped"] = dropped
+            st.rerun()
+
+        cands = st.session_state.get("tia_candidates", [])
+        dropped = st.session_state.get("tia_cand_dropped", 0)
+        if dropped:
+            st.warning(
+                f"{dropped} candidate(s) DROPPED: their quoted evidence "
+                "could not be found verbatim in the claimed source "
+                "document — unverifiable evidence is never shown."
+            )
+        if cands:
+            st.success(f"{len(cands)} candidate event(s), every quotation "
+                       "verified against its source document.")
+            for k, c in enumerate(cands):
+                cc1, cc2 = st.columns([5, 1])
+                d = (f"{c.date_start:%Y-%m-%d}" if c.date_start
+                     else "no date")
+                cc1.markdown(
+                    f"**{c.title}** ({d}, confidence {c.confidence})\n\n"
+                    f"{c.description}\n\n"
+                    f"› *{c.source_doc}*: “{c.source_snippet}”")
+                if cc2.button("Use", key=f"tia_use_{k}"):
+                    st.session_state["tia_ev_id"] = f"EV-{k + 1:03d}"
+                    st.session_state["tia_ev_title"] = c.title
+                    desc = c.description
+                    if c.other_dates:
+                        desc += ("\nKey dates: "
+                                 + ", ".join(c.other_dates))
+                    if c.affected_scope:
+                        desc += f"\nAffected scope: {c.affected_scope}"
+                    st.session_state["tia_ev_desc"] = desc
+                    st.session_state["tia_ev_date"] = (
+                        f"{c.date_start:%Y-%m-%d}" if c.date_start else "")
+                    st.session_state["tia_ev_resp"] = c.party_asserted
+                    st.session_state["tia_ev_evid"] = (
+                        f"{c.source_doc}: \"{c.source_snippet}\"")
+                    st.rerun()
+
     # ---- the event -------------------------------------------------------
     st.subheader("1 · The event")
     ec1, ec2, ec3 = st.columns([1, 2, 1])
@@ -2970,6 +3063,18 @@ def tia_tab() -> None:
     event = DelayEvent(ev_id.strip() or "EV-001", ev_title.strip(),
                        ev_desc.strip(), ev_date, ev_resp.strip(),
                        ev_evid.strip())
+
+    # AACE RP 52R-06: analyse against the last accepted update BEFORE the
+    # event. Recommend it whenever the chosen programme differs.
+    rec = recommended_analysis_schedule(
+        [(r.file_name, r.data_date) for r in inv.revisions], ev_date)
+    if rec and rec != chosen:
+        st.info(
+            f"AACE RP 52R-06: the last update with a data date before this "
+            f"event is **{rec}** — you are currently analysing "
+            f"**{chosen}**. Consider switching the analysis schedule "
+            "above."
+        )
 
     # ---- project-specific evidence: comparable activities ---------------
     templates = find_template_activities(

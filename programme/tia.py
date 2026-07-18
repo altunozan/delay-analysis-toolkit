@@ -36,6 +36,13 @@ from dcma.config import DCMAConfig
 from dcma.xer_parser import XerData
 
 STANDING_CAVEATS = [
+    "Performed as a prospective Time Impact Analysis in line with AACE RP "
+    "52R-06: the fragnet models the event with the fewest activities "
+    "practical, is inserted into the most recent accepted schedule update "
+    "prior to the event, and the time impact is the difference between "
+    "the pre- and post-insertion completion forecasts. Excusability and "
+    "compensability are contractual determinations outside this "
+    "calculation.",
     "The impact is measured as post-impact minus pre-impact under one and "
     "the same simplified CPM forward pass (remaining durations from the "
     "data date; FS/SS/FF/SF with lags; working days approximated as "
@@ -435,7 +442,8 @@ def run_tia(
 
 FRAGNET_SYSTEM_PROMPT = (
     "You are a senior construction planning engineer drafting a TIA "
-    "fragnet. You return ONLY valid JSON — no commentary, no fences. You "
+    "fragnet per AACE RP 52R-06: model the event with the FEWEST "
+    "activities practical, with durations as reasonable forecasts. You return ONLY valid JSON — no commentary, no fences. You "
     "never invent activity IDs for the existing programme: you may only "
     "reference the candidate activities you are given. Durations must "
     "come from the comparable activities where possible; anything else "

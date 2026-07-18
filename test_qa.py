@@ -444,6 +444,33 @@ _ex1 = explain_delay([("B", B)], "KD15")
 check("A23e explain: single revision -> warning, no crash",
       not _ex1.windows and _ex1.warnings)
 
+
+# A24. Event extraction (TIA intake) + 52R-06
+from programme import (build_event_extraction_prompt, parse_event_candidates,
+                       read_document, recommended_analysis_schedule)
+_docs = [("L1.txt", "On 12 March 2018 the Engineer issued Instruction "
+                    "EI-88 requiring additional ceiling works.")]
+_p = build_event_extraction_prompt(_docs)
+check("A24 extraction prompt cites 52R-06 and the doc",
+      "52R-06" in _p and "L1.txt" in _p)
+_good = ('{"events":[{"title":"EI-88","source_doc":"L1.txt",'
+         '"source_snippet":"issued Instruction EI-88","date_start":'
+         '"2018-03-12","confidence":"high"}]}')
+_c, _d = parse_event_candidates(_good, _docs)
+check("A24b verified snippet accepted", len(_c) == 1 and _c[0].verified)
+_bad = ('{"events":[{"title":"Flood","source_doc":"L1.txt",'
+        '"source_snippet":"site flooded for weeks"}]}')
+_c2, _d2 = parse_event_candidates(_bad, _docs)
+check("A24c fabricated snippet dropped", _c2 == [] and _d2 == 1)
+check("A24d garbage tolerated", parse_event_candidates("x", _docs) == ([], 0))
+from datetime import datetime as _dtx
+_meta = [("U1", _dtx(2018, 1, 31)), ("U2", _dtx(2018, 2, 28))]
+check("A24e 52R-06 picks last update before event",
+      recommended_analysis_schedule(_meta, _dtx(2018, 2, 10)) == "U1")
+check("A24f TIA caveats cite 52R-06",
+      any("52R-06" in c for c in _r.caveats))
+check("A24g txt reader works", "hello" in read_document("a.txt", b"hello"))
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
