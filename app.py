@@ -57,6 +57,7 @@ from programme import (
     available_dimensions,
     build_gantt_html,
     build_hierarchy,
+    group_tree,
     build_hierarchy_xlsx,
     build_mapping_review_prompt,
     config_from_json,
@@ -838,70 +839,53 @@ def variance_tab() -> None:
                        "dimension). Bar direction shows slip (right) vs "
                        "gain (left).")
 
-    # --- Gantt: planned vs recorded band per group ---
-    bars = []
+    # --- Gantt: planned vs recorded band per group (think-cell view) ----
+    nested: dict[str, dict] = {}
+    flat_groups: list[dict] = []
     for g in plotted:
+        acts = []
         if g.planned.start and g.planned.finish:
-            bars.append({"Group": g.code_value, "Series": "Planned",
-                         "Start": g.planned.start, "Finish": g.planned.finish,
-                         first_dim_name: _first_part(g.code_value)})
+            acts.append({"id": "Planned",
+                         "name": f"{g.planned.activity_count} activities",
+                         "start": g.planned.start,
+                         "finish": g.planned.finish, "status": "planned"})
         if g.recorded.start and g.recorded.finish:
-            bars.append({"Group": g.code_value, "Series": "As-recorded",
-                         "Start": g.recorded.start, "Finish": g.recorded.finish,
-                         first_dim_name: _first_part(g.code_value)})
-    if bars:
-        st.subheader("Planned vs as-recorded bands")
-        if multi_dim:
-            # Hue = first dimension; Planned is the faded band, As-recorded
-            # the solid one (they also sit on separate row offsets).
-            gantt_color = alt.Color(
-                f"{first_dim_name}:N",
-                scale=alt.Scale(scheme="tableau10"),
-                legend=alt.Legend(orient="top", title=first_dim_name,
-                                  labelLimit=300),
-            )
-            gantt_opacity = alt.Opacity(
-                "Series:N",
-                scale=alt.Scale(domain=["Planned", "As-recorded"],
-                                range=[0.4, 1.0]),
-                legend=alt.Legend(orient="top", title=None),
-            )
-            tooltip = [first_dim_name, "Group", "Series",
-                       alt.Tooltip("Start:T", format="%d %b %Y"),
-                       alt.Tooltip("Finish:T", format="%d %b %Y")]
+            acts.append({"id": "As-recorded",
+                         "name": f"{g.recorded.activity_count} activities",
+                         "start": g.recorded.start,
+                         "finish": g.recorded.finish, "status": "recorded"})
+        if not acts:
+            continue
+        if multi_dim and DIMENSION_SEPARATOR in g.code_value:
+            head, _, tail = g.code_value.partition(DIMENSION_SEPARATOR)
+            parent = nested.setdefault(
+                head.strip(), {"name": head.strip(), "children": [],
+                               "activities": []})
+            parent["children"].append({"name": tail.strip(),
+                                       "activities": acts})
         else:
-            gantt_color = alt.Color(
-                "Series:N",
-                scale=alt.Scale(domain=["Planned", "As-recorded"],
-                                range=[PLANNED_COLOR, RECORDED_COLOR]),
-                legend=alt.Legend(orient="top", title=None),
-            )
-            gantt_opacity = alt.value(1.0)
-            tooltip = ["Group", "Series",
-                       alt.Tooltip("Start:T", format="%d %b %Y"),
-                       alt.Tooltip("Finish:T", format="%d %b %Y")]
-        gantt = (
-            alt.Chart(pd.DataFrame(bars))
-            .mark_bar(height=11, cornerRadius=2)
-            .encode(
-                x=alt.X("Start:T", title=None,
-                        axis=alt.Axis(format="%b %Y", grid=True)),
-                x2="Finish:T",
-                y=alt.Y("Group:N", title=None,
-                        axis=alt.Axis(labelLimit=320)),
-                yOffset=alt.YOffset("Series:N",
-                                    scale=alt.Scale(domain=["Planned",
-                                                            "As-recorded"])),
-                color=gantt_color,
-                opacity=gantt_opacity,
-                tooltip=tooltip,
-            )
-            .properties(height=max(160, 34 * len({b['Group'] for b in bars})))
-        )
-        st.altair_chart(gantt, use_container_width=True)
-        if multi_dim:
-            st.caption(f"Colour = {first_dim_name}; faded band = planned, "
-                       "solid band = as-recorded.")
+            flat_groups.append({"name": g.code_value, "activities": acts})
+    var_groups = list(nested.values()) + flat_groups
+    if var_groups:
+        st.subheader("Planned vs as-recorded bands")
+        dd_v = (f"{cur_data.project.data_date:%Y-%m-%d}"
+                if cur_data.project and cur_data.project.data_date else None)
+        st_components.html(
+            build_gantt_html(
+                group_tree(var_groups), data_date=dd_v,
+                title=f"Planned vs as-recorded — {dim_name}",
+                categories=[
+                    {"key": "planned", "label": "planned",
+                     "color": PLANNED_COLOR},
+                    {"key": "recorded", "label": "as-recorded",
+                     "color": RECORDED_COLOR},
+                ]),
+            height=520, scrolling=False)
+        st.caption("Each group carries its planned and as-recorded band; "
+                   "navy brackets span both. Expand/collapse"
+                   + (f" by {first_dim_name}," if multi_dim else ",")
+                   + " search, and zoom in the chart · dashed red line = "
+                   "update data date.")
 
     st.subheader("Variance table")
     table = pd.DataFrame([
@@ -1387,38 +1371,44 @@ def sequence_tab() -> None:
         front_seq = sorted(by_front,
                            key=lambda f: min(b.act_start
                                              for b in by_front[f]))
-        rows_c, order = [], []
+        seq_groups = []
         for front in front_seq:
             bands_f = sorted(
                 by_front[front],
                 key=lambda b: (seq.stage_order.index(b.stage)
                                if b.stage in seq.stage_order else 99))
-            for b in bands_f:
-                label = f"{front} › {b.stage}"
-                order.append(label)
-                rows_c.append({
-                    "Row": label, "Front": front, "Stage": b.stage,
-                    "Start": b.act_start,
-                    "Finish": b.act_finish or b.act_start,
-                    "Activities": b.activity_count})
-        if rows_c:
-            chart = (alt.Chart(pd.DataFrame(rows_c))
-                     .mark_bar(height=8, cornerRadius=2)
-                     .encode(
-                         x=alt.X("Start:T", title=None,
-                                 axis=alt.Axis(format="%b %Y")),
-                         x2="Finish:T",
-                         y=alt.Y("Row:N", sort=order, title=None,
-                                 axis=alt.Axis(labelLimit=300,
-                                               labelFontSize=9)),
-                         color=_colour_enc(keep),
-                         tooltip=["Front", "Stage", "Activities",
-                                  alt.Tooltip("Start:T", format="%d %b %Y"),
-                                  alt.Tooltip("Finish:T",
-                                              format="%d %b %Y")])
-                     .properties(height=max(300, 13 * len(order)),
-                                 title="As-built sequence gantt — "
-                                       "Front › Stage, start → finish"))
+            seq_groups.append({
+                "name": front,
+                "activities": [{
+                    "id": b.stage,
+                    "name": f"{b.activity_count} activities, "
+                            f"{b.complete_count} complete",
+                    "start": b.act_start,
+                    "finish": b.act_finish or b.act_start,
+                    "status": b.stage,
+                } for b in bands_f],
+            })
+        if seq_groups:
+            stages_present = [s for s in seq.stage_order
+                              if any(b.stage == s
+                                     for bs in by_front.values()
+                                     for b in bs)]
+            dd_sq = (f"{data.project.data_date:%Y-%m-%d}"
+                     if data.project and data.project.data_date else None)
+            st_components.html(
+                build_gantt_html(
+                    group_tree(seq_groups), data_date=dd_sq,
+                    title=f"Sequence — Front › Stage ({chosen})",
+                    categories=[
+                        {"key": s, "label": s,
+                         "color": report_charts.STAGE_COLORS.get(
+                             s, "#9e9e9e")}
+                        for s in stages_present]),
+                height=620, scrolling=False)
+            st.caption("Code-level gantt: each work front expands into its "
+                       "stage bands, coloured by stage · fronts in "
+                       "start → finish order · dashed red line = data "
+                       "date. (Colour-by applies to the other two views.)")
     if chart is not None:
         st.altair_chart(chart, use_container_width=True)
         st.caption("Bars = actual dates as recorded. Switch view, colour, "
@@ -2771,88 +2761,43 @@ def critical_path_tab() -> None:
     if not cp.critical:
         return
 
-    # --- Chain visual: bars in ES order + logic-link connectors ---------
-    shown = [a for a in cp.activities
-             if a.band == "critical" or show_near]
-    if len(shown) > 300:
-        st.info(f"{len(shown)} activities in view — drawing the first 300 "
-                "by early start. Narrow the tolerance to see the full chain.")
-        shown = shown[:300]
-    order = [f"{a.task_code} · {a.name[:38]}" for a in shown]
-    label_by_code = {a.task_code: lbl for a, lbl in zip(shown, order)}
+    # --- Chain visual (think-cell view): critical + near-critical groups
+    def _cp_act(a):
+        return {"id": a.task_code, "name": a.name,
+                "start": a.early_start or a.early_finish,
+                "finish": a.early_finish or a.early_start,
+                "milestone": a.is_milestone, "status": a.band}
 
-    rows, points = [], []
-    for a, lbl in zip(shown, order):
-        base = {
-            "Activity": lbl, "Band": a.band,
-            "Float (d)": a.total_float_days,
-        }
-        if a.is_milestone and (a.early_finish or a.early_start):
-            points.append({**base,
-                           "Date": a.early_finish or a.early_start})
-        elif a.early_start and a.early_finish:
-            rows.append({**base, "Start": a.early_start,
-                         "Finish": a.early_finish})
-
-    band_color = alt.Color(
-        "Band:N",
-        scale=alt.Scale(domain=list(BAND_COLORS), range=list(BAND_COLORS.values())),
-        legend=alt.Legend(orient="top", title=None),
-    )
-    y_axis = alt.Y("Activity:N", sort=order, title=None,
-                   axis=alt.Axis(labelLimit=330))
-    layers = []
-    if rows:
-        layers.append(
-            alt.Chart(pd.DataFrame(rows)).mark_bar(height=8, cornerRadius=2)
-            .encode(x=alt.X("Start:T", title=None,
-                            axis=alt.Axis(format="%b %Y", grid=True)),
-                    x2="Finish:T", y=y_axis, color=band_color,
-                    tooltip=["Activity", "Band",
-                             alt.Tooltip("Start:T", format="%d %b %Y"),
-                             alt.Tooltip("Finish:T", format="%d %b %Y"),
-                             alt.Tooltip("Float (d):Q", format="+.0f")]))
-    if points:
-        layers.append(
-            alt.Chart(pd.DataFrame(points)).mark_point(
-                shape="diamond", size=120, filled=True)
-            .encode(x="Date:T", y=y_axis, color=band_color,
-                    tooltip=["Activity", "Band",
-                             alt.Tooltip("Date:T", format="%d %b %Y"),
-                             alt.Tooltip("Float (d):Q", format="+.0f")]))
-
-    # Logic-link connectors between critical activities in view.
-    link_rows = [
-        {"y": label_by_code[lk.pred_code], "y2": label_by_code[lk.succ_code]}
-        for lk in cp.links
-        if lk.pred_code in label_by_code and lk.succ_code in label_by_code
-    ]
-    if link_rows:
-        pred_finish = {label_by_code[a.task_code]:
-                       (a.early_finish or a.early_start) for a in shown}
-        succ_start = {label_by_code[a.task_code]:
-                      (a.early_start or a.early_finish) for a in shown}
-        for lr in link_rows:
-            lr["x"] = pred_finish.get(lr["y"])
-            lr["x2"] = succ_start.get(lr["y2"])
-        link_df = pd.DataFrame(
-            [lr for lr in link_rows if lr["x"] and lr["x2"]])
-        if not link_df.empty:
-            layers.insert(0,
-                alt.Chart(link_df).mark_rule(
-                    strokeWidth=0.7, color="#8a8f98", opacity=0.6)
-                .encode(x="x:T", x2="x2:T", y=alt.Y("y:N", sort=order),
-                        y2="y2:N"))
-
-    if layers:
-        st.altair_chart(
-            alt.layer(*layers).properties(
-                height=max(240, 15 * len(order))).resolve_scale(y="shared"),
-            use_container_width=True,
-        )
-        st.caption("Bars in early-start order; ◆ = milestone; grey lines = "
-                   "logic links between critical activities. Gaps with no "
-                   "connector indicate a broken chain.")
+    cp_groups = [{
+        "name": ("Critical path"
+                 if cp.method == "longest_path"
+                 else f"Critical (TF ≤ {cp.float_tolerance_days:.0f}d)"),
+        "activities": [_cp_act(a) for a in cp.critical
+                       if a.early_start or a.early_finish],
+    }]
+    if show_near and cp.near_critical:
+        cp_groups.append({
+            "name": f"Near-critical band (TF ≤ {cp.near_critical_days:.0f}d)",
+            "activities": [_cp_act(a) for a in cp.near_critical
+                           if a.early_start or a.early_finish],
+        })
+    dd_cp = (f"{data.project.data_date:%Y-%m-%d}"
+             if data.project and data.project.data_date else None)
+    st_components.html(
+        build_gantt_html(
+            group_tree(cp_groups), data_date=dd_cp,
+            title=f"Critical path — {chosen}",
+            categories=[
+                {"key": "critical", "label": "critical",
+                 "color": BAND_COLORS["critical"]},
+                {"key": "near-critical", "label": "near-critical",
+                 "color": BAND_COLORS["near-critical"]},
+            ]),
+        height=560, scrolling=False)
+    st.caption("Early-start order · ◆ = milestone · expand/collapse, "
+               "search and zoom in the chart · chain continuity and the "
+               "driving logic links are reported in the warnings above and "
+               "the Excel export's links sheet.")
 
     st.subheader("Path activities")
     table = pd.DataFrame([

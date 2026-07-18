@@ -103,12 +103,7 @@ _TEMPLATE = """<!DOCTYPE html>
         value="__ZOOM__" style="width:120px"></span>
   <span class="lg"><span class="sw" style="background:var(--navy)"></span>
     group summary</span>
-  <span class="lg"><span class="sw" style="background:var(--done)"></span>
-    complete</span>
-  <span class="lg"><span class="sw" style="background:var(--active)"></span>
-    in progress</span>
-  <span class="lg"><span class="sw" style="background:var(--future)"></span>
-    not started</span>
+  <span id="legend" style="display:inline-flex;gap:10px"></span>
   <span class="lg" style="color:var(--dd)" id="ddlg"></span>
   <span class="lg" id="meta"></span>
 </div>
@@ -125,10 +120,18 @@ const TREEW = 340;
 document.documentElement.style.setProperty("--treew", TREEW + "px");
 document.getElementById("corner").textContent = TITLE;
 const DAY = 86400000;
-const FILL = {complete: "var(--done)", "in progress": "var(--active)",
-              "not started": "var(--future)"};
-const EDGE = {complete: "var(--done-b)", "in progress": "var(--active-b)",
-              "not started": "var(--future-b)"};
+const CATS = __CATS__;
+const FILL = {}, EDGE = {};
+const legendEl = document.getElementById("legend");
+for (const c of CATS) {
+  FILL[c.key] = c.color;
+  EDGE[c.key] = c.color + "80";
+  const chip = document.createElement("span");
+  chip.className = "lg";
+  chip.innerHTML = `<span class="sw" style="background:${c.color}"></span>` +
+                   `${c.label}`;
+  legendEl.appendChild(chip);
+}
 
 // -- date range over the whole tree ---------------------------------------
 let dmin = null, dmax = null;
@@ -274,7 +277,8 @@ function render() {
           kidz.push(el);
         } else {
           kidz.push(bar("bar", a.start, a.finish || a.start,
-                        FILL[a.status], EDGE[a.status], tip));
+                        FILL[a.status] || "#9aa4b2",
+                        EDGE[a.status] || "#9aa4b280", tip));
         }
         addRow(`<span class="caret"></span>${esc(a.id)} · ${esc(a.name)}`,
                depth + 1, false, null, kidz);
@@ -308,13 +312,79 @@ render();
 </script></body></html>"""
 
 
+STATUS_CATEGORIES = [
+    {"key": "complete", "label": "complete", "color": "#2f9e44"},
+    {"key": "in progress", "label": "in progress", "color": "#f2a33c"},
+    {"key": "not started", "label": "not started", "color": "#4c8ede"},
+]
+
+
 def build_gantt_html(tree: dict, zoom_px_per_month: int = 34,
                      data_date: str | None = None,
-                     title: str = "Programme") -> str:
-    """Full HTML document for st.components.v1.html (tree from
-    hierarchy.tree_to_dict). ``data_date`` = ISO date for the marker line."""
+                     title: str = "Programme",
+                     categories: list[dict] | None = None) -> str:
+    """Full HTML document for st.components.v1.html.
+
+    ``tree`` — from hierarchy.tree_to_dict or group_tree below.
+    ``categories`` — bar colour scheme: [{key, label, color}] matched
+    against each activity's ``status``; defaults to activity status.
+    ``data_date`` — ISO date for the dashed marker line.
+    """
     return (_TEMPLATE
             .replace("__TREE__", json.dumps(tree))
             .replace("__ZOOM__", str(int(zoom_px_per_month)))
             .replace("__DATA_DATE__", json.dumps(data_date))
+            .replace("__CATS__", json.dumps(categories or STATUS_CATEGORIES))
             .replace("__TITLE__", json.dumps(title[:44])))
+
+
+def group_tree(groups: list[dict]) -> dict:
+    """Build the component's tree schema from plain nested group dicts.
+
+    Each group: {"name", "children": [groups], "activities":
+    [{"id","name","start","finish","milestone","status"}]} with datetime
+    (or None) dates. Rollups (span, counts) are computed here; activities
+    keep their given order.
+    """
+    def iso(d):
+        return d.strftime("%Y-%m-%d") if d else None
+
+    def node(g, level):
+        acts = []
+        starts, finishes = [], []
+        for a in g.get("activities", []):
+            if a.get("start"):
+                starts.append(a["start"])
+            if a.get("finish"):
+                finishes.append(a["finish"])
+            acts.append({"id": a.get("id", ""), "name": a.get("name", ""),
+                         "start": iso(a.get("start")),
+                         "finish": iso(a.get("finish")),
+                         "milestone": bool(a.get("milestone")),
+                         "status": a.get("status", "")})
+        kids = [node(c, level + 1) for c in g.get("children", [])]
+        count = len(acts) + sum(k["count"] for k in kids)
+        complete = (sum(1 for a in acts if a["status"] == "complete")
+                    + sum(k["complete"] for k in kids))
+        for k in kids:
+            if k["start"]:
+                starts.append(__import__("datetime").datetime.strptime(
+                    k["start"], "%Y-%m-%d"))
+            if k["finish"]:
+                finishes.append(__import__("datetime").datetime.strptime(
+                    k["finish"], "%Y-%m-%d"))
+        return {"name": g.get("name", ""), "level": level,
+                "start": iso(min(starts)) if starts else None,
+                "finish": iso(max(finishes)) if finishes else None,
+                "count": count, "complete": complete,
+                "children": kids, "activities": acts}
+
+    kids = [node(g, 0) for g in groups]
+    starts = [k["start"] for k in kids if k["start"]]
+    fins = [k["finish"] for k in kids if k["finish"]]
+    return {"name": "root", "level": -1,
+            "start": min(starts) if starts else None,
+            "finish": max(fins) if fins else None,
+            "count": sum(k["count"] for k in kids),
+            "complete": sum(k["complete"] for k in kids),
+            "children": kids, "activities": []}

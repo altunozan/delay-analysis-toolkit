@@ -57,7 +57,7 @@ from .float_erosion import (
     WindowErosion,
     analyse_float_erosion,
 )
-from .gantt_html import build_gantt_html
+from .gantt_html import build_gantt_html, group_tree
 from .hierarchy import (
     Dimension,
     sequence_dimension_mappings,
@@ -189,6 +189,7 @@ __all__ = [
     "available_dimensions",
     "build_hierarchy",
     "build_gantt_html",
+    "group_tree",
     "config_from_json",
     "config_to_json",
     "tree_to_dict",
