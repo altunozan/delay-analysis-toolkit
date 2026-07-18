@@ -425,6 +425,25 @@ check("A22g template search returns project evidence",
 check("A22h link text round-trip",
       parse_links("A1:SS:5")[0].link_type == "SS")
 
+
+# A23. Explain This Delay
+from programme import explain_delay
+_ex = explain_delay([("B", B), ("U", U)], "KD15")
+check("A23 explain: facts recorded per revision",
+      len(_ex.points) == 2 and _ex.points[0].forecast is not None)
+check("A23b explain: total movement == raw forecast delta",
+      abs(_ex.total_movement_days
+          - (_ex.points[-1].forecast
+             - _ex.points[0].forecast).days) < 1)
+check("A23c explain: uncertain attribution flagged when path switched",
+      any(not w.attribution_reliable for w in _ex.windows)
+      and any("uncertain" in w for w in _ex.warnings))
+check("A23d explain: facts/inference separation in caveats",
+      any("INFERENCE" in c for c in _ex.caveats))
+_ex1 = explain_delay([("B", B)], "KD15")
+check("A23e explain: single revision -> warning, no crash",
+      not _ex1.windows and _ex1.warnings)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

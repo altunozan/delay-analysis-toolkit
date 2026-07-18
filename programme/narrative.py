@@ -12,6 +12,7 @@ from __future__ import annotations
 from .asbuilt_path import AsBuiltPathResult
 from .comparison import ComparisonResult
 from .critical_path import CriticalPathResult
+from .explain import ExplainResult
 from .inventory import ProgrammeInventory
 from .milestones import MilestoneSeries, MilestoneShiftResult
 from .variance import VarianceResult
@@ -181,6 +182,31 @@ explicitly that no actualised dates were altered — a positive indicator for
 the contemporaneity of the records.
 
 ### 6. Limitations
+Every standing caveat and warning provided, in full.""",
+    "explain": """\
+## Explain This Delay
+
+### 1. The Question
+Which milestone is examined, its date in the earliest revision, its date
+(or actual) in the latest, and the total movement.
+
+### 2. What the Records Show (FACTS)
+Window by window: the milestone's recorded forecast at each data date and
+the movement. These are facts from the programme files — state them as
+such. Windows where the milestone held stable deserve equal mention.
+
+### 3. The Inferred Drivers (INFERENCE)
+Per window with movement: the activities that joined the driving path to
+the milestone — the candidate drivers — and the work that left it. Label
+this section explicitly as inference from forecast logic, to be
+corroborated against contemporaneous records.
+
+### 4. Alternative Explanations & Contrary Indications
+Where the driving path switched substantially, say the attribution is
+uncertain and name what else could explain the movement (re-logic,
+re-planning, progress elsewhere). Reproduce the reliability flags.
+
+### 5. Limitations
 Every standing caveat and warning provided, in full.""",
     "tia": """\
 ## Time Impact Analysis
@@ -990,4 +1016,54 @@ def build_tia_prompt(res: TIAResult, template: str | None = None) -> str:
     lines.extend(f"- {w}" for w in res.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["tia"]))
+    return "\n".join(lines)
+
+
+def build_explain_prompt(res: ExplainResult,
+                         template: str | None = None) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "—"
+    lines = ["<context>'Explain this delay' analysis for milestone "
+             f"{res.target_code} '{res.target_name}'. FACTS = the "
+             "milestone's dates as recorded by each revision and the "
+             "movement between them. DRIVERS = INFERENCE from each "
+             "revision's forecast driving logic (candidates, not proven "
+             "causes). Positive movement = later.</context>\n"]
+    lines.append("<facts_recorded_dates>")
+    for p in res.points:
+        kind = "ACTUAL" if p.is_actual else "forecast"
+        lines.append(f"- {p.label} (data date {fmt(p.data_date)}): "
+                     f"{kind} {fmt(p.forecast)}")
+    if res.total_movement_days is not None:
+        lines.append(f"- Total movement: "
+                     f"{res.total_movement_days:+.0f} days")
+    lines.append("</facts_recorded_dates>\n")
+    for w in res.windows:
+        rel = ("attribution RELIABLE" if w.attribution_reliable
+               else "attribution UNCERTAIN — path switched")
+        sim = (f"{w.path_similarity:.0f}%"
+               if w.path_similarity is not None else "n/a")
+        mv = (f"{w.movement_days:+.0f}d"
+              if w.movement_days is not None else "n/a")
+        lines.append(f"<window_{w.index} from='{w.from_label}' "
+                     f"to='{w.to_label}'>")
+        lines.append(f"- FACT: {fmt(w.pre)} -> {fmt(w.post)} "
+                     f"(movement {mv})")
+        lines.append(f"- INFERENCE basis: driving-path similarity {sim} "
+                     f"({rel})")
+        for s in w.joined[:15]:
+            lines.append(f"  + joined driving path: {s.task_code} "
+                         f"'{s.name}'")
+        if len(w.joined) > 15:
+            lines.append(f"  ... (+{len(w.joined) - 15} more joined)")
+        for s in w.left[:10]:
+            lines.append(f"  - left driving path: {s.task_code} '{s.name}'")
+        if len(w.left) > 10:
+            lines.append(f"  ... (+{len(w.left) - 10} more left)")
+        lines.append(f"</window_{w.index}>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["explain"]))
     return "\n".join(lines)

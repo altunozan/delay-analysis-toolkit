@@ -47,8 +47,14 @@ from programme import (
     FRAGNET_SYSTEM_PROMPT,
     FragnetActivity,
     activity_code_types,
+    FRAGNET_VARIANTS,
     build_fragnet_prompt,
+    build_fragnet_variant_prompt,
     build_tia_prompt,
+    event_from_dict,
+    event_to_dict,
+    register_from_json,
+    register_to_json,
     build_tia_xlsx,
     find_template_activities,
     links_to_text,
@@ -108,6 +114,9 @@ from programme import (
     build_inventory,
     combine_mappings,
     end_activity_candidates,
+    explain_delay,
+    build_explain_prompt,
+    build_explain_xlsx,
     extract_critical_path,
     extract_longest_path,
     build_inventory_prompt,
@@ -2872,6 +2881,68 @@ def tia_tab() -> None:
                                "into (in memory only).")
     data = dict(files)[chosen]
 
+    # ---- event register --------------------------------------------------
+    reg = st.session_state.setdefault("tia_register", {})
+    with st.expander(f"📇 Event register ({len(reg)} saved)",
+                     expanded=False):
+        st.caption("Events and their confirmed fragnets persist here for "
+                   "the session; download the register to keep and reload "
+                   "it in any later session.")
+        for rid, rec in list(reg.items()):
+            rc1, rc2, rc3 = st.columns([4, 1, 1])
+            last = rec.get("last_result", {})
+            delta = last.get("completion_delta_days")
+            rc1.write(f"**{rid}** — {rec['event'].get('title', '')}"
+                      + (f"  ·  impact {delta:+.1f}d on "
+                         f"{last.get('programme', '')}"
+                         if delta is not None else "  ·  not yet run"))
+            if rc2.button("Load", key=f"tia_load_{rid}"):
+                parsed = event_from_dict(rec)
+                if parsed:
+                    ev_l, fr_l = parsed
+                    st.session_state["tia_ev_id"] = ev_l.event_id
+                    st.session_state["tia_ev_title"] = ev_l.title
+                    st.session_state["tia_ev_desc"] = ev_l.description
+                    st.session_state["tia_ev_date"] = (
+                        f"{ev_l.date_raised:%Y-%m-%d}"
+                        if ev_l.date_raised else "")
+                    st.session_state["tia_ev_resp"] = (
+                        ev_l.responsibility_asserted)
+                    st.session_state["tia_ev_evid"] = ev_l.evidence_note
+                    st.session_state["tia_frag_rows"] = [{
+                        "ID": f.act_id, "Activity": f.name,
+                        "Duration (d)": f.duration_days,
+                        "Predecessors": links_to_text(f.predecessors),
+                        "Successors": links_to_text(f.successors),
+                        "Source / rationale": f.rationale,
+                        "Assumptions": f.assumptions,
+                    } for f in fr_l]
+                    st.session_state["tia_frag_ver"] = (
+                        st.session_state.get("tia_frag_ver", 0) + 1)
+                    st.session_state.pop("tia_result", None)
+                    st.rerun()
+            if rc3.button("Delete", key=f"tia_del_{rid}"):
+                reg.pop(rid, None)
+                st.rerun()
+        dc1, dc2 = st.columns(2)
+        if reg:
+            dc1.download_button(
+                "⬇️ Download register (JSON)",
+                data=register_to_json(list(reg.values())),
+                file_name="delay_event_register.json",
+                mime="application/json", key="tia_reg_dl")
+        up = dc2.file_uploader("Load register", type=["json"],
+                               key="tia_reg_up")
+        if up is not None:
+            loaded = register_from_json(up.getvalue().decode("utf-8"))
+            if loaded and st.button(
+                    f"Import {len(loaded)} event(s)", key="tia_reg_imp"):
+                for rec in loaded:
+                    reg[rec["event"]["event_id"]] = rec
+                st.rerun()
+            elif not loaded:
+                st.error("Not a valid event register file.")
+
     # ---- the event -------------------------------------------------------
     st.subheader("1 · The event")
     ec1, ec2, ec3 = st.columns([1, 2, 1])
@@ -2938,13 +3009,22 @@ def tia_tab() -> None:
             f_env = os.environ.get("GOOGLE_API_KEY", "")
         f_key = st.text_input(f"{f_info['label']} API key", type="password",
                               value=f_env, key="tia_ai_key")
-        if st.button("Draft fragnet from the event",
+        variant = st.radio(
+            "Fragnet discipline", list(FRAGNET_VARIANTS.keys()),
+            index=1, horizontal=True, key="tia_variant",
+            help="Minimal: only what strictly represents the event. "
+                 "Realistic: normal design/procure/execute steps where "
+                 "evidenced. Conservative: justifiable allowances, each "
+                 "labelled as an allowance — never inflated to "
+                 "manufacture an outcome.")
+        if st.button(f"Draft {variant} fragnet from the event",
                      disabled=not f_key or not (ev_title or ev_desc),
                      key="tia_ai_go", type="primary"):
             try:
                 text = "".join(stream_narrative(
                     f_provider, f_key,
-                    build_fragnet_prompt(event, templates, data),
+                    build_fragnet_variant_prompt(event, templates, data,
+                                                 variant),
                     f_model or None, system=FRAGNET_SYSTEM_PROMPT))
                 draft = parse_fragnet_json(text, data)
             except NarrativeError as exc:
@@ -3061,10 +3141,125 @@ def tia_tab() -> None:
         "tia",
         DEFAULT_TEMPLATES["tia"],
     )
-    st.download_button(
+    sc1, sc2 = st.columns(2)
+    if sc1.button("💾 Save event + fragnet to register", key="tia_save"):
+        st.session_state["tia_register"][event.event_id] = event_to_dict(
+            event, fragnet, res)
+        st.success(f"Saved '{event.event_id}' to the register.")
+    sc2.download_button(
         "⬇️ Download TIA report (Excel)",
         data=build_tia_xlsx(res, narrative),
         file_name=f"tia_{event.event_id}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+
+# ====================================================================== #
+# Explain This Delay — usable from both workflows
+# ====================================================================== #
+
+def explain_tab() -> None:
+    st.caption(
+        "Pick a milestone and ask why it moved: recorded dates per "
+        "revision (facts) and the activities that joined its driving path "
+        "per window (inferred candidate drivers, flagged where uncertain)."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** "
+                "tab first.")
+        return
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    latest = ordered[-1][1]
+    ms = [t for t in latest.tasks
+          if t.is_milestone and not t.is_loe_or_wbs]
+    ms.sort(key=lambda t: (t.act_finish or t.early_finish
+                           or t.early_start or datetime.max), reverse=True)
+    if not ms:
+        st.warning("No milestones found in the latest revision.")
+        return
+    labels = {t.task_code: f"{t.task_code} — {t.name}" for t in ms}
+    target = st.selectbox(
+        "Milestone to explain", options=list(labels.keys()),
+        format_func=lambda c: labels[c], key="exp_target",
+        help="Latest finishers first — the completion milestone usually "
+             "leads the list.")
+    res = explain_delay(ordered, target)
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total movement",
+              f"{res.total_movement_days:+.0f} d"
+              if res.total_movement_days is not None else "—")
+    m2.metric("Windows analysed", len(res.windows))
+    m3.metric("Status", "Achieved ✅" if res.achieved else "Forecast")
+    for w in res.warnings:
+        (st.success if w.startswith("Favourable") else st.warning)(w)
+
+    pts = [{"Data date": p.data_date, "Milestone date": p.forecast,
+            "Revision": p.label,
+            "Kind": "Actual" if p.is_actual else "Forecast"}
+           for p in res.points if p.data_date and p.forecast]
+    if len(pts) >= 2:
+        st.altair_chart(
+            alt.Chart(pd.DataFrame(pts)).mark_line(point=True,
+                                                   color="#cf222e")
+            .encode(
+                x=alt.X("Data date:T", axis=alt.Axis(format="%b %Y")),
+                y=alt.Y("Milestone date:T", scale=alt.Scale(zero=False),
+                        axis=alt.Axis(format="%b %Y")),
+                tooltip=["Revision", "Kind",
+                         alt.Tooltip("Data date:T", format="%d %b %Y"),
+                         alt.Tooltip("Milestone date:T",
+                                     format="%d %b %Y")],
+            ).properties(height=260,
+                         title=f"{target} — recorded date by data date "
+                               "(facts)"),
+            use_container_width=True)
+
+    st.subheader("Windows: facts and inferred drivers")
+    st.dataframe(pd.DataFrame([{
+        "Window": f"W{w.index}: {w.from_label} → {w.to_label}",
+        "Pre": f"{w.pre:%Y-%m-%d}" if w.pre else "—",
+        "Post": f"{w.post:%Y-%m-%d}" if w.post else "—",
+        "Movement (d)": w.movement_days,
+        "Path similarity": (f"{w.path_similarity:.0f}%"
+                            if w.path_similarity is not None else "—"),
+        "Attribution": ("reliable" if w.attribution_reliable
+                        else "UNCERTAIN"),
+        "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
+    } for w in res.windows]), use_container_width=True, hide_index=True)
+
+    for w in res.windows:
+        if w.shifts:
+            with st.expander(
+                f"Window {w.index} inferred drivers — {len(w.joined)} "
+                f"joined, {len(w.left)} left"
+                + ("" if w.attribution_reliable
+                   else "  ⚠️ attribution uncertain")):
+                st.dataframe(pd.DataFrame([{
+                    "Direction": s.direction,
+                    "Activity ID": s.task_code,
+                    "Activity": s.name,
+                } for s in w.shifts]), use_container_width=True,
+                    hide_index=True)
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_explain_{target}",
+        lambda tmpl, r=res: build_explain_prompt(r, tmpl),
+        "explain",
+        DEFAULT_TEMPLATES["explain"],
+    )
+    st.download_button(
+        "⬇️ Download 'explain this delay' report (Excel)",
+        data=build_explain_xlsx(res, narrative),
+        file_name=f"explain_delay_{target}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
@@ -3117,10 +3312,11 @@ def prospective_section() -> None:
     st.title("Prospective Analysis — Time Impact & Forecasting")
     st.caption("Current approved update + delay event → fragnet → "
                "controlled insertion → forecast impact.")
-    intake, dcma, tia = st.tabs([
+    intake, dcma, tia, explain = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 Schedule Health (DCMA)",
         "⚡ Time Impact Analysis",
+        "🔎 Explain This Delay",
     ])
     with intake:
         intake_tab()
@@ -3128,6 +3324,8 @@ def prospective_section() -> None:
         dcma_tab()
     with tia:
         tia_tab()
+    with explain:
+        explain_tab()
 
 
 def main() -> None:
@@ -3153,7 +3351,7 @@ def retrospective_section() -> None:
 
     (intake, dcma, cpath, milestones, variance, compare, windows,
      scurve, floats, resources, asbuilt, sequence, hierarchy,
-     report) = st.tabs([
+     explain, report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
         "🧭 Baseline Critical Path",
@@ -3167,6 +3365,7 @@ def retrospective_section() -> None:
         "🛤️ As-Built Critical Path",
         "🧩 Sequence Coding",
         "🗂️ Hierarchy Rebuild",
+        "🔎 Explain This Delay",
         "📄 Report Assembler",
     ])
     with intake:
@@ -3195,6 +3394,8 @@ def retrospective_section() -> None:
         sequence_tab()
     with hierarchy:
         hierarchy_tab()
+    with explain:
+        explain_tab()
     with report:
         report_tab()
 

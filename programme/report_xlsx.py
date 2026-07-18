@@ -904,3 +904,58 @@ def build_tia_xlsx(res, narrative: str | None = None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Explain This Delay
+# --------------------------------------------------------------------------- #
+def build_explain_xlsx(res, narrative: str | None = None) -> bytes:
+    """res: programme.explain.ExplainResult"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Movement (Facts)"
+    _title(ws, f"Explain This Delay — {res.target_code}", 4)
+    ws.cell(row=3, column=1, value=(
+        f"{res.target_name} | total movement "
+        + (f"{res.total_movement_days:+.0f} days"
+           if res.total_movement_days is not None else "n/a")
+        + (" | ACHIEVED" if res.achieved else "")
+    )).font = Font(italic=True)
+    _header_row(ws, 5, ["Revision", "Data date", "Forecast / Actual",
+                        "Kind"])
+    for i, p in enumerate(res.points, start=6):
+        vals = [p.label, _fmt(p.data_date), _fmt(p.forecast),
+                "ACTUAL" if p.is_actual else "forecast"]
+        for col, v in enumerate(vals, start=1):
+            ws.cell(row=i, column=col, value=v).border = THIN_BORDER
+    _autofit(ws, {1: 30, 2: 12, 3: 16, 4: 10})
+
+    s2 = wb.create_sheet("Drivers (Inference)")
+    _header_row(s2, 1, ["Window", "Movement (d)", "Path similarity",
+                        "Attribution", "Direction", "Activity ID",
+                        "Activity"])
+    r = 2
+    for w in res.windows:
+        rel = "reliable" if w.attribution_reliable else "UNCERTAIN"
+        sim = (f"{w.path_similarity:.0f}%"
+               if w.path_similarity is not None else "n/a")
+        rows = w.shifts or [None]
+        for s in rows:
+            vals = [f"W{w.index}: {w.from_label} -> {w.to_label}",
+                    w.movement_days, sim, rel,
+                    s.direction if s else "", s.task_code if s else "",
+                    s.name if s else ""]
+            for col, v in enumerate(vals, start=1):
+                c = s2.cell(row=r, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 4 and not w.attribution_reliable:
+                    c.fill = SLIP_FILL
+            r += 1
+    _autofit(s2, {1: 34, 2: 12, 3: 13, 4: 12, 5: 10, 6: 18, 7: 44})
+    s2.freeze_panes = "A2"
+
+    _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

@@ -560,3 +560,134 @@ def parse_fragnet_json(
             assumptions=str(i.get("assumptions", ""))[:300],
             confidence="medium"))
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Event register — save / load events with their confirmed fragnets
+# --------------------------------------------------------------------------- #
+
+def event_to_dict(event: DelayEvent, fragnet: list[FragnetActivity],
+                  result: "TIAResult | None" = None) -> dict:
+    """JSON-safe record of one event + its confirmed fragnet (+ outcome)."""
+    rec = {
+        "version": 1,
+        "event": {
+            "event_id": event.event_id, "title": event.title,
+            "description": event.description,
+            "date_raised": (event.date_raised.strftime("%Y-%m-%d")
+                            if event.date_raised else None),
+            "responsibility_asserted": event.responsibility_asserted,
+            "evidence_note": event.evidence_note,
+        },
+        "fragnet": [{
+            "id": f.act_id, "name": f.name,
+            "duration_days": f.duration_days,
+            "predecessors": [{"id": l.other_id, "type": l.link_type,
+                              "lag_days": l.lag_days}
+                             for l in f.predecessors],
+            "successors": [{"id": l.other_id, "type": l.link_type,
+                            "lag_days": l.lag_days}
+                           for l in f.successors],
+            "rationale": f.rationale, "assumptions": f.assumptions,
+            "confidence": f.confidence,
+        } for f in fragnet],
+    }
+    if result is not None and result.completion_delta_days is not None:
+        rec["last_result"] = {
+            "programme": result.programme_label,
+            "completion_delta_days": result.completion_delta_days,
+            "completion_post": (result.completion_post.strftime("%Y-%m-%d")
+                                if result.completion_post else None),
+        }
+    return rec
+
+
+def event_from_dict(rec: dict) -> tuple[DelayEvent,
+                                        list[FragnetActivity]] | None:
+    """Validate + rebuild an event record; None if malformed."""
+    try:
+        e = rec["event"]
+        date = (datetime.strptime(e["date_raised"], "%Y-%m-%d")
+                if e.get("date_raised") else None)
+        event = DelayEvent(
+            str(e["event_id"]), str(e.get("title", "")),
+            str(e.get("description", "")), date,
+            str(e.get("responsibility_asserted", "")),
+            str(e.get("evidence_note", "")))
+        fragnet = []
+        for f in rec.get("fragnet", []):
+            def _ls(key):
+                return [FragnetLink(str(l["id"]),
+                                    str(l.get("type", "FS")).upper()
+                                    if str(l.get("type", "FS")).upper()
+                                    in LINK_TYPES else "FS",
+                                    float(l.get("lag_days", 0) or 0))
+                        for l in f.get(key, []) if l.get("id")]
+            fragnet.append(FragnetActivity(
+                act_id=str(f["id"]), name=str(f.get("name", "")),
+                duration_days=float(f.get("duration_days", 0) or 0),
+                predecessors=_ls("predecessors"),
+                successors=_ls("successors"),
+                rationale=str(f.get("rationale", "")),
+                assumptions=str(f.get("assumptions", "")),
+                confidence=str(f.get("confidence", "medium"))))
+        return event, fragnet
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def register_to_json(records: list[dict]) -> str:
+    return json.dumps({"version": 1, "events": records}, indent=2)
+
+
+def register_from_json(text: str) -> list[dict]:
+    """Parse a register file; silently drops malformed event records."""
+    try:
+        obj = json.loads(text)
+        events = obj.get("events", [])
+    except (json.JSONDecodeError, AttributeError):
+        return []
+    return [r for r in events
+            if isinstance(r, dict) and event_from_dict(r) is not None]
+
+
+# --------------------------------------------------------------------------- #
+# Fragnet draft variants (spec step 8) — one prompt, three disciplines
+# --------------------------------------------------------------------------- #
+
+FRAGNET_VARIANTS = {
+    "minimal": (
+        "Draft a MINIMAL-IMPACT fragnet: include ONLY the activities "
+        "strictly necessary to represent the event itself — no allowances, "
+        "no optional interfaces. Typically 1-3 activities."
+    ),
+    "realistic": (
+        "Draft a REALISTIC construction fragnet: include the normal "
+        "design, approval, procurement, enabling, execution, and "
+        "inspection steps ONLY where the event description and the "
+        "comparable activities support them."
+    ),
+    "conservative": (
+        "Draft a CONSERVATIVE fragnet: you may include additional risk or "
+        "interface activities where justifiable, but EVERY such allowance "
+        "must state in its 'assumptions' field that it is an allowance, "
+        "not an evidenced fact. Do not inflate durations to manufacture "
+        "an outcome."
+    ),
+}
+
+
+def build_fragnet_variant_prompt(
+    event: DelayEvent, templates: list[dict], data: XerData,
+    variant: str = "realistic",
+) -> str:
+    base = build_fragnet_prompt(event, templates, data)
+    instruction = FRAGNET_VARIANTS.get(variant,
+                                       FRAGNET_VARIANTS["realistic"])
+    return base.replace(
+        "<task>Draft a REALISTIC fragnet representing this delay event, "
+        "for insertion into the current programme. Include normal design/"
+        "approval/procurement/execution steps only where the event "
+        "description supports them.</task>",
+        f"<task>{instruction} The fragnet is for insertion into the "
+        "current programme.</task>")
