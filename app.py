@@ -3145,44 +3145,110 @@ def tia_tab() -> None:
                     "Assumptions": f.assumptions,
                 } for f in draft]
                 st.session_state["tia_frag_ver"] = ver + 1
+                st.session_state["tia_frag_mode"] = "Advanced grid"
                 st.rerun()
             elif f_key:
                 st.warning("The model returned no valid fragnet — try "
                            "adding detail to the event description.")
 
-    if frag_key not in st.session_state:
-        st.session_state[frag_key] = [{
-            "ID": "TIA-010", "Activity": "", "Duration (d)": 0.0,
-            "Predecessors": "", "Successors": "",
-            "Source / rationale": "", "Assumptions": "",
-        }]
-    st.caption(
-        "Edit freely; add rows as needed. Links format: "
-        "`ACTIVITYID:FS:0; TIA-010:SS:5` (type and lag optional). "
-        "Successors must tie back into existing activities for the event "
-        "to impact the programme."
-    )
-    edited = st.data_editor(
-        pd.DataFrame(st.session_state[frag_key]),
-        num_rows="dynamic", use_container_width=True,
-        key=f"tia_editor_v{st.session_state.get('tia_frag_ver', 0)}")
+    frag_mode = st.radio(
+        "Fragnet builder", ["Chain builder (simple)", "Advanced grid"],
+        horizontal=True, key="tia_frag_mode",
+        help="Chain builder: name the steps, pick where the chain starts "
+             "from and what it delays — logic is wired automatically. "
+             "Advanced grid: full control incl. SS/FF/SF, lags, branches "
+             "(and where AI drafts land).")
+
+    inc_acts = sorted(
+        (t for t in data.tasks
+         if not t.is_loe_or_wbs and t.is_incomplete),
+        key=lambda t: (t.act_finish or t.early_finish
+                       or t.early_start or datetime.max))
+    act_label = {t.task_code: f"{t.task_code} — {t.name}"
+                 for t in inc_acts}
+    ms_codes = [t.task_code for t in reversed(inc_acts) if t.is_milestone]
+
     fragnet: list[FragnetActivity] = []
-    for _, row in edited.iterrows():
-        fid = str(row.get("ID") or "").strip()
-        if not fid:
-            continue
-        try:
-            dur = float(row.get("Duration (d)") or 0)
-        except (TypeError, ValueError):
-            dur = 0.0
-        fragnet.append(FragnetActivity(
-            act_id=fid, name=str(row.get("Activity") or "").strip(),
-            duration_days=dur,
-            predecessors=parse_links(str(row.get("Predecessors") or "")),
-            successors=parse_links(str(row.get("Successors") or "")),
-            rationale=str(row.get("Source / rationale") or "").strip(),
-            assumptions=str(row.get("Assumptions") or "").strip()))
-    st.session_state[frag_key] = edited.to_dict("records")
+    if frag_mode.startswith("Chain"):
+        NO_ENTRY = "— none (chain starts at the data date) —"
+        c1, c2 = st.columns(2)
+        entry = c1.selectbox(
+            "Where does the event work start from?",
+            [NO_ENTRY] + list(act_label.keys()),
+            format_func=lambda c: act_label.get(c, c), key="tia_entry",
+            help="Type to search. The first step follows this activity "
+                 "(finish-to-start).")
+        exit_opts = ms_codes + [c for c in act_label if c not in ms_codes]
+        exit_c = c2.selectbox(
+            "What does it delay?", exit_opts,
+            format_func=lambda c: act_label.get(c, c), key="tia_exit",
+            help="Type to search — milestones listed first, completion "
+                 "at the top. The last step feeds this "
+                 "(finish-to-start).")
+        if "tia_chain_steps" not in st.session_state:
+            st.session_state["tia_chain_steps"] = [
+                {"Step": "", "Duration (d)": 0.0}]
+        st.caption("The steps of the event work, in order — they are "
+                   "linked finish-to-start automatically.")
+        steps = st.data_editor(
+            pd.DataFrame(st.session_state["tia_chain_steps"]),
+            num_rows="dynamic", use_container_width=True,
+            column_config={
+                "Step": st.column_config.TextColumn(
+                    help="e.g. Shop drawings & approval"),
+                "Duration (d)": st.column_config.NumberColumn(
+                    min_value=0.0, step=1.0),
+            },
+            key="tia_chain_editor")
+        st.session_state["tia_chain_steps"] = steps.to_dict("records")
+        rows = [(str(r.get("Step") or "").strip(),
+                 float(r.get("Duration (d)") or 0))
+                for _, r in steps.iterrows()
+                if str(r.get("Step") or "").strip()]
+        for i, (name, dur) in enumerate(rows):
+            fid = f"TIA-{(i + 1) * 10:03d}"
+            preds = ([FragnetLink(f"TIA-{i * 10:03d}")] if i else
+                     ([FragnetLink(entry)] if entry != NO_ENTRY else []))
+            succs = ([FragnetLink(exit_c)] if i == len(rows) - 1 else [])
+            fragnet.append(FragnetActivity(
+                act_id=fid, name=name, duration_days=dur,
+                predecessors=preds, successors=succs,
+                rationale="chain builder"))
+        if fragnet and entry == NO_ENTRY:
+            st.info("Chain starts at the data date (no predecessor tie-"
+                    "in) — fine for an instruction received now.")
+    else:
+        if frag_key not in st.session_state:
+            st.session_state[frag_key] = [{
+                "ID": "TIA-010", "Activity": "", "Duration (d)": 0.0,
+                "Predecessors": "", "Successors": "",
+                "Source / rationale": "", "Assumptions": "",
+            }]
+        st.caption(
+            "Links format: `ACTIVITYID:FS:0; TIA-010:SS:5` (type and lag "
+            "optional). Successors must tie back into existing "
+            "activities."
+        )
+        edited = st.data_editor(
+            pd.DataFrame(st.session_state[frag_key]),
+            num_rows="dynamic", use_container_width=True,
+            key=f"tia_editor_v{st.session_state.get('tia_frag_ver', 0)}")
+        for _, row in edited.iterrows():
+            fid = str(row.get("ID") or "").strip()
+            if not fid:
+                continue
+            try:
+                dur = float(row.get("Duration (d)") or 0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            fragnet.append(FragnetActivity(
+                act_id=fid, name=str(row.get("Activity") or "").strip(),
+                duration_days=dur,
+                predecessors=parse_links(str(row.get("Predecessors") or "")),
+                successors=parse_links(str(row.get("Successors") or "")),
+                rationale=str(row.get("Source / rationale") or "").strip(),
+                assumptions=str(row.get("Assumptions") or "").strip()))
+        st.session_state[frag_key] = edited.to_dict("records")
 
     issues = validate_fragnet(data, fragnet) if fragnet else []
     if issues:
