@@ -19,6 +19,7 @@ from .float_erosion import FloatErosionResult
 from .progress import ProgressResult
 from .resources import ResourceLoadingResult
 from .sequence_coding import SequenceResult
+from .tia import TIAResult
 from .windows import WindowsResult
 
 # Non-negotiable rules — always in the prompt, never user-editable, so a
@@ -181,6 +182,30 @@ the contemporaneity of the records.
 
 ### 6. Limitations
 Every standing caveat and warning provided, in full.""",
+    "tia": """\
+## Time Impact Analysis
+
+### 1. Executive Summary
+2-3 sentences: the event, the programme it was assessed against (with data
+date), and the forecast effect on completion in days.
+
+### 2. The Event
+What the event is, when it arose, the responsibility asserted (as an
+assertion, not a conclusion), and the evidence noted.
+
+### 3. The Fragnet
+Each fragnet activity with its duration, logic, the source/rationale for
+the duration, and every stated assumption — reproduce the assumptions
+verbatim.
+
+### 4. Forecast Impact
+Completion movement and the affected milestones with pre- and post-impact
+dates. State plainly where milestones are NOT affected. Note the
+calibration figure and what it means for reliance on absolute dates.
+
+### 5. Limitations
+Every standing caveat and warning provided, in full — including that the
+forecast is not an entitlement conclusion.""",
     "sequence": """\
 ## Construction Sequence Review (Analyst Coding)
 
@@ -906,4 +931,63 @@ def build_sequence_prompt(
     lines.extend(f"- {w}" for w in seq.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["sequence"]))
+    return "\n".join(lines)
+
+
+def build_tia_prompt(res: TIAResult, template: str | None = None) -> str:
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "—"
+    e = res.event
+    lines = ["<context>Prospective Time Impact Analysis: a fragnet "
+             "representing the event was inserted into an in-memory copy "
+             f"of programme '{res.programme_label}' (data date "
+             f"{fmt(res.data_date)}) and pre- vs post-impact forecasts "
+             "computed under one simplified CPM. Positive delta = later."
+             "</context>\n"]
+    lines.append(f"<event id='{e.event_id}'>")
+    lines.append(f"- Title: {e.title}")
+    if e.description:
+        lines.append(f"- Description: {e.description}")
+    if e.date_raised:
+        lines.append(f"- Date raised: {fmt(e.date_raised)}")
+    if e.responsibility_asserted:
+        lines.append(f"- Responsibility ASSERTED (not concluded): "
+                     f"{e.responsibility_asserted}")
+    if e.evidence_note:
+        lines.append(f"- Evidence noted: {e.evidence_note}")
+    lines.append("</event>\n")
+    lines.append("<fragnet>")
+    for f in res.fragnet:
+        preds = "; ".join(f"{l.other_id} {l.link_type}"
+                          + (f"{l.lag_days:+g}d" if l.lag_days else "")
+                          for l in f.predecessors) or "none"
+        succs = "; ".join(f"{l.other_id} {l.link_type}"
+                          + (f"{l.lag_days:+g}d" if l.lag_days else "")
+                          for l in f.successors) or "none"
+        lines.append(f"- {f.act_id} '{f.name}': {f.duration_days:g}d | "
+                     f"preds: {preds} | succs: {succs}")
+        if f.rationale:
+            lines.append(f"    source/rationale: {f.rationale}")
+        if f.assumptions:
+            lines.append(f"    ASSUMPTION: {f.assumptions}")
+    lines.append("</fragnet>\n")
+    lines.append("<forecast_impact>")
+    lines.append(f"- Completion: {fmt(res.completion_pre)} -> "
+                 f"{fmt(res.completion_post)} "
+                 f"({res.completion_delta_days:+.1f} days)"
+                 if res.completion_delta_days is not None else
+                 "- Completion impact not computable")
+    for m in res.milestone_impacts:
+        d = (f"{m.delta_days:+.0f}d" if m.delta_days is not None else "n/a")
+        lines.append(f"- {m.code} '{m.name}': {fmt(m.pre)} -> "
+                     f"{fmt(m.post)} ({d})")
+    if res.calibration_days is not None:
+        lines.append(f"- Calibration vs P6 scheduled finish: "
+                     f"{res.calibration_days:+.1f} days")
+    lines.append("</forecast_impact>\n")
+    lines.append("<caveats>")
+    lines.extend(f"- {c}" for c in res.caveats)
+    lines.extend(f"- {w}" for w in res.warnings)
+    lines.append("</caveats>\n")
+    lines.append(_instructions(template or DEFAULT_TEMPLATES["tia"]))
     return "\n".join(lines)

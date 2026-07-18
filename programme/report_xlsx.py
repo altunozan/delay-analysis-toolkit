@@ -841,3 +841,66 @@ def build_hierarchy_xlsx(h, narrative: str | None = None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+# --------------------------------------------------------------------------- #
+# Module 15 — Time Impact Analysis
+# --------------------------------------------------------------------------- #
+def build_tia_xlsx(res, narrative: str | None = None) -> bytes:
+    """res: programme.tia.TIAResult"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Impact"
+    _title(ws, "Time Impact Analysis", 5)
+    e = res.event
+    ws.cell(row=3, column=1, value=(
+        f"Event {e.event_id}: {e.title} | programme "
+        f"{res.programme_label} (DD {_fmt(res.data_date)}) | completion "
+        f"{_fmt(res.completion_pre)} -> {_fmt(res.completion_post)} "
+        + (f"({res.completion_delta_days:+.1f}d)"
+           if res.completion_delta_days is not None else "")
+    )).font = Font(italic=True)
+    _header_row(ws, 5, ["Milestone", "Name", "Pre-impact", "Post-impact",
+                        "Delta (d)"])
+    for i, m in enumerate(res.milestone_impacts, start=6):
+        vals = [m.code, m.name, _fmt(m.pre), _fmt(m.post), m.delta_days]
+        for col, v in enumerate(vals, start=1):
+            c = ws.cell(row=i, column=col, value=v)
+            c.border = THIN_BORDER
+            if col == 5 and isinstance(v, (int, float)):
+                c.fill = SLIP_FILL if v > 0 else GAIN_FILL
+    _autofit(ws, {1: 16, 2: 46, 3: 12, 4: 12, 5: 10})
+    ws.freeze_panes = "A6"
+
+    s2 = wb.create_sheet("Fragnet")
+    _header_row(s2, 1, ["ID", "Activity", "Duration (d)", "Predecessors",
+                        "Successors", "Source / rationale", "Assumptions",
+                        "Confidence"])
+    from .tia import links_to_text
+    for i, f in enumerate(res.fragnet, start=2):
+        vals = [f.act_id, f.name, f.duration_days,
+                links_to_text(f.predecessors), links_to_text(f.successors),
+                f.rationale, f.assumptions, f.confidence]
+        for col, v in enumerate(vals, start=1):
+            s2.cell(row=i, column=col, value=v).border = THIN_BORDER
+    _autofit(s2, {1: 12, 2: 38, 3: 12, 4: 26, 5: 26, 6: 34, 7: 30, 8: 11})
+    s2.freeze_panes = "A2"
+
+    s3 = wb.create_sheet("Event")
+    s3.column_dimensions["A"].width = 18
+    s3.column_dimensions["B"].width = 90
+    rows = [("Event ID", e.event_id), ("Title", e.title),
+            ("Description", e.description),
+            ("Date raised", _fmt(e.date_raised)),
+            ("Responsibility (asserted)", e.responsibility_asserted),
+            ("Evidence noted", e.evidence_note)]
+    for i, (k, v) in enumerate(rows, start=1):
+        s3.cell(row=i, column=1, value=k).font = Font(bold=True)
+        c = s3.cell(row=i, column=2, value=v)
+        c.alignment = WRAP
+
+    _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

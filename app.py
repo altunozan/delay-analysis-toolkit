@@ -18,6 +18,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+from datetime import datetime
 
 import altair as alt
 import pandas as pd
@@ -42,7 +43,19 @@ from programme.narrative import DEFAULT_TEMPLATES
 from dcma.report_xlsx import build_xlsx_report
 from programme.variance import DIMENSION_SEPARATOR
 from programme import (
+    DelayEvent,
+    FRAGNET_SYSTEM_PROMPT,
+    FragnetActivity,
     activity_code_types,
+    build_fragnet_prompt,
+    build_tia_prompt,
+    build_tia_xlsx,
+    find_template_activities,
+    links_to_text,
+    parse_fragnet_json,
+    parse_links,
+    run_tia,
+    validate_fragnet,
     BasisOfAnalysis,
     ReportSection,
     SourceFile,
@@ -2835,7 +2848,306 @@ def critical_path_tab() -> None:
 
 # ====================================================================== #
 
+# ====================================================================== #
+# Tab 15 — Prospective Time Impact Analysis (Module 15)
+# ====================================================================== #
+
+def tia_tab() -> None:
+    st.caption(
+        "Prospective TIA: describe a delay event, build its fragnet (AI "
+        "drafts, you confirm), insert it into a controlled in-memory copy "
+        "of the current update, and measure the forecast impact on "
+        "completion and milestones. The source programme is never changed."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in the **Data Intake** tab first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]
+    chosen = st.selectbox("Current approved update", names,
+                          index=len(names) - 1, key="tia_prog",
+                          help="The programme the fragnet is inserted "
+                               "into (in memory only).")
+    data = dict(files)[chosen]
+
+    # ---- the event -------------------------------------------------------
+    st.subheader("1 · The event")
+    ec1, ec2, ec3 = st.columns([1, 2, 1])
+    ev_id = ec1.text_input("Event ID", "EV-001", key="tia_ev_id")
+    ev_title = ec2.text_input("Title", key="tia_ev_title",
+                              placeholder="e.g. VO-012: additional "
+                                          "ceiling to Bill 15 lobby")
+    ev_date_s = ec3.text_input("Date raised (YYYY-MM-DD)", "",
+                               key="tia_ev_date")
+    ev_desc = st.text_area(
+        "Description (scope of the instructed / delayed work)",
+        key="tia_ev_desc", height=90)
+    ec4, ec5 = st.columns(2)
+    ev_resp = ec4.text_input("Responsibility asserted (not concluded)",
+                             key="tia_ev_resp")
+    ev_evid = ec5.text_input("Evidence noted (instruction ref, letters…)",
+                             key="tia_ev_evid")
+    try:
+        ev_date = (datetime.strptime(ev_date_s.strip(), "%Y-%m-%d")
+                   if ev_date_s.strip() else None)
+    except ValueError:
+        ev_date = None
+        st.warning("Date raised not parseable — leave blank or use "
+                   "YYYY-MM-DD.")
+    event = DelayEvent(ev_id.strip() or "EV-001", ev_title.strip(),
+                       ev_desc.strip(), ev_date, ev_resp.strip(),
+                       ev_evid.strip())
+
+    # ---- project-specific evidence: comparable activities ---------------
+    templates = find_template_activities(
+        data, f"{ev_title} {ev_desc}") if (ev_title or ev_desc) else []
+    with st.expander(
+        f"2 · Comparable activities in this programme "
+        f"({len(templates)} matched)", expanded=bool(templates)):
+        if templates:
+            st.caption("The project-specific evidence base for durations "
+                       "and logic patterns — ranked by name match.")
+            st.dataframe(pd.DataFrame([{
+                "Activity ID": t["code"], "Activity": t["name"],
+                "Duration (d)": (round(t["duration_days"], 1)
+                                 if t["duration_days"] is not None
+                                 else None),
+                "Matched on": t["matched"],
+            } for t in templates]), use_container_width=True,
+                hide_index=True)
+        else:
+            st.write("Describe the event above to search for comparable "
+                     "activities.")
+
+    # ---- fragnet: AI draft + analyst editor ------------------------------
+    st.subheader("3 · The fragnet")
+    frag_key = "tia_frag_rows"
+    ver = st.session_state.get("tia_frag_ver", 0)
+    with st.expander("🤖 AI fragnet draft (recommends — never inserts)",
+                     expanded=frag_key not in st.session_state):
+        fc1, fc2 = st.columns(2)
+        f_provider = fc1.selectbox(
+            "AI provider", options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"], key="tia_ai_prov")
+        f_info = PROVIDERS[f_provider]
+        f_model = model_selector(fc2, f_info, f"tia_ai_{f_provider}")
+        f_env = os.environ.get(f_info["env_var"], "")
+        if f_provider == "gemini" and not f_env:
+            f_env = os.environ.get("GOOGLE_API_KEY", "")
+        f_key = st.text_input(f"{f_info['label']} API key", type="password",
+                              value=f_env, key="tia_ai_key")
+        if st.button("Draft fragnet from the event",
+                     disabled=not f_key or not (ev_title or ev_desc),
+                     key="tia_ai_go", type="primary"):
+            try:
+                text = "".join(stream_narrative(
+                    f_provider, f_key,
+                    build_fragnet_prompt(event, templates, data),
+                    f_model or None, system=FRAGNET_SYSTEM_PROMPT))
+                draft = parse_fragnet_json(text, data)
+            except NarrativeError as exc:
+                draft = []
+                st.error(exc.message)
+            if draft:
+                st.session_state[frag_key] = [{
+                    "ID": f.act_id, "Activity": f.name,
+                    "Duration (d)": f.duration_days,
+                    "Predecessors": links_to_text(f.predecessors),
+                    "Successors": links_to_text(f.successors),
+                    "Source / rationale": f.rationale,
+                    "Assumptions": f.assumptions,
+                } for f in draft]
+                st.session_state["tia_frag_ver"] = ver + 1
+                st.rerun()
+            elif f_key:
+                st.warning("The model returned no valid fragnet — try "
+                           "adding detail to the event description.")
+
+    if frag_key not in st.session_state:
+        st.session_state[frag_key] = [{
+            "ID": "TIA-010", "Activity": "", "Duration (d)": 0.0,
+            "Predecessors": "", "Successors": "",
+            "Source / rationale": "", "Assumptions": "",
+        }]
+    st.caption(
+        "Edit freely; add rows as needed. Links format: "
+        "`ACTIVITYID:FS:0; TIA-010:SS:5` (type and lag optional). "
+        "Successors must tie back into existing activities for the event "
+        "to impact the programme."
+    )
+    edited = st.data_editor(
+        pd.DataFrame(st.session_state[frag_key]),
+        num_rows="dynamic", use_container_width=True,
+        key=f"tia_editor_v{st.session_state.get('tia_frag_ver', 0)}")
+    fragnet: list[FragnetActivity] = []
+    for _, row in edited.iterrows():
+        fid = str(row.get("ID") or "").strip()
+        if not fid:
+            continue
+        try:
+            dur = float(row.get("Duration (d)") or 0)
+        except (TypeError, ValueError):
+            dur = 0.0
+        fragnet.append(FragnetActivity(
+            act_id=fid, name=str(row.get("Activity") or "").strip(),
+            duration_days=dur,
+            predecessors=parse_links(str(row.get("Predecessors") or "")),
+            successors=parse_links(str(row.get("Successors") or "")),
+            rationale=str(row.get("Source / rationale") or "").strip(),
+            assumptions=str(row.get("Assumptions") or "").strip()))
+    st.session_state[frag_key] = edited.to_dict("records")
+
+    issues = validate_fragnet(data, fragnet) if fragnet else []
+    if issues:
+        st.warning("Fragnet validation:\n\n"
+                   + "\n".join(f"- {i}" for i in issues))
+    elif fragnet:
+        st.success("Fragnet passes the screening checks.")
+
+    # ---- run the impact ---------------------------------------------------
+    st.subheader("4 · Forecast impact")
+    if st.button("⚡ Run time impact analysis", type="primary",
+                 disabled=not fragnet, key="tia_run"):
+        st.session_state["tia_result"] = run_tia(
+            data, chosen, event, fragnet)
+    res = st.session_state.get("tia_result")
+    if res is None:
+        return
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Completion (pre-impact)",
+              f"{res.completion_pre:%d %b %Y}"
+              if res.completion_pre else "—")
+    m2.metric("Completion (post-impact)",
+              f"{res.completion_post:%d %b %Y}"
+              if res.completion_post else "—",
+              delta=(f"{res.completion_delta_days:+.1f} d"
+                     if res.completion_delta_days is not None else None),
+              delta_color="inverse")
+    m3.metric("Forecast impact",
+              f"{res.completion_delta_days:+.1f} days"
+              if res.completion_delta_days is not None else "—")
+    m4.metric("Calibration vs P6",
+              f"{res.calibration_days:+.1f} d"
+              if res.calibration_days is not None else "—",
+              help="Difference between this engine's pre-impact "
+                   "completion and P6's own scheduled finish — the "
+                   "approximation error. Judge the delta, not absolute "
+                   "dates.")
+    for w in res.warnings:
+        (st.success if w.startswith("Favourable") else st.warning)(w)
+
+    affected = [m for m in res.milestone_impacts
+                if (m.delta_days or 0) != 0]
+    st.dataframe(pd.DataFrame([{
+        "Milestone": m.code, "Name": m.name,
+        "Pre-impact": f"{m.pre:%Y-%m-%d}" if m.pre else "—",
+        "Post-impact": f"{m.post:%Y-%m-%d}" if m.post else "—",
+        "Delta (d)": m.delta_days,
+    } for m in (affected or res.milestone_impacts)]),
+        use_container_width=True, hide_index=True)
+    if not affected:
+        st.info("No milestone moves under this fragnet as modelled.")
+
+    with st.expander("Standing caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    narrative = ai_narrative_panel(
+        f"nar_tia_{event.event_id}",
+        lambda tmpl, r=res: build_tia_prompt(r, tmpl),
+        "tia",
+        DEFAULT_TEMPLATES["tia"],
+    )
+    st.download_button(
+        "⬇️ Download TIA report (Excel)",
+        data=build_tia_xlsx(res, narrative),
+        file_name=f"tia_{event.event_id}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+
+def landing_page() -> None:
+    st.title("Construction Delay Intelligence")
+    st.caption("Primavera P6 (.xer) analytical layer — choose a workflow. "
+               "Both share the same intake, engines, and audit principles.")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(
+            "### 🔍 Retrospective\n"
+            "**Forensic delay analysis** — what happened, and what drove "
+            "it.\n\n"
+            "- Data intake & inventory, DCMA health\n"
+            "- Baseline critical path & milestone shifts\n"
+            "- Revision comparison, windows, S-curve, float erosion\n"
+            "- As-built critical path with method triangulation\n"
+            "- Sequence coding & hierarchy rebuild\n"
+            "- Assembled expert-style report")
+        if st.button("Open retrospective analysis", type="primary",
+                     use_container_width=True):
+            st.session_state["app_mode"] = "Retrospective"
+            st.rerun()
+    with c2:
+        st.markdown(
+            "### ⚡ Prospective\n"
+            "**Time Impact Analysis & forecasting** — what an event will "
+            "do to completion.\n\n"
+            "- Same intake; schedule health check before analysis\n"
+            "- Delay event capture with asserted responsibility\n"
+            "- Comparable-activity evidence search\n"
+            "- AI-drafted fragnet — analyst edits and confirms\n"
+            "- Controlled insertion + pre/post impact measurement\n"
+            "- TIA narrative & Excel report")
+        if st.button("Open prospective analysis", type="primary",
+                     use_container_width=True):
+            st.session_state["app_mode"] = "Prospective"
+            st.rerun()
+    st.caption(
+        "Design principles: project evidence over generic knowledge · "
+        "nothing invented · every figure traceable · the analyst confirms "
+        "all material decisions · source data never modified."
+    )
+
+
+def prospective_section() -> None:
+    st.title("Prospective Analysis — Time Impact & Forecasting")
+    st.caption("Current approved update + delay event → fragnet → "
+               "controlled insertion → forecast impact.")
+    intake, dcma, tia = st.tabs([
+        "📥 Data Intake & Inventory",
+        "🩺 Schedule Health (DCMA)",
+        "⚡ Time Impact Analysis",
+    ])
+    with intake:
+        intake_tab()
+    with dcma:
+        dcma_tab()
+    with tia:
+        tia_tab()
+
+
 def main() -> None:
+    mode = st.session_state.get("app_mode")
+    if mode:
+        with st.sidebar:
+            st.radio("Workflow", ["Retrospective", "Prospective"],
+                     key="app_mode")
+            st.caption("Uploaded programmes are shared between both "
+                       "workflows.")
+    if not mode:
+        landing_page()
+        return
+    if st.session_state["app_mode"] == "Prospective":
+        prospective_section()
+        return
+    retrospective_section()
+
+
+def retrospective_section() -> None:
     st.title("Forensic Programme Analysis")
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 

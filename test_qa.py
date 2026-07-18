@@ -384,6 +384,47 @@ check("A21f config kinds restricted",
       config_from_json('{"dimensions": ["cal:"]}') is None
       and config_from_json('{"dimensions": ["udf:9", "wbs:2"]}') is not None)
 
+
+# A22. Prospective TIA engine
+from programme import (DelayEvent, FragnetActivity, FragnetLink, run_tia,
+                       validate_fragnet, parse_fragnet_json, parse_links,
+                       find_template_activities)
+from datetime import timedelta as _td
+_ev = DelayEvent("EV-QA", "test event")
+_fr = [FragnetActivity("TIA-010", "chain", 120,
+                       successors=[FragnetLink("KD15")])]
+_r = run_tia(U, "U", _ev, _fr)
+check("A22 TIA delta exact for a direct chain into completion",
+      _r.completion_post == _r.data_date + _td(days=120)
+      and (_r.completion_delta_days or 0) > 0)
+_r0 = run_tia(U, "U", _ev, [])
+check("A22b empty fragnet -> zero delta",
+      _r0.completion_pre == _r0.completion_post)
+check("A22c calibration disclosed", _r.calibration_days is not None
+      and any("Calibration" in w for w in _r.warnings))
+iss = validate_fragnet(U, [FragnetActivity("TIA-1", "x", -5)])
+check("A22d validation flags open ends + bad duration",
+      any("open start" in i for i in iss)
+      and any("duration" in i for i in iss))
+iss2 = validate_fragnet(U, [
+    FragnetActivity("TIA-A", "a", 5,
+                    predecessors=[FragnetLink("TIA-B")],
+                    successors=[FragnetLink("TIA-B"), FragnetLink("KD15")]),
+    FragnetActivity("TIA-B", "b", 5,
+                    predecessors=[FragnetLink("TIA-A")],
+                    successors=[FragnetLink("TIA-A")])])
+check("A22e circular fragnet detected",
+      any("Circular" in i for i in iss2))
+check("A22f fragnet json parser rejects invalid refs",
+      parse_fragnet_json('{"activities":[{"id":"TIA-1","name":"x",'
+                         '"duration_days":5,'
+                         '"successors":[{"id":"NOPE-99"}]}]}', U)[0]
+      .successors == [])
+check("A22g template search returns project evidence",
+      len(find_template_activities(U, "installation of ceiling")) > 0)
+check("A22h link text round-trip",
+      parse_links("A1:SS:5")[0].link_type == "SS")
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
