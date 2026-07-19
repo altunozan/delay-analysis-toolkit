@@ -499,9 +499,9 @@ from programme import (build_event_extraction_prompt, parse_event_candidates,
                        read_document, recommended_analysis_schedule)
 _docs = [("L1.txt", "On 12 March 2018 the Engineer issued Instruction "
                     "EI-88 requiring additional ceiling works.")]
-_p = build_event_extraction_prompt(_docs)
+_ep = build_event_extraction_prompt(_docs)
 check("A24 extraction prompt cites 52R-06 and the doc",
-      "52R-06" in _p and "L1.txt" in _p)
+      "52R-06" in _ep and "L1.txt" in _ep)
 _good = ('{"events":[{"title":"EI-88","source_doc":"L1.txt",'
          '"source_snippet":"issued Instruction EI-88","date_start":'
          '"2018-03-12","confidence":"high"}]}')
