@@ -73,6 +73,7 @@ from programme import (
     parse_fragnet_json,
     parse_links,
     run_tia,
+    run_cumulative_tia,
     validate_fragnet,
     BasisOfAnalysis,
     ReportSection,
@@ -3214,6 +3215,7 @@ def tia_tab() -> None:
     # ---- ③ fragnet -------------------------------------------------------
     if step == _TIA_STEPS[2]:
         st.subheader("③ Build the fragnet")
+        fragnet = _tia_fragnet_from_state(data)
         templates = find_template_activities(
             data, f"{event.title} {event.description}")
         packages = find_template_work_packages(
@@ -3321,6 +3323,36 @@ def tia_tab() -> None:
             st.session_state["tia_frag_rows"] = edited.to_dict("records")
             st.caption("Links: `ACTIVITYID:FS:0; TIA-010:SS:5`.")
         fragnet = _tia_fragnet_from_state(data)
+        if fragnet:
+            from datetime import timedelta as _td
+            es = (data.project.data_date if data.project
+                  and data.project.data_date else datetime.now())
+            prev_lid, pacts = None, []
+            for f in fragnet:
+                ef = es + _td(days=max(f.duration_days, 0.0))
+                lid = f"pv:{f.act_id}"
+                pacts.append({"id": f.act_id, "name": f.name,
+                              "start": es, "finish": ef,
+                              "status": "fragnet", "lid": lid,
+                              "links": []})
+                if prev_lid:
+                    pacts[-2]["links"] = [lid]
+                prev_lid, es = lid, ef
+            st_components.html(
+                build_gantt_html(
+                    group_tree([{"name": "Fragnet preview (sequential, "
+                                 "from the data date)",
+                                 "activities": pacts}]),
+                    data_date=(f"{data.project.data_date:%Y-%m-%d}"
+                               if data.project
+                               and data.project.data_date else None),
+                    title="Fragnet preview",
+                    categories=[{"key": "fragnet", "label": "fragnet",
+                                 "color": "#e8a33d"}]),
+                height=170 + 26 * len(pacts), scrolling=False)
+            st.caption("Preview only — sequential FS chain from the data "
+                       "date; the impact run applies the real tie-ins "
+                       "and calendars.")
         with st.expander("🧩 Recommend tie-ins & impacted sections "
                          "(AI ranks — the planner applies)",
                          expanded=False):
@@ -3553,6 +3585,43 @@ def tia_tab() -> None:
         st.markdown("**Audit trail**")
         st.table(pd.DataFrame([{"Item": k.replace("_", " ").title(),
                                 "Value": v} for k, v in audit.items()]))
+    reg7 = st.session_state.get("tia_register", {})
+    with st.expander(f"Σ Cumulative impact across the register "
+                     f"({len(reg7)} event(s))", expanded=False):
+        recs = []
+        for rec in reg7.values():
+            parsed = event_from_dict(rec)
+            if parsed and parsed[1]:
+                recs.append(parsed)
+        if len(recs) < 1:
+            st.caption("Save events with fragnets to the register to "
+                       "compute the chronological cumulative position.")
+        elif st.button(f"Compute cumulative impact ({len(recs)} events, "
+                       "date order)", key="tia_cum_go"):
+            st.session_state["tia_cum"] = run_cumulative_tia(
+                data, chosen, recs)
+        cum = st.session_state.get("tia_cum")
+        if cum and cum.get("rows"):
+            c1, c2 = st.columns(2)
+            c1.metric("Cumulative impact",
+                      f"{cum['total_delta_days']:+.1f} days"
+                      if cum["total_delta_days"] is not None else "—")
+            c2.metric("Final completion",
+                      f"{cum['completion_final']:%d %b %Y}"
+                      if cum.get("completion_final") else "—")
+            st.dataframe(pd.DataFrame([{
+                "Event": r["event_id"], "Title": r["title"],
+                "Date": (f"{r['date_raised']:%Y-%m-%d}"
+                         if r["date_raised"] else "—"),
+                "Incremental (d)": r["incremental_delta_days"],
+                "Completion after": (f"{r['completion_after']:%Y-%m-%d}"
+                                     if r["completion_after"] else "—"),
+            } for r in cum["rows"]]), use_container_width=True,
+                hide_index=True)
+            for w in cum["concurrency"]:
+                st.warning(w)
+            st.caption(cum["caveat"])
+
     narrative = ai_narrative_panel(
         f"nar_tia_{event.event_id}",
         lambda tmpl, r=res: build_tia_prompt(r, tmpl),

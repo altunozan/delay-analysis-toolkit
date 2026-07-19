@@ -541,6 +541,27 @@ _t2 = next(x for x in _u2.tasks if x.task_code == "TIA-920")
 check("A25c impacted xer: not-started with duration",
       _t2.status == "TK_NotStart" and _t2.target_drtn_hr is not None)
 
+
+# A26. Calendar-exact CPM + cumulative TIA + concurrency
+from programme import run_cumulative_tia
+check("A26 calendar-exact calibration within 2 days of P6",
+      abs(_r.calibration_days or 99) < 2, f"calib={_r.calibration_days}")
+from datetime import datetime as _dt6
+_evA = DelayEvent("EV-A", "a", date_raised=_dt6(2018, 5, 1))
+_evB = DelayEvent("EV-B", "b", date_raised=_dt6(2018, 5, 20))
+_cum = run_cumulative_tia(U, "U", [
+    (_evB, [FragnetActivity("TIA-B1", "b", 170,
+                            successors=[FragnetLink("KD35")])]),
+    (_evA, [FragnetActivity("TIA-A1", "a", 150,
+                            successors=[FragnetLink("KD15")])])])
+check("A26b cumulative inserts chronologically",
+      _cum["rows"][0]["event_id"] == "EV-A")
+check("A26c incremental deltas sum to total",
+      abs(sum(r["incremental_delta_days"] for r in _cum["rows"])
+          - _cum["total_delta_days"]) < 0.2)
+check("A26d overlapping driving chains flagged as concurrency candidates",
+      len(_cum["concurrency"]) == 1)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision

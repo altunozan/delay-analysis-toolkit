@@ -59,6 +59,44 @@ STANDING_CAVEATS = [
     "not this calculation.",
 ]
 
+
+
+def _calendar_masks(data: XerData) -> dict[str, frozenset]:
+    """clndr_id -> working weekdays (Mon=0..Sun=6) parsed from clndr_data.
+
+    P6 stores shifts per day 1..7 (Sun..Sat); a day with no shift content
+    is non-working. Unparseable calendars fall back to 7-day elapsed.
+    """
+    masks: dict[str, frozenset] = {}
+    for row in data.raw_tables.get("CALENDAR", []):
+        cid = (row.get("clndr_id") or "").strip()
+        blob = row.get("clndr_data") or ""
+        working: set[int] = set()
+        for d in range(1, 8):
+            m = re.search(r"\(0\|\|" + str(d) + r"\(\)?([^)]*)", blob)
+            if m and (":" in m.group(1) or "|" in m.group(1)):
+                working.add((d + 5) % 7)          # P6 1=Sun -> Mon=0 idx 6
+        if 0 < len(working) < 7:
+            masks[cid] = frozenset(working)
+    return masks
+
+
+def _add_working_days(start: datetime, days: float,
+                      mask: frozenset | None) -> datetime:
+    if not mask or len(mask) >= 7 or days <= 0:
+        return start + timedelta(days=days)
+    whole, frac = int(days), days - int(days)
+    cur = start
+    added = 0
+    guard = 0
+    while added < whole and guard < 20000:
+        cur += timedelta(days=1)
+        guard += 1
+        if cur.weekday() in mask:
+            added += 1
+    return cur + timedelta(days=frac)
+
+
 LINK_TYPES = ("FS", "SS", "FF", "SF")
 _REL_TO_SHORT = {"PR_FS": "FS", "PR_SS": "SS", "PR_FF": "FF", "PR_SF": "SF"}
 
@@ -394,7 +432,7 @@ class TIAResult:
 
 
 def _forward_pass(
-    nodes: dict[str, float],                 # id -> remaining duration days
+    nodes: dict[str, tuple],   # id -> (remaining days, working mask|None)
     preds: dict[str, list[tuple[str, str, float]]],  # id -> (pred, type, lag)
     start: datetime,
     started_at: dict[str, datetime],
@@ -428,40 +466,72 @@ def _forward_pass(
     EF: dict[str, datetime] = {}
     driver: dict[str, str] = {}
     for n in order:
-        dur = timedelta(days=max(nodes[n], 0.0))
+        n_days, n_mask = nodes[n]
         es = started_at.get(n, start)
         ef_c = None
         drv = None
         for p, ltype, lag in preds.get(n, []):
             if p not in EF:
                 continue
-            lagd = timedelta(days=lag)
+            p_mask = nodes[p][1] if p in nodes else None
             if ltype == "FS":
-                if EF[p] + lagd > es:
-                    es, drv = EF[p] + lagd, p
+                c = _add_working_days(EF[p], lag, p_mask)
+                if c > es:
+                    es, drv = c, p
             elif ltype == "SS":
-                if ES[p] + lagd > es:
-                    es, drv = ES[p] + lagd, p
+                c = _add_working_days(ES[p], lag, p_mask)
+                if c > es:
+                    es, drv = c, p
             elif ltype == "FF":
-                c = EF[p] + lagd
+                c = _add_working_days(EF[p], lag, p_mask)
                 if ef_c is None or c > ef_c:
                     ef_c = c
-                    if es + dur < c:
+                    if _add_working_days(es, n_days, n_mask) < c:
                         drv = p
             elif ltype == "SF":
-                c = ES[p] + lagd
+                c = _add_working_days(ES[p], lag, p_mask)
                 if ef_c is None or c > ef_c:
                     ef_c = c
-                    if es + dur < c:
+                    if _add_working_days(es, n_days, n_mask) < c:
                         drv = p
-        ef = es + dur
+        ef = _add_working_days(es, max(n_days, 0.0), n_mask)
         if ef_c is not None and ef_c > ef:
             ef = ef_c
-            es = ef - dur
         ES[n], EF[n] = es, ef
         if drv is not None:
             driver[n] = drv
     return ES, EF, warnings, driver
+
+
+
+
+def _build_network(data: XerData, config, dd):
+    """Incomplete-activity network with per-activity working-day masks."""
+    masks = _calendar_masks(data)
+    inc = {t.task_id: t for t in data.tasks
+           if not t.is_loe_or_wbs and t.is_incomplete}
+    code_of = {tid: t.task_code for tid, t in inc.items()}
+    nodes: dict[str, tuple] = {}
+    started: dict[str, datetime] = {}
+    for t in inc.values():
+        hpd = data.hours_per_day(t, config)
+        rem = t.remaining_duration_days(hpd)
+        if rem is None:
+            rem = t.original_duration_days(hpd) or 0.0
+        nodes[t.task_code] = (max(rem, 0.0), masks.get(t.clndr_id))
+        if t.act_start is not None:
+            started[t.task_code] = dd
+    preds: dict[str, list] = {n: [] for n in nodes}
+    for rel in data.relationships:
+        s = code_of.get(rel.task_id)
+        p = code_of.get(rel.pred_task_id)
+        if s is None or p is None:
+            continue
+        t = inc[rel.pred_task_id]
+        hpd = data.hours_per_day(t, config)
+        lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
+        preds[s].append((p, _REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
+    return inc, nodes, preds, started
 
 
 def run_tia(
@@ -485,30 +555,7 @@ def run_tia(
         return result
     result.data_date = dd
 
-    # --- network of incomplete activities -------------------------------
-    inc = {t.task_id: t for t in data.tasks
-           if not t.is_loe_or_wbs and t.is_incomplete}
-    code_of = {tid: t.task_code for tid, t in inc.items()}
-    nodes: dict[str, float] = {}
-    started: dict[str, datetime] = {}
-    for t in inc.values():
-        hpd = data.hours_per_day(t, config)
-        rem = t.remaining_duration_days(hpd)
-        if rem is None:
-            rem = t.original_duration_days(hpd) or 0.0
-        nodes[t.task_code] = max(rem, 0.0)
-        if t.act_start is not None:
-            started[t.task_code] = dd
-    preds: dict[str, list[tuple[str, str, float]]] = {n: [] for n in nodes}
-    for rel in data.relationships:
-        s = code_of.get(rel.task_id)
-        p = code_of.get(rel.pred_task_id)
-        if s is None or p is None:
-            continue
-        t = inc[rel.pred_task_id]
-        hpd = data.hours_per_day(t, config)
-        lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
-        preds[s].append((p, _REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
+    inc, nodes, preds, started = _build_network(data, config, dd)
 
     ES0, EF0, w0, drv0 = _forward_pass(
         dict(nodes), {k: list(v) for k, v in preds.items()}, dd,
@@ -517,8 +564,10 @@ def run_tia(
     # --- insert the fragnet into a COPY ----------------------------------
     nodes_p = dict(nodes)
     preds_p = {k: list(v) for k, v in preds.items()}
+    fmasks = _calendar_masks(data)
     for f in fragnet:
-        nodes_p[f.act_id] = max(f.duration_days or 0.0, 0.0)
+        nodes_p[f.act_id] = (max(f.duration_days or 0.0, 0.0),
+                             fmasks.get(f.calendar_id))
         preds_p.setdefault(f.act_id, [])
         for l in f.predecessors:
             preds_p[f.act_id].append((l.other_id, l.link_type, l.lag_days))
@@ -1039,3 +1088,93 @@ def build_fragnet_variant_prompt(
         "description supports them.</task>",
         f"<task>{instruction} The fragnet is for insertion into the "
         "current programme.</task>")
+
+
+# --------------------------------------------------------------------------- #
+# Cumulative multi-event TIA + concurrency screening
+# --------------------------------------------------------------------------- #
+
+CUMULATIVE_CAVEAT = (
+    "Cumulative impacts insert each event's confirmed fragnet in date "
+    "order into the schedule as already impacted by the earlier events; "
+    "each event's figure is its INCREMENTAL effect in that sequence. "
+    "Concurrency lines are a screening of overlapping driving chains "
+    "only — a concurrency determination is a contractual analysis "
+    "outside this calculation."
+)
+
+
+def run_cumulative_tia(
+    data: XerData,
+    programme_label: str,
+    records: list[tuple[DelayEvent, list[FragnetActivity]]],
+    *,
+    config: DCMAConfig | None = None,
+) -> dict:
+    """Insert saved events chronologically; measure incremental deltas.
+
+    Returns {"rows": [...], "total_delta_days", "completion_pre",
+    "completion_final", "concurrency": [...], "caveat"}.
+    """
+    config = config or DCMAConfig()
+    dd = data.project.data_date if data.project else None
+    if dd is None or not records:
+        return {"rows": [], "total_delta_days": None,
+                "concurrency": [], "caveat": CUMULATIVE_CAVEAT}
+    ordered = sorted(records,
+                     key=lambda r: r[0].date_raised or dd)
+    inc, nodes, preds, started = _build_network(data, config, dd)
+    _, EF, _, _ = _forward_pass(dict(nodes),
+                                {k: list(v) for k, v in preds.items()},
+                                dd, started)
+    pre = max(EF.values()) if EF else None
+    fmasks = _calendar_masks(data)
+
+    rows = []
+    spans = {}
+    prev = pre
+    nodes_c = dict(nodes)
+    preds_c = {k: list(v) for k, v in preds.items()}
+    for event, fragnet in ordered:
+        for f in fragnet:
+            nodes_c[f.act_id] = (max(f.duration_days or 0.0, 0.0),
+                                 fmasks.get(f.calendar_id))
+            preds_c.setdefault(f.act_id, [])
+            for l in f.predecessors:
+                preds_c[f.act_id].append((l.other_id, l.link_type,
+                                          l.lag_days))
+            for l in f.successors:
+                preds_c.setdefault(l.other_id, []).append(
+                    (f.act_id, l.link_type, l.lag_days))
+        ES_i, EF_i, _, _ = _forward_pass(
+            dict(nodes_c), {k: list(v) for k, v in preds_c.items()},
+            dd, started)
+        post = max(EF_i.values()) if EF_i else None
+        delta = (round((post - prev).total_seconds() / 86400, 1)
+                 if post and prev else None)
+        f_es = [ES_i[f.act_id] for f in fragnet if f.act_id in ES_i]
+        f_ef = [EF_i[f.act_id] for f in fragnet if f.act_id in EF_i]
+        if f_es and f_ef:
+            spans[event.event_id] = (min(f_es), max(f_ef), delta)
+        rows.append({"event_id": event.event_id, "title": event.title,
+                     "date_raised": event.date_raised,
+                     "incremental_delta_days": delta,
+                     "completion_after": post})
+        prev = post
+
+    concurrency = []
+    evs = list(spans.items())
+    for i in range(len(evs)):
+        for j in range(i + 1, len(evs)):
+            (a, (as_, af, ad)), (b, (bs, bf, bd)) = evs[i], evs[j]
+            if (ad or 0) > 0 and (bd or 0) > 0 and as_ <= bf and bs <= af:
+                lo, hi = max(as_, bs), min(af, bf)
+                concurrency.append(
+                    f"{a} and {b} both add delay and their chains overlap "
+                    f"{lo:%Y-%m-%d} → {hi:%Y-%m-%d} — concurrency "
+                    "candidate (screening only).")
+    total = (round((prev - pre).total_seconds() / 86400, 1)
+             if prev and pre else None)
+    return {"rows": rows, "total_delta_days": total,
+            "completion_pre": pre, "completion_final": prev,
+            "concurrency": concurrency, "caveat": CUMULATIVE_CAVEAT}

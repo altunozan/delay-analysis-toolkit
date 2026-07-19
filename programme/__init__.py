@@ -179,6 +179,8 @@ from .tia import (
     parse_logic_recommendation_json,
     parse_links,
     run_tia,
+    run_cumulative_tia,
+    CUMULATIVE_CAVEAT,
     validate_fragnet,
 )
 from .xer_export import EXPORT_CAVEAT, build_impacted_xer
@@ -339,6 +341,8 @@ __all__ = [
     "parse_logic_recommendation_json",
     "parse_links",
     "run_tia",
+    "run_cumulative_tia",
+    "CUMULATIVE_CAVEAT",
     "EXPORT_CAVEAT",
     "build_impacted_xer",
     "validate_fragnet",
