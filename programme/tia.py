@@ -386,6 +386,8 @@ class TIAResult:
     completion_delta_days: float | None = None
     milestone_impacts: list[MilestoneImpact] = field(default_factory=list)
     fragnet_dates: dict = field(default_factory=dict)   # act_id -> (ES, EF)
+    path_pre: list = field(default_factory=list)    # driving chain dicts
+    path_post: list = field(default_factory=list)
     calibration_days: float | None = None   # our pre vs P6's own forecast
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
@@ -424,30 +426,42 @@ def _forward_pass(
 
     ES: dict[str, datetime] = {}
     EF: dict[str, datetime] = {}
+    driver: dict[str, str] = {}
     for n in order:
         dur = timedelta(days=max(nodes[n], 0.0))
         es = started_at.get(n, start)
         ef_c = None
+        drv = None
         for p, ltype, lag in preds.get(n, []):
             if p not in EF:
                 continue
             lagd = timedelta(days=lag)
             if ltype == "FS":
-                es = max(es, EF[p] + lagd)
+                if EF[p] + lagd > es:
+                    es, drv = EF[p] + lagd, p
             elif ltype == "SS":
-                es = max(es, ES[p] + lagd)
+                if ES[p] + lagd > es:
+                    es, drv = ES[p] + lagd, p
             elif ltype == "FF":
                 c = EF[p] + lagd
-                ef_c = c if ef_c is None else max(ef_c, c)
+                if ef_c is None or c > ef_c:
+                    ef_c = c
+                    if es + dur < c:
+                        drv = p
             elif ltype == "SF":
                 c = ES[p] + lagd
-                ef_c = c if ef_c is None else max(ef_c, c)
+                if ef_c is None or c > ef_c:
+                    ef_c = c
+                    if es + dur < c:
+                        drv = p
         ef = es + dur
         if ef_c is not None and ef_c > ef:
             ef = ef_c
             es = ef - dur
         ES[n], EF[n] = es, ef
-    return ES, EF, warnings
+        if drv is not None:
+            driver[n] = drv
+    return ES, EF, warnings, driver
 
 
 def run_tia(
@@ -496,8 +510,9 @@ def run_tia(
         lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
         preds[s].append((p, _REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
 
-    ES0, EF0, w0 = _forward_pass(dict(nodes), {k: list(v) for k, v
-                                               in preds.items()}, dd, started)
+    ES0, EF0, w0, drv0 = _forward_pass(
+        dict(nodes), {k: list(v) for k, v in preds.items()}, dd,
+        started)
 
     # --- insert the fragnet into a COPY ----------------------------------
     nodes_p = dict(nodes)
@@ -510,11 +525,31 @@ def run_tia(
         for l in f.successors:
             preds_p.setdefault(l.other_id, []).append(
                 (f.act_id, l.link_type, l.lag_days))
-    ES1, EF1, w1 = _forward_pass(nodes_p, preds_p, dd, started)
+    ES1, EF1, w1, drv1 = _forward_pass(nodes_p, preds_p, dd, started)
     result.warnings.extend(sorted(set(w0 + w1)))
     result.fragnet_dates = {f.act_id: (ES1.get(f.act_id),
                                        EF1.get(f.act_id))
                             for f in fragnet}
+    names = {t.task_code: t.name for t in inc.values()}
+    names.update({f.act_id: f.name for f in fragnet})
+    frag_ids = {f.act_id for f in fragnet}
+
+    def _chain(EF, ES, driver):
+        if not EF:
+            return []
+        cur = max(EF, key=lambda k: EF[k])
+        chain, seen = [], set()
+        while cur and cur not in seen and len(chain) < 400:
+            seen.add(cur)
+            chain.append({"id": cur, "name": names.get(cur, cur),
+                          "start": ES.get(cur), "finish": EF.get(cur),
+                          "fragnet": cur in frag_ids})
+            cur = driver.get(cur)
+        chain.reverse()
+        return chain
+
+    result.path_pre = _chain(EF0, ES0, drv0)
+    result.path_post = _chain(EF1, ES1, drv1)
 
     # --- milestone + completion impacts ----------------------------------
     ms = [t for t in inc.values() if t.is_milestone]

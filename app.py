@@ -3483,6 +3483,61 @@ def tia_tab() -> None:
             "Delta (d)": m.delta_days,
         } for m in (affected or res.milestone_impacts)]),
             use_container_width=True, hide_index=True)
+        # --- longest-path comparison: pre vs post impact ---------------
+        if res.path_pre or res.path_post:
+            st.subheader("Longest-path comparison — pre vs post impact")
+
+            def _path_acts(path, prefix, frag_cat=False):
+                out = []
+                for i, p in enumerate(path):
+                    cat = ("fragnet" if (frag_cat and p["fragnet"])
+                           else prefix)
+                    out.append({
+                        "id": p["id"], "name": p["name"],
+                        "start": p["start"], "finish": p["finish"],
+                        "status": cat, "lid": f"{prefix}:{p['id']}",
+                        "links": ([f"{prefix}:{path[i + 1]['id']}"]
+                                  if i + 1 < len(path) else []),
+                    })
+                return out
+
+            pre_acts = _path_acts(res.path_pre, "pre")
+            post_all = _path_acts(res.path_post, "post", frag_cat=True)
+            frag_acts = [a for a in post_all if a["status"] == "fragnet"]
+            main_acts = [a for a in post_all if a["status"] != "fragnet"]
+            post_children = ([{"name": f"Fragnet — {event.event_id}",
+                               "activities": frag_acts}]
+                             if frag_acts else [])
+            tree = group_tree([
+                {"name": f"Pre-impact longest path "
+                         f"(completes {res.completion_pre:%d %b %Y})"
+                 if res.completion_pre else "Pre-impact longest path",
+                 "activities": pre_acts},
+                {"name": f"Post-impact longest path "
+                         f"(completes {res.completion_post:%d %b %Y})"
+                 if res.completion_post else "Post-impact longest path",
+                 "children": post_children,
+                 "activities": main_acts},
+            ])
+            dd_t = (f"{res.data_date:%Y-%m-%d}"
+                    if res.data_date else None)
+            st_components.html(
+                build_gantt_html(
+                    tree, data_date=dd_t,
+                    title=f"TIA {event.event_id} — driving paths",
+                    categories=[
+                        {"key": "pre", "label": "pre-impact path",
+                         "color": "#4c8ede"},
+                        {"key": "post", "label": "post-impact path",
+                         "color": "#cf222e"},
+                        {"key": "fragnet", "label": "fragnet (event)",
+                         "color": "#e8a33d"},
+                    ]),
+                height=430, scrolling=False)
+            st.caption("Arrows = driving logic along each path · the "
+                       "fragnet sits as its own group inside the "
+                       "post-impact path · dashed red line = data date.")
+
         with st.expander("Standing caveats (always apply)"):
             for c in res.caveats:
                 st.write("•", c)

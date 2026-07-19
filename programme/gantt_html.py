@@ -232,6 +232,7 @@ function render() {
   rowsEl.innerHTML = "";
   let shown = 0;
   const W = totalW();
+  const REG = {}, LINKS = [];
   function addRow(labelHtml, indent, isGroup, onclick, laneKids) {
     const row = document.createElement("div"); row.className = "row";
     const lab = document.createElement("div");
@@ -280,12 +281,47 @@ function render() {
                         FILL[a.status] || "#9aa4b2",
                         EDGE[a.status] || "#9aa4b280", tip));
         }
+        if (a.lid) {
+          const t0 = Date.parse(a.start);
+          const t1 = Date.parse(a.finish || a.start);
+          REG[a.lid] = {y: shown * 26 + 13, xs: X(t0),
+                        xe: X(t0) + Math.max((t1 - t0)/DAY*pxPerDay(), 3)};
+          for (const tgt of (a.links || [])) LINKS.push([a.lid, tgt]);
+        }
         addRow(`<span class="caret"></span>${esc(a.id)} · ${esc(a.name)}`,
                depth + 1, false, null, kidz);
       }
     }
   })(TREE, 0);
 
+  // logic connectors between linked bars (drawn over the lanes)
+  const wires = LINKS.filter(([s, t]) => REG[s] && REG[t]);
+  if (wires.length) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("width", W);
+    svg.setAttribute("height", shown * 26);
+    svg.style.cssText = "position:absolute;top:0;left:" + TREEW +
+      "px;pointer-events:none;z-index:4";
+    const defs = document.createElementNS(NS, "defs");
+    defs.innerHTML = '<marker id="arr" markerWidth="7" markerHeight="7"' +
+      ' refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 z"' +
+      ' fill="#7c8798"/></marker>';
+    svg.appendChild(defs);
+    for (const [s, t] of wires) {
+      const A = REG[s], B = REG[t];
+      const midx = A.xe + 7;
+      const p = document.createElementNS(NS, "path");
+      p.setAttribute("d", `M ${A.xe} ${A.y} H ${midx} V ${B.y} ` +
+                          `H ${Math.max(B.xs - 2, midx)}`);
+      p.setAttribute("fill", "none");
+      p.setAttribute("stroke", "#7c8798");
+      p.setAttribute("stroke-width", "1.3");
+      p.setAttribute("marker-end", "url(#arr)");
+      svg.appendChild(p);
+    }
+    rowsEl.appendChild(svg);
+  }
   // data-date marker spanning all rows
   if (DATA_DATE) {
     const dd = document.createElement("div");
@@ -361,7 +397,9 @@ def group_tree(groups: list[dict]) -> dict:
                          "start": iso(a.get("start")),
                          "finish": iso(a.get("finish")),
                          "milestone": bool(a.get("milestone")),
-                         "status": a.get("status", "")})
+                         "status": a.get("status", ""),
+                         "lid": a.get("lid", ""),
+                         "links": list(a.get("links", []))})
         kids = [node(c, level + 1) for c in g.get("children", [])]
         count = len(acts) + sum(k["count"] for k in kids)
         complete = (sum(1 for a in acts if a["status"] == "complete")
