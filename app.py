@@ -48,7 +48,12 @@ from programme import (
     FragnetActivity,
     activity_code_types,
     FRAGNET_VARIANTS,
+    LOGIC_SYSTEM_PROMPT,
+    assess_event_scope,
     build_fragnet_prompt,
+    build_logic_recommendation_prompt,
+    find_template_work_packages,
+    parse_logic_recommendation_json,
     build_fragnet_variant_prompt,
     build_tia_prompt,
     EXTRACTION_SYSTEM_PROMPT,
@@ -3151,6 +3156,21 @@ def tia_tab() -> None:
             st.info(f"AACE RP 52R-06: the last update before this event "
                     f"is **{rec}** — currently analysing **{chosen}** "
                     "(change in step ①).")
+        if event.title:
+            scope = assess_event_scope(event)
+            with st.expander("🧭 Event understanding (deterministic — "
+                             "review before drafting)", expanded=False):
+                st.markdown(f"**Nature of work:** {scope.work_nature}")
+                st.markdown("**Lifecycle stages indicated:** "
+                            + "; ".join(scope.lifecycle_stages))
+                if scope.enabling_requirements:
+                    st.markdown("**Enabling requirements:** "
+                                + "; ".join(scope.enabling_requirements))
+                if scope.unanswered_questions:
+                    st.markdown("**Unanswered questions "
+                                "(answer to improve the draft):**")
+                    for q in scope.unanswered_questions:
+                        st.write("•", q)
         st.caption("Continue to **③ Fragnet** above."
                    if event.title else
                    "Give the event a title to continue.")
@@ -3165,8 +3185,19 @@ def tia_tab() -> None:
         st.subheader("③ Build the fragnet")
         templates = find_template_activities(
             data, f"{event.title} {event.description}")
-        with st.expander(f"Comparable activities in this programme "
-                         f"({len(templates)})", expanded=False):
+        packages = find_template_work_packages(
+            data, f"{event.title} {event.description}")
+        with st.expander(f"Comparable activities & work packages "
+                         f"({len(templates)} / {len(packages)})",
+                         expanded=False):
+            for pkg in packages:
+                st.markdown(f"**{pkg['wbs_name']}** — "
+                            f"{pkg['activity_count']} activities, matched "
+                            f"on {pkg['matched'] or '—'}; existing "
+                            "sequence:")
+                st.caption(" → ".join(
+                    f"{a['code']} {a['name'][:30]}"
+                    for a in pkg["activities"][:6]))
             if templates:
                 st.dataframe(pd.DataFrame([{
                     "Activity ID": t["code"], "Activity": t["name"],
@@ -3259,6 +3290,45 @@ def tia_tab() -> None:
             st.session_state["tia_frag_rows"] = edited.to_dict("records")
             st.caption("Links: `ACTIVITYID:FS:0; TIA-010:SS:5`.")
         fragnet = _tia_fragnet_from_state(data)
+        with st.expander("🧩 Recommend tie-ins & impacted sections "
+                         "(AI ranks — the planner applies)",
+                         expanded=False):
+            if st.button("Recommend logic for this fragnet",
+                         key="tia_logic_go", type="primary",
+                         disabled=not ai_key or not fragnet):
+                try:
+                    text = "".join(stream_narrative(
+                        ai_provider, ai_key,
+                        build_logic_recommendation_prompt(
+                            event, fragnet, data),
+                        ai_model, system=LOGIC_SYSTEM_PROMPT))
+                    st.session_state["tia_logic_rec"] = (
+                        parse_logic_recommendation_json(text, data))
+                except NarrativeError as exc:
+                    st.error(exc.message)
+            if not ai_key:
+                st.caption("Register an API key in step ① to enable "
+                           "recommendations.")
+            rec_l = st.session_state.get("tia_logic_rec") or {}
+            for key_r, label_r in (("predecessors", "Predecessor tie-in "
+                                    "candidates"),
+                                   ("successors", "Successor tie-in "
+                                    "candidates"),
+                                   ("impacted_sections",
+                                    "Potentially impacted sections / "
+                                    "milestones")):
+                items = rec_l.get(key_r) or []
+                if items:
+                    st.markdown(f"**{label_r}** (ranked)")
+                    st.dataframe(pd.DataFrame(items),
+                                 use_container_width=True,
+                                 hide_index=True)
+            for w in rec_l.get("warnings", []):
+                st.warning(w)
+            if rec_l:
+                st.caption("Apply your chosen tie-ins via the chain "
+                           "builder pickers or the advanced grid — "
+                           "recommendations are never auto-inserted.")
         st.caption(f"{len(fragnet)} fragnet activities. Continue to "
                    "**④ Validate & confirm** above."
                    if fragnet else "Add at least one step to continue.")
@@ -3284,6 +3354,18 @@ def tia_tab() -> None:
             "Predecessors": links_to_text(f.predecessors),
             "Successors": links_to_text(f.successors),
         } for f in fragnet]), use_container_width=True, hide_index=True)
+        ms_opts = [t.task_code for t in sorted(
+            (x for x in data.tasks if x.is_milestone
+             and not x.is_loe_or_wbs and x.is_incomplete),
+            key=lambda x: (x.early_finish or x.early_start
+                           or datetime.max), reverse=True)]
+        ms_names = {t.task_code: f"{t.task_code} — {t.name}"
+                    for t in data.tasks}
+        if ms_opts:
+            st.selectbox("Impacted milestone to prioritise in the "
+                         "results", ms_opts,
+                         format_func=lambda c: ms_names.get(c, c),
+                         key="tia_target_ms")
         st.markdown("**Analyst confirmation** — required before the run:")
         dd = data.project.data_date if data.project else None
         checks = {
@@ -3315,7 +3397,9 @@ def tia_tab() -> None:
         st.subheader("⑤ Run the impact")
         if st.button("⚡ Run time impact analysis", type="primary",
                      key="tia_run"):
-            res = run_tia(data, chosen, event, fragnet)
+            res = run_tia(data, chosen, event, fragnet,
+                          target_milestone=st.session_state.get(
+                              'tia_target_ms'))
             st.session_state["tia_result"] = res
             st.session_state["tia_audit"] = {
                 "analysed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -3392,7 +3476,7 @@ def tia_tab() -> None:
         st.success(f"Saved '{event.event_id}'.")
     sc2.download_button(
         "⬇️ Download TIA report (Excel)",
-        data=build_tia_xlsx(res, narrative),
+        data=build_tia_xlsx(res, narrative, audit=audit),
         file_name=f"tia_{event.event_id}.xlsx",
         mime="application/vnd.openxmlformats-officedocument."
              "spreadsheetml.sheet")

@@ -2,6 +2,40 @@
 
 A Streamlit-based preliminary delay analysis automation system for Primavera P6 projects.
 
+## Prospective TIA workflow
+
+Prospective mode uses one guided seven-step process:
+
+1. Select Update & Connect AI
+2. Register Event
+3. Generate & Review Fragnet
+4. Recommend & Validate Logic
+5. Run Time Impact
+6. Review & Explain Results
+7. Export Report & Audit Trail
+
+One XER is sufficient for a prospective TIA. Two or more revisions also
+enable historical comparison. Bundled sample XER files can be loaded or
+downloaded from Data Intake.
+
+The API key is held in the active Streamlit session only. AI interprets
+documents, drafts alternatives, recommends programme tie-ins and explains
+results. Deterministic code validates IDs and logic and performs the pre/post
+CPM comparison. The planner confirms every material decision. Source XER files
+are never modified.
+
+## Retrospective delay-analysis workflow
+
+Retrospective mode offers one tab per module: intake & inventory, DCMA
+health, baseline critical path, milestone shifts, planned vs as-recorded,
+revision comparison, windows, S-curve, float erosion, resource loading,
+as-built critical path (with method triangulation), sequence coding,
+hierarchy rebuild, Explain This Delay, and the assembled report.
+
+Recorded facts, deterministic calculations, AI candidates and analyst
+conclusions remain separate. AI does not determine responsibility,
+entitlement, excusability, compensability or concurrency.
+
 ## Features
 
 - **Module 0: Data Inventory** — Intake & revision overview across multiple XER exports

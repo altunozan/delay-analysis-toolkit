@@ -75,6 +75,69 @@ class DelayEvent:
     date_raised: datetime | None = None
     responsibility_asserted: str = ""     # asserted, never concluded
     evidence_note: str = ""
+    area: str = ""
+    discipline: str = ""
+    project_context: str = ""
+    work_package: str = ""
+
+
+@dataclass
+class EventScopeAssessment:
+    """Transparent, reviewable interpretation before any fragnet exists."""
+    work_nature: str
+    lifecycle_stages: list[str]
+    enabling_requirements: list[str]
+    search_terms: list[str]
+    unanswered_questions: list[str]
+
+
+def assess_event_scope(event: DelayEvent) -> EventScopeAssessment:
+    """Create a conservative retrieval brief from the recorded event facts.
+
+    This does not create activities. It makes the assumptions and missing
+    information visible before programme retrieval or AI drafting.
+    """
+    text = " ".join((event.title, event.description, event.work_package,
+                     event.area, event.discipline)).lower()
+    stages: list[str] = []
+    enabling: list[str] = []
+    if any(k in text for k in ("design", "drawing", "ifc", "shop drawing")):
+        stages.append("Design / information release")
+    if any(k in text for k in ("approve", "review", "submittal", "rfi")):
+        stages.append("Review / approval")
+    if any(k in text for k in ("procure", "material", "equipment", "vendor")):
+        stages.append("Procurement / delivery")
+    if any(k in text for k in ("test", "commission", "inspect", "handover")):
+        stages.append("Testing / inspection / handover")
+    stages.append("Construction / implementation")
+    if any(k in text for k in ("access", "permit", "survey", "mobil")):
+        enabling.append("Access / permit / survey / mobilisation")
+    if any(k in text for k in ("temporary", "shoring", "scaffold", "cofferdam")):
+        enabling.append("Temporary works")
+    if any(k in text for k in ("rework", "remove", "demol", "replace")):
+        nature = "Rework / replacement"
+    elif any(k in text for k in ("additional", "new", "variation", "instruct")):
+        nature = "Additional / changed permanent work"
+    else:
+        nature = "Unclassified — analyst confirmation required"
+    words = [w for w in re.findall(r"[a-z]{3,}", text) if w not in _STOP]
+    search_terms = list(dict.fromkeys(words))[:20]
+    questions = []
+    if not event.area:
+        questions.append("Which location, system or workface is affected?")
+    if not event.discipline:
+        questions.append("Which discipline owns the physical scope?")
+    if not event.work_package:
+        questions.append("What construction work package best represents the event?")
+    if not event.evidence_note:
+        questions.append("Which instruction, drawing, RFI or notice evidences the scope?")
+    if not any(s.startswith("Design") for s in stages):
+        questions.append("Is design or information release required before execution?")
+    if not any(s.startswith("Procurement") for s in stages):
+        questions.append("Are procurement or delivery activities required?")
+    return EventScopeAssessment(nature, list(dict.fromkeys(stages)),
+                                list(dict.fromkeys(enabling)), search_terms,
+                                questions)
 
 
 @dataclass
@@ -94,6 +157,7 @@ class FragnetActivity:
     rationale: str = ""            # evidence / source / template
     assumptions: str = ""
     confidence: str = "medium"     # low | medium | high
+    calendar_id: str = ""          # selected P6 calendar; calculation caveat applies
 
 
 def parse_links(text: str) -> list[FragnetLink]:
@@ -161,6 +225,54 @@ def find_template_activities(
     return scored[:top_n]
 
 
+def find_template_work_packages(
+    data: XerData, text: str, top_n: int = 5,
+) -> list[dict]:
+    """Rank project WBS work packages and expose their existing sequence.
+
+    The recommendation remains retrieval-led: each candidate is made only
+    from activities already present in the uploaded programme.
+    """
+    matches = find_template_activities(data, text, top_n=40)
+    if not matches:
+        return []
+    match_by_code = {m["code"]: m for m in matches}
+    task_rows = data.raw_tables.get("TASK", [])
+    wbs_rows = data.raw_tables.get("PROJWBS", [])
+    wbs_name = {r.get("wbs_id", ""): (r.get("wbs_short_name")
+                or r.get("wbs_name") or r.get("wbs_id", ""))
+                for r in wbs_rows}
+    wbs_for = {r.get("task_id", ""): r.get("wbs_id", "")
+               for r in task_rows}
+    packages: dict[str, dict] = {}
+    for task in data.tasks:
+        if task.task_code not in match_by_code:
+            continue
+        wid = wbs_for.get(task.task_id, "") or "unassigned"
+        pkg = packages.setdefault(wid, {
+            "wbs_id": wid, "wbs_name": wbs_name.get(wid, wid),
+            "score": 0.0, "activities": [], "matched": set(),
+        })
+        pkg["score"] += match_by_code[task.task_code]["score"]
+        pkg["matched"].update(match_by_code[task.task_code]["matched"].split(", "))
+    for wid, pkg in packages.items():
+        members = [t for t in data.tasks
+                   if wbs_for.get(t.task_id, "") == wid
+                   and not t.is_loe_or_wbs]
+        members.sort(key=lambda t: (t.target_start or t.early_start
+                                    or t.act_start or datetime.max,
+                                    t.task_code))
+        pkg["activities"] = [{
+            "code": t.task_code, "name": t.name,
+            "duration_days": t.original_duration_days(
+                data.hours_per_day(t, DCMAConfig())),
+        } for t in members[:25]]
+        pkg["matched"] = ", ".join(sorted(x for x in pkg["matched"] if x))
+        pkg["activity_count"] = len(members)
+    ranked = sorted(packages.values(), key=lambda p: -p["score"])
+    return ranked[:top_n]
+
+
 # --------------------------------------------------------------------------- #
 # Validation — before anything is inserted
 # --------------------------------------------------------------------------- #
@@ -188,6 +300,9 @@ def validate_fragnet(
         elif f.duration_days > 365:
             issues.append(f"{f.act_id}: duration {f.duration_days:.0f}d "
                           "exceeds a year — check the estimate.")
+        if f.calendar_id and f.calendar_id not in data.calendars:
+            issues.append(f"{f.act_id}: unknown calendar "
+                          f"'{f.calendar_id}'.")
         if not f.predecessors:
             issues.append(f"{f.act_id}: open start (no predecessor) — the "
                           "event work would float free of the network.")
@@ -339,6 +454,7 @@ def run_tia(
     *,
     config: DCMAConfig | None = None,
     top_milestones: int = 15,
+    target_milestone: str | None = None,
 ) -> TIAResult:
     """Pre- vs post-impact forecast under one simplified CPM."""
     config = config or DCMAConfig()
@@ -401,7 +517,12 @@ def run_tia(
         impacts.append(MilestoneImpact(
             code=c, name=t.name, pre=EF0.get(c), post=EF1.get(c)))
     impacts.sort(key=lambda m: -(m.delta_days or 0))
-    result.milestone_impacts = impacts[:top_milestones]
+    if target_milestone:
+        targeted = [m for m in impacts if m.code == target_milestone]
+        remainder = [m for m in impacts if m.code != target_milestone]
+        result.milestone_impacts = (targeted + remainder)[:top_milestones]
+    else:
+        result.milestone_impacts = impacts[:top_milestones]
 
     if EF0:
         result.completion_pre = max(EF0.values())
@@ -450,6 +571,116 @@ FRAGNET_SYSTEM_PROMPT = (
     "must be labelled an assumption."
 )
 
+LOGIC_SYSTEM_PROMPT = (
+    "You are a senior construction planning engineer recommending TIA "
+    "network tie-ins. Return ONLY valid JSON. Prefer logic patterns and "
+    "activities in the supplied programme. Never invent an existing "
+    "activity ID. Treat responsibility as asserted, not determined. "
+    "Recommendations are drafts requiring planner confirmation."
+)
+
+
+def build_logic_recommendation_prompt(
+    event: DelayEvent,
+    fragnet: list[FragnetActivity],
+    data: XerData,
+    templates: list[dict] | None = None,
+) -> str:
+    """Ask the session AI to rank network tie-ins and impacted sections."""
+    templates = templates or find_template_activities(
+        data, f"{event.title} {event.description} {event.work_package}", 15)
+    config = DCMAConfig()
+    candidates = []
+    for task in data.tasks:
+        if task.is_loe_or_wbs or not task.is_incomplete:
+            continue
+        tf = task.total_float_days(data.hours_per_day(task, config))
+        candidates.append((tf if tf is not None else 99999, task))
+    candidates.sort(key=lambda item: item[0])
+    lines = [
+        "<task>Recommend possible predecessor tie-ins, successor tie-ins, "
+        "and potentially impacted sections or milestones for the confirmed "
+        "fragnet. Rank alternatives; do not insert or approve logic.</task>",
+        f"<event>{event.event_id}: {event.title}; {event.description}; "
+        f"area={event.area or 'unknown'}; discipline={event.discipline or 'unknown'}; "
+        f"work_package={event.work_package or 'unknown'}</event>",
+        "<confirmed_fragnet>",
+    ]
+    for f in fragnet:
+        lines.append(
+            f"- {f.act_id} '{f.name}' {f.duration_days:g}d; "
+            f"current predecessors={links_to_text(f.predecessors) or 'none'}; "
+            f"current successors={links_to_text(f.successors) or 'none'}")
+    lines += ["</confirmed_fragnet>", "<comparable_project_activities>"]
+    for item in templates[:15]:
+        lines.append(f"- {item['code']} '{item['name']}'")
+    lines += ["</comparable_project_activities>",
+              "<allowed_existing_activities>"]
+    for _, task in candidates[:80]:
+        marker = " MILESTONE" if task.is_milestone else ""
+        lines.append(f"- {task.task_code} '{task.name}'{marker}")
+    lines += [
+        "</allowed_existing_activities>",
+        '<output>Return ONLY JSON: {"predecessors":[{"id":"A100",'
+        '"type":"FS","lag_days":0,"rationale":"...","confidence":"high"}],'
+        '"successors":[...],"impacted_sections":[{"id":"M100",'
+        '"rationale":"...","confidence":"medium"}],'
+        '"warnings":["..."]}. Use only IDs in allowed_existing_activities. '
+        "Provide up to five ranked candidates in each list. If no reliable "
+        "project analogue exists, state that in warnings and label inferred "
+        "recommendations low confidence.</output>",
+    ]
+    return "\n".join(lines)
+
+
+def parse_logic_recommendation_json(text: str, data: XerData) -> dict:
+    """Strict parser: removes every invented programme activity ID."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```[a-zA-Z]*\n?", "", cleaned)
+        cleaned = re.sub(r"\n?```\s*$", "", cleaned)
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start == -1 or end <= start:
+        return {}
+    try:
+        obj = json.loads(cleaned[start:end + 1])
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(obj, dict):
+        return {}
+    existing = {t.task_code for t in data.tasks}
+
+    def clean_items(key: str, links: bool) -> list[dict]:
+        out = []
+        for item in obj.get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            activity_id = str(item.get("id", "")).strip()
+            if activity_id not in existing:
+                continue
+            row = {
+                "id": activity_id,
+                "rationale": str(item.get("rationale", ""))[:400],
+                "confidence": str(item.get("confidence", "low")).lower(),
+            }
+            if links:
+                link_type = str(item.get("type", "FS")).upper()
+                row["type"] = link_type if link_type in LINK_TYPES else "FS"
+                try:
+                    row["lag_days"] = float(item.get("lag_days", 0) or 0)
+                except (TypeError, ValueError):
+                    row["lag_days"] = 0.0
+            out.append(row)
+        return out[:5]
+
+    return {
+        "predecessors": clean_items("predecessors", True),
+        "successors": clean_items("successors", True),
+        "impacted_sections": clean_items("impacted_sections", False),
+        "warnings": [str(w)[:400] for w in obj.get("warnings", [])
+                     if isinstance(w, str)][:10],
+    }
+
 
 def build_fragnet_prompt(
     event: DelayEvent,
@@ -459,6 +690,9 @@ def build_fragnet_prompt(
 ) -> str:
     """Ask the model to draft ONE realistic fragnet, evidence-first."""
     config = DCMAConfig()
+    scope = assess_event_scope(event)
+    packages = find_template_work_packages(
+        data, f"{event.title} {event.description} {event.work_package}")
     cands = []
     for t in data.tasks:
         if t.is_loe_or_wbs or not t.is_incomplete:
@@ -476,9 +710,42 @@ def build_fragnet_prompt(
         f"<event id='{event.event_id}'>",
         f"Title: {event.title}",
         f"Description: {event.description}",
+        f"Area: {event.area or 'not established'}",
+        f"Discipline: {event.discipline or 'not established'}",
+        f"Project context: {event.project_context or 'not established'}",
+        f"Work package: {event.work_package or 'not established'}",
         f"Date raised: "
         f"{event.date_raised:%Y-%m-%d}" if event.date_raised else "",
         "</event>", "",
+        "<scope_assessment>This is a retrieval brief, not established fact:",
+        f"Work nature: {scope.work_nature}",
+        "Potential lifecycle stages: " + ", ".join(scope.lifecycle_stages),
+        "Potential enabling requirements: "
+        + (", ".join(scope.enabling_requirements) or "none identified"),
+        "Unanswered questions: "
+        + ("; ".join(scope.unanswered_questions) or "none"),
+        "</scope_assessment>", "",
+        "<work_package_candidates>Prefer cloning/adapting one of these "
+        "project-specific packages before inventing a generic sequence:",
+    ]
+    for package in packages:
+        lines.append(
+            f"- WBS {package['wbs_id']} '{package['wbs_name']}' "
+            f"({package['activity_count']} activities; matched "
+            f"{package['matched'] or 'event terms'})")
+        for act in package["activities"][:12]:
+            dur = (f"{act['duration_days']:.0f}d"
+                   if act.get("duration_days") is not None else "?")
+            lines.append(f"  · {act['code']} '{act['name']}' [{dur}]")
+    lines += [
+        "</work_package_candidates>", "",
+        "<allowed_calendars>Use only these calendar IDs:",
+    ]
+    for calendar_id, calendar in data.calendars.items():
+        lines.append(f"- {calendar_id}: {calendar.name} "
+                     f"({calendar.day_hr_cnt:g} hours/day)")
+    lines += [
+        "</allowed_calendars>", "",
         "<comparable_activities>These existing activities matched the "
         "event text — use their durations as the evidence base:",
     ]
@@ -496,14 +763,22 @@ def build_fragnet_prompt(
         "</tie_in_candidates>", "",
         '<output>Return ONLY JSON: {"activities": [{"id": "TIA-010", '
         '"name": "...", "duration_days": N, '
+        '"calendar_id": "existing calendar id", '
         '"predecessors": [{"id": "...", "type": "FS", "lag_days": 0}], '
         '"successors": [{"id": "...", "type": "FS", "lag_days": 0}], '
         '"rationale": "duration from <code> / logic because ...", '
         '"assumptions": "..." }]}. '
         "Fragnet ids must start with 'TIA-'. Every predecessor/successor "
         "id must be a TIA- id or one of the tie-in candidates. At least "
-        "one successor must tie back into the existing network. 2-6 "
-        "activities.</output>",
+        "one successor must tie back into the existing network. Use the "
+        "fewest activities practical, but retain the necessary work-package "
+        "sequence; do not exceed 12 activities without explaining why.</output>",
+        "<reasoning_rules>Prefer project-specific work-package sequence, "
+        "WBS placement and comparable durations. Add design, approval, "
+        "procurement, access, temporary works, testing or commissioning "
+        "only when evidenced or explicitly labelled as an assumption. "
+        "Explain predecessor and successor tie-ins. Generic AI knowledge "
+        "is a last resort and must be labelled low confidence.</reasoning_rules>",
     ]
     return "\n".join(x for x in lines if x is not None)
 
@@ -566,7 +841,10 @@ def parse_fragnet_json(
             successors=_links("successors"),
             rationale=str(i.get("rationale", ""))[:300],
             assumptions=str(i.get("assumptions", ""))[:300],
-            confidence="medium"))
+            confidence="medium",
+            calendar_id=(str(i.get("calendar_id", "")).strip()
+                         if str(i.get("calendar_id", "")).strip()
+                         in data.calendars else "")))
     return out
 
 
@@ -586,6 +864,9 @@ def event_to_dict(event: DelayEvent, fragnet: list[FragnetActivity],
                             if event.date_raised else None),
             "responsibility_asserted": event.responsibility_asserted,
             "evidence_note": event.evidence_note,
+            "area": event.area, "discipline": event.discipline,
+            "project_context": event.project_context,
+            "work_package": event.work_package,
         },
         "fragnet": [{
             "id": f.act_id, "name": f.name,
@@ -598,6 +879,7 @@ def event_to_dict(event: DelayEvent, fragnet: list[FragnetActivity],
                            for l in f.successors],
             "rationale": f.rationale, "assumptions": f.assumptions,
             "confidence": f.confidence,
+            "calendar_id": f.calendar_id,
         } for f in fragnet],
     }
     if result is not None and result.completion_delta_days is not None:
@@ -621,7 +903,10 @@ def event_from_dict(rec: dict) -> tuple[DelayEvent,
             str(e["event_id"]), str(e.get("title", "")),
             str(e.get("description", "")), date,
             str(e.get("responsibility_asserted", "")),
-            str(e.get("evidence_note", "")))
+            str(e.get("evidence_note", "")),
+            str(e.get("area", "")), str(e.get("discipline", "")),
+            str(e.get("project_context", "")),
+            str(e.get("work_package", "")))
         fragnet = []
         for f in rec.get("fragnet", []):
             def _ls(key):
@@ -638,7 +923,8 @@ def event_from_dict(rec: dict) -> tuple[DelayEvent,
                 successors=_ls("successors"),
                 rationale=str(f.get("rationale", "")),
                 assumptions=str(f.get("assumptions", "")),
-                confidence=str(f.get("confidence", "medium"))))
+                confidence=str(f.get("confidence", "medium")),
+                calendar_id=str(f.get("calendar_id", ""))))
         return event, fragnet
     except (KeyError, TypeError, ValueError):
         return None

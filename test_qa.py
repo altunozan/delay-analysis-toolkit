@@ -10,6 +10,9 @@ Run: python3 test_qa.py  (exit code 1 on any failure)
 """
 import os
 import sys
+import io
+
+from openpyxl import load_workbook
 
 def _p(rel: str) -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), rel)
@@ -388,7 +391,9 @@ check("A21f config kinds restricted",
 # A22. Prospective TIA engine
 from programme import (DelayEvent, FragnetActivity, FragnetLink, run_tia,
                        validate_fragnet, parse_fragnet_json, parse_links,
-                       find_template_activities)
+                       find_template_activities, find_template_work_packages,
+                       assess_event_scope, build_logic_recommendation_prompt,
+                       parse_logic_recommendation_json)
 from datetime import timedelta as _td
 _ev = DelayEvent("EV-QA", "test event")
 _fr = [FragnetActivity("TIA-010", "chain", 120,
@@ -424,6 +429,50 @@ check("A22g template search returns project evidence",
       len(find_template_activities(U, "installation of ceiling")) > 0)
 check("A22h link text round-trip",
       parse_links("A1:SS:5")[0].link_type == "SS")
+_scope = assess_event_scope(DelayEvent(
+    "EV-S", "Additional ceiling installation", "include approval and test",
+    area="Zone B", discipline="Architectural", project_context="Hospital",
+    work_package="Additional ceiling works"))
+check("A22i event understood before fragnet drafting",
+      _scope.work_nature.startswith("Additional")
+      and "Testing / inspection / handover" in _scope.lifecycle_stages)
+_pkgs = find_template_work_packages(U, "installation of ceiling")
+check("A22j existing work packages ranked before generic drafting",
+      bool(_pkgs) and bool(_pkgs[0]["activities"])
+      and _pkgs[0]["score"] > 0)
+_logic_prompt = build_logic_recommendation_prompt(_ev, _fr, U)
+check("A22k logic recommendation uses confirmed fragnet + programme IDs",
+      "TIA-010" in _logic_prompt and "allowed_existing_activities" in _logic_prompt)
+_known_pred = U.tasks[0].task_code
+_logic = parse_logic_recommendation_json(
+    '{"predecessors":[{"id":"' + _known_pred + '","type":"FS","lag_days":0}],'
+    '"successors":[{"id":"KD15","type":"FS","lag_days":0}],'
+    '"impacted_sections":[{"id":"KD15"}],'
+    '"warnings":["planner review"]}', U)
+_logic_bad = parse_logic_recommendation_json(
+    '{"predecessors":[{"id":"INVENTED-1"}]}', U)
+check("A22l logic parser accepts programme IDs and rejects invention",
+      _logic["predecessors"][0]["id"] == _known_pred
+      and _logic_bad["predecessors"] == [])
+_calendar_id = next(iter(U.calendars))
+_calendar_fragnet = parse_fragnet_json(
+    '{"activities":[{"id":"TIA-CAL","name":"calendar test",'
+    '"duration_days":2,"calendar_id":"' + _calendar_id + '",'
+    '"successors":[{"id":"KD15"}]}]}', U)
+check("A22m fragnet retains only a valid programme calendar",
+      _calendar_fragnet[0].calendar_id == _calendar_id)
+_targeted = run_tia(U, "U", _ev, _fr, target_milestone="KD15")
+check("A22n selected impacted milestone is prioritised in results",
+      bool(_targeted.milestone_impacts)
+      and _targeted.milestone_impacts[0].code == "KD15")
+from programme import build_tia_xlsx
+_tia_book = load_workbook(io.BytesIO(build_tia_xlsx(
+    _targeted, audit={"source_sha256": "abc"},
+    run_history=[{"completion_delta_days": 5}])))
+check("A22o TIA export includes audit and rerun history",
+      "Audit Trail" in _tia_book.sheetnames
+      and "Run History" in _tia_book.sheetnames
+      and "Calendar" in [c.value for c in _tia_book["Fragnet"][1]])
 
 
 # A23. Explain This Delay

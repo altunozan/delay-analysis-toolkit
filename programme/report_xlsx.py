@@ -845,7 +845,9 @@ def build_hierarchy_xlsx(h, narrative: str | None = None) -> bytes:
 # --------------------------------------------------------------------------- #
 # Module 15 — Time Impact Analysis
 # --------------------------------------------------------------------------- #
-def build_tia_xlsx(res, narrative: str | None = None) -> bytes:
+def build_tia_xlsx(res, narrative: str | None = None,
+                   audit: dict | None = None,
+                   run_history: list[dict] | None = None) -> bytes:
     """res: programme.tia.TIAResult"""
     wb = Workbook()
     ws = wb.active
@@ -872,17 +874,17 @@ def build_tia_xlsx(res, narrative: str | None = None) -> bytes:
     ws.freeze_panes = "A6"
 
     s2 = wb.create_sheet("Fragnet")
-    _header_row(s2, 1, ["ID", "Activity", "Duration (d)", "Predecessors",
+    _header_row(s2, 1, ["ID", "Activity", "Duration (d)", "Calendar", "Predecessors",
                         "Successors", "Source / rationale", "Assumptions",
                         "Confidence"])
     from .tia import links_to_text
     for i, f in enumerate(res.fragnet, start=2):
-        vals = [f.act_id, f.name, f.duration_days,
+        vals = [f.act_id, f.name, f.duration_days, f.calendar_id,
                 links_to_text(f.predecessors), links_to_text(f.successors),
                 f.rationale, f.assumptions, f.confidence]
         for col, v in enumerate(vals, start=1):
             s2.cell(row=i, column=col, value=v).border = THIN_BORDER
-    _autofit(s2, {1: 12, 2: 38, 3: 12, 4: 26, 5: 26, 6: 34, 7: 30, 8: 11})
+    _autofit(s2, {1: 12, 2: 38, 3: 12, 4: 16, 5: 26, 6: 26, 7: 34, 8: 30, 9: 11})
     s2.freeze_panes = "A2"
 
     s3 = wb.create_sheet("Event")
@@ -892,13 +894,35 @@ def build_tia_xlsx(res, narrative: str | None = None) -> bytes:
             ("Description", e.description),
             ("Date raised", _fmt(e.date_raised)),
             ("Responsibility (asserted)", e.responsibility_asserted),
-            ("Evidence noted", e.evidence_note)]
+            ("Evidence noted", e.evidence_note), ("Area / system", e.area),
+            ("Discipline", e.discipline),
+            ("Project context", e.project_context),
+            ("Construction work package", e.work_package)]
     for i, (k, v) in enumerate(rows, start=1):
         s3.cell(row=i, column=1, value=k).font = Font(bold=True)
         c = s3.cell(row=i, column=2, value=v)
         c.alignment = WRAP
 
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    if audit:
+        audit_ws = wb.create_sheet("Audit Trail")
+        _header_row(audit_ws, 1, ["Item", "Value"])
+        for row_no, (key, value) in enumerate(audit.items(), start=2):
+            audit_ws.cell(row=row_no, column=1,
+                          value=key.replace("_", " ").title()).border = THIN_BORDER
+            audit_ws.cell(row=row_no, column=2,
+                          value=str(value)).border = THIN_BORDER
+        _autofit(audit_ws, {1: 34, 2: 90})
+    if run_history:
+        history_ws = wb.create_sheet("Run History")
+        keys = list(dict.fromkeys(
+            key for run in run_history for key in run.keys()))
+        _header_row(history_ws, 1, keys)
+        for row_no, run in enumerate(run_history, start=2):
+            for col_no, key in enumerate(keys, start=1):
+                history_ws.cell(row=row_no, column=col_no,
+                                value=str(run.get(key, ""))).border = THIN_BORDER
+        _autofit(history_ws, {i: 22 for i in range(1, len(keys) + 1)})
     _narrative_sheet(wb, narrative)
 
     buf = io.BytesIO()
