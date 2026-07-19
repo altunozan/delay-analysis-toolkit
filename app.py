@@ -320,6 +320,7 @@ def intake_tab() -> None:
                 else:
                     raw = src.getvalue()
                 hashes[name] = hashlib.sha256(raw).hexdigest()
+                st.session_state.setdefault("xer_raw", {})[name] = raw
                 data = parse_xer(raw, DCMAConfig())
             except Exception as exc:  # noqa: BLE001 - surface per-file errors
                 st.warning(f"Skipped '{name}': {exc}")
@@ -3504,6 +3505,20 @@ def tia_tab() -> None:
         st.session_state.setdefault("tia_register", {})[
             event.event_id] = event_to_dict(event, fragnet, res)
         st.success(f"Saved '{event.event_id}'.")
+    raw = st.session_state.get("xer_raw", {}).get(chosen)
+    if raw is not None:
+        try:
+            impacted = build_impacted_xer(
+                raw.decode("utf-8", errors="replace"), data, fragnet, res)
+            st.download_button(
+                "⬇️ Impacted programme (.xer) — import to P6 and "
+                "reschedule (F9)",
+                data=impacted.encode("utf-8"),
+                file_name=f"impacted_{event.event_id}_{chosen}",
+                mime="application/octet-stream", key="tia_xer_dl",
+                help=EXPORT_CAVEAT)
+        except (ValueError, KeyError) as exc:
+            st.warning(f"Impacted XER not available: {exc}")
     sc2.download_button(
         "⬇️ Download TIA report (Excel)",
         data=build_tia_xlsx(res, narrative, audit=audit),

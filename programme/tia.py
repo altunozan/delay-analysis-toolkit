@@ -385,6 +385,7 @@ class TIAResult:
     completion_post: datetime | None = None
     completion_delta_days: float | None = None
     milestone_impacts: list[MilestoneImpact] = field(default_factory=list)
+    fragnet_dates: dict = field(default_factory=dict)   # act_id -> (ES, EF)
     calibration_days: float | None = None   # our pre vs P6's own forecast
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
@@ -511,6 +512,9 @@ def run_tia(
                 (f.act_id, l.link_type, l.lag_days))
     ES1, EF1, w1 = _forward_pass(nodes_p, preds_p, dd, started)
     result.warnings.extend(sorted(set(w0 + w1)))
+    result.fragnet_dates = {f.act_id: (ES1.get(f.act_id),
+                                       EF1.get(f.act_id))
+                            for f in fragnet}
 
     # --- milestone + completion impacts ----------------------------------
     ms = [t for t in inc.values() if t.is_milestone]

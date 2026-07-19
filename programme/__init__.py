@@ -181,6 +181,7 @@ from .tia import (
     run_tia,
     validate_fragnet,
 )
+from .xer_export import EXPORT_CAVEAT, build_impacted_xer
 from .variance import (
     VarianceGroup,
     VarianceResult,
@@ -338,6 +339,8 @@ __all__ = [
     "parse_logic_recommendation_json",
     "parse_links",
     "run_tia",
+    "EXPORT_CAVEAT",
+    "build_impacted_xer",
     "validate_fragnet",
     # windows
     "PathShift",

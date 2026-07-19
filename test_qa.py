@@ -520,6 +520,27 @@ check("A24f TIA caveats cite 52R-06",
       any("52R-06" in c for c in _r.caveats))
 check("A24g txt reader works", "hello" in read_document("a.txt", b"hello"))
 
+
+# A25. Impacted-programme XER export round-trip
+from programme import build_impacted_xer
+_raw = open(_p("sample/Sample Update.xer"), "rb").read()
+_fr2 = [FragnetActivity("TIA-910", "a", 10,
+                        successors=[FragnetLink("TIA-920")]),
+        FragnetActivity("TIA-920", "b", 20,
+                        predecessors=[FragnetLink("TIA-910")],
+                        successors=[FragnetLink("KD15")])]
+_res2 = run_tia(U, "U", _ev, _fr2)
+_out = build_impacted_xer(_raw.decode("utf-8", errors="replace"),
+                          U, _fr2, _res2)
+_u2 = parse_xer(_out.encode("utf-8"))
+check("A25 impacted xer: fragnet tasks import",
+      len(_u2.tasks) == len(U.tasks) + 2)
+check("A25b impacted xer: links deduped and resolved",
+      len(_u2.relationships) == len(U.relationships) + 2)
+_t2 = next(x for x in _u2.tasks if x.task_code == "TIA-920")
+check("A25c impacted xer: not-started with duration",
+      _t2.status == "TK_NotStart" and _t2.target_drtn_hr is not None)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
