@@ -283,6 +283,20 @@ def intake_tab() -> None:
             help="Loads the .xer files shipped in the sample/ folder.",
         )
 
+    if not uploads and sample_paths and not use_samples:
+        st.caption(
+            "Minimum inputs — one XER: prospective TIA · two or more "
+            "XERs: revision comparison, windows, as-built path, Explain "
+            "This Delay. The latest data date is treated as the current "
+            "accepted update. New here? Download a sample to try the "
+            "toolkit:")
+        dcols = st.columns(len(sample_paths[:2]))
+        for _c, _p in zip(dcols, sample_paths[:2]):
+            with open(_p, "rb") as _fh:
+                _c.download_button(f"⬇️ {os.path.basename(_p)}",
+                                   data=_fh.read(),
+                                   file_name=os.path.basename(_p),
+                                   key=f"smp_{os.path.basename(_p)}")
     if use_samples:
         sources = [(os.path.basename(p), p, os.path.getsize(p))
                    for p in sample_paths]
@@ -2866,374 +2880,43 @@ def critical_path_tab() -> None:
 # Tab 15 — Prospective Time Impact Analysis (Module 15)
 # ====================================================================== #
 
-def tia_tab() -> None:
-    st.caption(
-        "Prospective TIA: describe a delay event, build its fragnet (AI "
-        "drafts, you confirm), insert it into a controlled in-memory copy "
-        "of the current update, and measure the forecast impact on "
-        "completion and milestones. The source programme is never changed."
-    )
-    files = get_parsed_files()
-    inv = st.session_state.get("inventory")
-    if not files or inv is None:
-        st.info("Upload programmes in the **Data Intake** tab first.")
-        return
-
-    names = [r.file_name for r in inv.revisions]
-    chosen = st.selectbox("Current approved update", names,
-                          index=len(names) - 1, key="tia_prog",
-                          help="The programme the fragnet is inserted "
-                               "into (in memory only).")
-    data = dict(files)[chosen]
-
-    # ---- event register --------------------------------------------------
-    reg = st.session_state.setdefault("tia_register", {})
-    with st.expander(f"📇 Event register ({len(reg)} saved)",
-                     expanded=False):
-        st.caption("Events and their confirmed fragnets persist here for "
-                   "the session; download the register to keep and reload "
-                   "it in any later session.")
-        for rid, rec in list(reg.items()):
-            rc1, rc2, rc3 = st.columns([4, 1, 1])
-            last = rec.get("last_result", {})
-            delta = last.get("completion_delta_days")
-            rc1.write(f"**{rid}** — {rec['event'].get('title', '')}"
-                      + (f"  ·  impact {delta:+.1f}d on "
-                         f"{last.get('programme', '')}"
-                         if delta is not None else "  ·  not yet run"))
-            if rc2.button("Load", key=f"tia_load_{rid}"):
-                parsed = event_from_dict(rec)
-                if parsed:
-                    ev_l, fr_l = parsed
-                    st.session_state["tia_ev_id"] = ev_l.event_id
-                    st.session_state["tia_ev_title"] = ev_l.title
-                    st.session_state["tia_ev_desc"] = ev_l.description
-                    st.session_state["tia_ev_date"] = (
-                        f"{ev_l.date_raised:%Y-%m-%d}"
-                        if ev_l.date_raised else "")
-                    st.session_state["tia_ev_resp"] = (
-                        ev_l.responsibility_asserted)
-                    st.session_state["tia_ev_evid"] = ev_l.evidence_note
-                    st.session_state["tia_frag_rows"] = [{
-                        "ID": f.act_id, "Activity": f.name,
-                        "Duration (d)": f.duration_days,
-                        "Predecessors": links_to_text(f.predecessors),
-                        "Successors": links_to_text(f.successors),
-                        "Source / rationale": f.rationale,
-                        "Assumptions": f.assumptions,
-                    } for f in fr_l]
-                    st.session_state["tia_frag_ver"] = (
-                        st.session_state.get("tia_frag_ver", 0) + 1)
-                    st.session_state.pop("tia_result", None)
-                    st.rerun()
-            if rc3.button("Delete", key=f"tia_del_{rid}"):
-                reg.pop(rid, None)
-                st.rerun()
-        dc1, dc2 = st.columns(2)
-        if reg:
-            dc1.download_button(
-                "⬇️ Download register (JSON)",
-                data=register_to_json(list(reg.values())),
-                file_name="delay_event_register.json",
-                mime="application/json", key="tia_reg_dl")
-        up = dc2.file_uploader("Load register", type=["json"],
-                               key="tia_reg_up")
-        if up is not None:
-            loaded = register_from_json(up.getvalue().decode("utf-8"))
-            if loaded and st.button(
-                    f"Import {len(loaded)} event(s)", key="tia_reg_imp"):
-                for rec in loaded:
-                    reg[rec["event"]["event_id"]] = rec
-                st.rerun()
-            elif not loaded:
-                st.error("Not a valid event register file.")
-
-    # ---- correspondence intake + AI event extraction ---------------------
-    st.subheader("0 · Correspondence & event extraction")
-    with st.expander(
-        "Upload letters / instructions / notices, or paste a dated "
-        "narrative — the AI proposes candidate events with verbatim, "
-        "verified quotations", expanded=False,
-    ):
-        ups = st.file_uploader(
-            "Documents (txt, docx, pdf)", type=["txt", "docx", "pdf"],
-            accept_multiple_files=True, key="tia_docs")
-        pasted = st.text_area(
-            "Or a short dated narrative of the event(s)",
-            key="tia_narrative", height=100,
-            placeholder="e.g. On 12 Mar 2018 the Engineer issued EI-88 "
-                        "requiring additional ceiling works; access was "
-                        "not released until 2 Apr 2018 …")
-        docs: list[tuple[str, str]] = []
-        for up in ups or []:
-            text = read_document(up.name, up.getvalue())
-            if text.strip():
-                docs.append((up.name, text))
-            else:
-                st.warning(f"Could not read any text from '{up.name}'.")
-        if pasted.strip():
-            docs.append(("analyst narrative", pasted.strip()))
-        xc1, xc2 = st.columns(2)
-        x_provider = xc1.selectbox(
-            "AI provider", options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"], key="tia_x_prov")
-        x_info = PROVIDERS[x_provider]
-        x_model = model_selector(xc2, x_info, f"tia_x_{x_provider}")
-        x_env = os.environ.get(x_info["env_var"], "")
-        if x_provider == "gemini" and not x_env:
-            x_env = os.environ.get("GOOGLE_API_KEY", "")
-        x_key = st.text_input(f"{x_info['label']} API key", type="password",
-                              value=x_env, key="tia_x_key")
-        if st.button(f"Extract candidate events from {len(docs)} "
-                     "document(s)", key="tia_x_go", type="primary",
-                     disabled=not x_key or not docs):
-            try:
-                text = "".join(stream_narrative(
-                    x_provider, x_key,
-                    build_event_extraction_prompt(docs),
-                    x_model or None, system=EXTRACTION_SYSTEM_PROMPT))
-                cands, dropped = parse_event_candidates(text, docs)
-            except NarrativeError as exc:
-                cands, dropped = [], 0
-                st.error(exc.message)
-            st.session_state["tia_candidates"] = cands
-            st.session_state["tia_cand_dropped"] = dropped
-            st.rerun()
-
-        cands = st.session_state.get("tia_candidates", [])
-        dropped = st.session_state.get("tia_cand_dropped", 0)
-        if dropped:
-            st.warning(
-                f"{dropped} candidate(s) DROPPED: their quoted evidence "
-                "could not be found verbatim in the claimed source "
-                "document — unverifiable evidence is never shown."
-            )
-        if cands:
-            st.success(f"{len(cands)} candidate event(s), every quotation "
-                       "verified against its source document.")
-            for k, c in enumerate(cands):
-                cc1, cc2 = st.columns([5, 1])
-                d = (f"{c.date_start:%Y-%m-%d}" if c.date_start
-                     else "no date")
-                cc1.markdown(
-                    f"**{c.title}** ({d}, confidence {c.confidence})\n\n"
-                    f"{c.description}\n\n"
-                    f"› *{c.source_doc}*: “{c.source_snippet}”")
-                if cc2.button("Use", key=f"tia_use_{k}"):
-                    st.session_state["tia_ev_id"] = f"EV-{k + 1:03d}"
-                    st.session_state["tia_ev_title"] = c.title
-                    desc = c.description
-                    if c.other_dates:
-                        desc += ("\nKey dates: "
-                                 + ", ".join(c.other_dates))
-                    if c.affected_scope:
-                        desc += f"\nAffected scope: {c.affected_scope}"
-                    st.session_state["tia_ev_desc"] = desc
-                    st.session_state["tia_ev_date"] = (
-                        f"{c.date_start:%Y-%m-%d}" if c.date_start else "")
-                    st.session_state["tia_ev_resp"] = c.party_asserted
-                    st.session_state["tia_ev_evid"] = (
-                        f"{c.source_doc}: \"{c.source_snippet}\"")
-                    st.rerun()
-
-    # ---- the event -------------------------------------------------------
-    st.subheader("1 · The event")
-    ec1, ec2, ec3 = st.columns([1, 2, 1])
-    ev_id = ec1.text_input("Event ID", "EV-001", key="tia_ev_id")
-    ev_title = ec2.text_input("Title", key="tia_ev_title",
-                              placeholder="e.g. VO-012: additional "
-                                          "ceiling to Bill 15 lobby")
-    ev_date_s = ec3.text_input("Date raised (YYYY-MM-DD)", "",
-                               key="tia_ev_date")
-    ev_desc = st.text_area(
-        "Description (scope of the instructed / delayed work)",
-        key="tia_ev_desc", height=90)
-    ec4, ec5 = st.columns(2)
-    ev_resp = ec4.text_input("Responsibility asserted (not concluded)",
-                             key="tia_ev_resp")
-    ev_evid = ec5.text_input("Evidence noted (instruction ref, letters…)",
-                             key="tia_ev_evid")
+def _tia_event_from_state() -> DelayEvent:
     try:
-        ev_date = (datetime.strptime(ev_date_s.strip(), "%Y-%m-%d")
-                   if ev_date_s.strip() else None)
+        d = st.session_state.get("tia_ev_date", "").strip()
+        ev_date = datetime.strptime(d, "%Y-%m-%d") if d else None
     except ValueError:
         ev_date = None
-        st.warning("Date raised not parseable — leave blank or use "
-                   "YYYY-MM-DD.")
-    event = DelayEvent(ev_id.strip() or "EV-001", ev_title.strip(),
-                       ev_desc.strip(), ev_date, ev_resp.strip(),
-                       ev_evid.strip())
+    return DelayEvent(
+        (st.session_state.get("tia_ev_id") or "EV-001").strip(),
+        (st.session_state.get("tia_ev_title") or "").strip(),
+        (st.session_state.get("tia_ev_desc") or "").strip(),
+        ev_date,
+        (st.session_state.get("tia_ev_resp") or "").strip(),
+        (st.session_state.get("tia_ev_evid") or "").strip())
 
-    # AACE RP 52R-06: analyse against the last accepted update BEFORE the
-    # event. Recommend it whenever the chosen programme differs.
-    rec = recommended_analysis_schedule(
-        [(r.file_name, r.data_date) for r in inv.revisions], ev_date)
-    if rec and rec != chosen:
-        st.info(
-            f"AACE RP 52R-06: the last update with a data date before this "
-            f"event is **{rec}** — you are currently analysing "
-            f"**{chosen}**. Consider switching the analysis schedule "
-            "above."
-        )
 
-    # ---- project-specific evidence: comparable activities ---------------
-    templates = find_template_activities(
-        data, f"{ev_title} {ev_desc}") if (ev_title or ev_desc) else []
-    with st.expander(
-        f"2 · Comparable activities in this programme "
-        f"({len(templates)} matched)", expanded=bool(templates)):
-        if templates:
-            st.caption("The project-specific evidence base for durations "
-                       "and logic patterns — ranked by name match.")
-            st.dataframe(pd.DataFrame([{
-                "Activity ID": t["code"], "Activity": t["name"],
-                "Duration (d)": (round(t["duration_days"], 1)
-                                 if t["duration_days"] is not None
-                                 else None),
-                "Matched on": t["matched"],
-            } for t in templates]), use_container_width=True,
-                hide_index=True)
-        else:
-            st.write("Describe the event above to search for comparable "
-                     "activities.")
-
-    # ---- fragnet: AI draft + analyst editor ------------------------------
-    st.subheader("3 · The fragnet")
-    frag_key = "tia_frag_rows"
-    ver = st.session_state.get("tia_frag_ver", 0)
-    with st.expander("🤖 AI fragnet draft (recommends — never inserts)",
-                     expanded=frag_key not in st.session_state):
-        fc1, fc2 = st.columns(2)
-        f_provider = fc1.selectbox(
-            "AI provider", options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"], key="tia_ai_prov")
-        f_info = PROVIDERS[f_provider]
-        f_model = model_selector(fc2, f_info, f"tia_ai_{f_provider}")
-        f_env = os.environ.get(f_info["env_var"], "")
-        if f_provider == "gemini" and not f_env:
-            f_env = os.environ.get("GOOGLE_API_KEY", "")
-        f_key = st.text_input(f"{f_info['label']} API key", type="password",
-                              value=f_env, key="tia_ai_key")
-        variant = st.radio(
-            "Fragnet discipline", list(FRAGNET_VARIANTS.keys()),
-            index=1, horizontal=True, key="tia_variant",
-            help="Minimal: only what strictly represents the event. "
-                 "Realistic: normal design/procure/execute steps where "
-                 "evidenced. Conservative: justifiable allowances, each "
-                 "labelled as an allowance — never inflated to "
-                 "manufacture an outcome.")
-        if st.button(f"Draft {variant} fragnet from the event",
-                     disabled=not f_key or not (ev_title or ev_desc),
-                     key="tia_ai_go", type="primary"):
-            try:
-                text = "".join(stream_narrative(
-                    f_provider, f_key,
-                    build_fragnet_variant_prompt(event, templates, data,
-                                                 variant),
-                    f_model or None, system=FRAGNET_SYSTEM_PROMPT))
-                draft = parse_fragnet_json(text, data)
-            except NarrativeError as exc:
-                draft = []
-                st.error(exc.message)
-            if draft:
-                st.session_state[frag_key] = [{
-                    "ID": f.act_id, "Activity": f.name,
-                    "Duration (d)": f.duration_days,
-                    "Predecessors": links_to_text(f.predecessors),
-                    "Successors": links_to_text(f.successors),
-                    "Source / rationale": f.rationale,
-                    "Assumptions": f.assumptions,
-                } for f in draft]
-                st.session_state["tia_frag_ver"] = ver + 1
-                st.session_state["tia_frag_mode"] = "Advanced grid"
-                st.rerun()
-            elif f_key:
-                st.warning("The model returned no valid fragnet — try "
-                           "adding detail to the event description.")
-
-    frag_mode = st.radio(
-        "Fragnet builder", ["Chain builder (simple)", "Advanced grid"],
-        horizontal=True, key="tia_frag_mode",
-        help="Chain builder: name the steps, pick where the chain starts "
-             "from and what it delays — logic is wired automatically. "
-             "Advanced grid: full control incl. SS/FF/SF, lags, branches "
-             "(and where AI drafts land).")
-
-    inc_acts = sorted(
-        (t for t in data.tasks
-         if not t.is_loe_or_wbs and t.is_incomplete),
-        key=lambda t: (t.act_finish or t.early_finish
-                       or t.early_start or datetime.max))
-    act_label = {t.task_code: f"{t.task_code} — {t.name}"
-                 for t in inc_acts}
-    ms_codes = [t.task_code for t in reversed(inc_acts) if t.is_milestone]
-
+def _tia_fragnet_from_state(data) -> list[FragnetActivity]:
     fragnet: list[FragnetActivity] = []
-    if frag_mode.startswith("Chain"):
-        NO_ENTRY = "— none (chain starts at the data date) —"
-        c1, c2 = st.columns(2)
-        entry = c1.selectbox(
-            "Where does the event work start from?",
-            [NO_ENTRY] + list(act_label.keys()),
-            format_func=lambda c: act_label.get(c, c), key="tia_entry",
-            help="Type to search. The first step follows this activity "
-                 "(finish-to-start).")
-        exit_opts = ms_codes + [c for c in act_label if c not in ms_codes]
-        exit_c = c2.selectbox(
-            "What does it delay?", exit_opts,
-            format_func=lambda c: act_label.get(c, c), key="tia_exit",
-            help="Type to search — milestones listed first, completion "
-                 "at the top. The last step feeds this "
-                 "(finish-to-start).")
-        if "tia_chain_steps" not in st.session_state:
-            st.session_state["tia_chain_steps"] = [
-                {"Step": "", "Duration (d)": 0.0}]
-        st.caption("The steps of the event work, in order — they are "
-                   "linked finish-to-start automatically.")
-        steps = st.data_editor(
-            pd.DataFrame(st.session_state["tia_chain_steps"]),
-            num_rows="dynamic", use_container_width=True,
-            column_config={
-                "Step": st.column_config.TextColumn(
-                    help="e.g. Shop drawings & approval"),
-                "Duration (d)": st.column_config.NumberColumn(
-                    min_value=0.0, step=1.0),
-            },
-            key="tia_chain_editor")
-        st.session_state["tia_chain_steps"] = steps.to_dict("records")
+    if st.session_state.get("tia_frag_mode",
+                            "Chain builder (simple)").startswith("Chain"):
         rows = [(str(r.get("Step") or "").strip(),
                  float(r.get("Duration (d)") or 0))
-                for _, r in steps.iterrows()
+                for r in st.session_state.get("tia_chain_steps", [])
                 if str(r.get("Step") or "").strip()]
+        entry = st.session_state.get("tia_entry", "")
+        exit_c = st.session_state.get("tia_exit", "")
         for i, (name, dur) in enumerate(rows):
-            fid = f"TIA-{(i + 1) * 10:03d}"
             preds = ([FragnetLink(f"TIA-{i * 10:03d}")] if i else
-                     ([FragnetLink(entry)] if entry != NO_ENTRY else []))
-            succs = ([FragnetLink(exit_c)] if i == len(rows) - 1 else [])
+                     ([FragnetLink(entry)]
+                      if entry and not entry.startswith("—") else []))
+            succs = ([FragnetLink(exit_c)]
+                     if exit_c and i == len(rows) - 1 else [])
             fragnet.append(FragnetActivity(
-                act_id=fid, name=name, duration_days=dur,
-                predecessors=preds, successors=succs,
+                act_id=f"TIA-{(i + 1) * 10:03d}", name=name,
+                duration_days=dur, predecessors=preds, successors=succs,
                 rationale="chain builder"))
-        if fragnet and entry == NO_ENTRY:
-            st.info("Chain starts at the data date (no predecessor tie-"
-                    "in) — fine for an instruction received now.")
     else:
-        if frag_key not in st.session_state:
-            st.session_state[frag_key] = [{
-                "ID": "TIA-010", "Activity": "", "Duration (d)": 0.0,
-                "Predecessors": "", "Successors": "",
-                "Source / rationale": "", "Assumptions": "",
-            }]
-        st.caption(
-            "Links format: `ACTIVITYID:FS:0; TIA-010:SS:5` (type and lag "
-            "optional). Successors must tie back into existing "
-            "activities."
-        )
-        edited = st.data_editor(
-            pd.DataFrame(st.session_state[frag_key]),
-            num_rows="dynamic", use_container_width=True,
-            key=f"tia_editor_v{st.session_state.get('tia_frag_ver', 0)}")
-        for _, row in edited.iterrows():
+        for row in st.session_state.get("tia_frag_rows", []):
             fid = str(row.get("ID") or "").strip()
             if not fid:
                 continue
@@ -3248,82 +2931,471 @@ def tia_tab() -> None:
                 successors=parse_links(str(row.get("Successors") or "")),
                 rationale=str(row.get("Source / rationale") or "").strip(),
                 assumptions=str(row.get("Assumptions") or "").strip()))
-        st.session_state[frag_key] = edited.to_dict("records")
+    return fragnet
 
-    issues = validate_fragnet(data, fragnet) if fragnet else []
-    if issues:
-        st.warning("Fragnet validation:\n\n"
-                   + "\n".join(f"- {i}" for i in issues))
-    elif fragnet:
-        st.success("Fragnet passes the screening checks.")
 
-    # ---- run the impact ---------------------------------------------------
-    st.subheader("4 · Forecast impact")
-    if st.button("⚡ Run time impact analysis", type="primary",
-                 disabled=not fragnet, key="tia_run"):
-        st.session_state["tia_result"] = run_tia(
-            data, chosen, event, fragnet)
-    res = st.session_state.get("tia_result")
-    if res is None:
+_TIA_STEPS = ["① Update & AI", "② Event", "③ Fragnet",
+              "④ Validate & confirm", "⑤ Run impact", "⑥ Review",
+              "⑦ Export & audit"]
+
+
+def tia_tab() -> None:
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload the current accepted update (one XER is enough "
+                "for a prospective TIA) in the **Data Intake** tab. Two "
+                "or more revisions additionally unlock the historical "
+                "modules and Explain This Delay.")
         return
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Completion (pre-impact)",
-              f"{res.completion_pre:%d %b %Y}"
-              if res.completion_pre else "—")
-    m2.metric("Completion (post-impact)",
-              f"{res.completion_post:%d %b %Y}"
-              if res.completion_post else "—",
-              delta=(f"{res.completion_delta_days:+.1f} d"
-                     if res.completion_delta_days is not None else None),
-              delta_color="inverse")
-    m3.metric("Forecast impact",
-              f"{res.completion_delta_days:+.1f} days"
-              if res.completion_delta_days is not None else "—")
-    m4.metric("Calibration vs P6",
-              f"{res.calibration_days:+.1f} d"
-              if res.calibration_days is not None else "—",
-              help="Difference between this engine's pre-impact "
-                   "completion and P6's own scheduled finish — the "
-                   "approximation error. Judge the delta, not absolute "
-                   "dates.")
-    for w in res.warnings:
-        (st.success if w.startswith("Favourable") else st.warning)(w)
+    step = st.radio("TIA workflow", _TIA_STEPS, horizontal=True,
+                    key="tia_step", label_visibility="collapsed")
+    names = [r.file_name for r in inv.revisions]
+    chosen = st.session_state.get("tia_prog", names[-1])
+    if chosen not in names:
+        chosen = names[-1]
+    data = dict(files)[chosen]
+    event = _tia_event_from_state()
+    ai_key = st.session_state.get("tia_key", "")
+    ai_provider = st.session_state.get("tia_provider", "anthropic")
+    ai_model = st.session_state.get("tia_model") or None
 
-    affected = [m for m in res.milestone_impacts
-                if (m.delta_days or 0) != 0]
-    st.dataframe(pd.DataFrame([{
-        "Milestone": m.code, "Name": m.name,
-        "Pre-impact": f"{m.pre:%Y-%m-%d}" if m.pre else "—",
-        "Post-impact": f"{m.post:%Y-%m-%d}" if m.post else "—",
-        "Delta (d)": m.delta_days,
-    } for m in (affected or res.milestone_impacts)]),
-        use_container_width=True, hide_index=True)
-    if not affected:
-        st.info("No milestone moves under this fragnet as modelled.")
+    # ---- ① update + AI registration + health gateway --------------------
+    if step == _TIA_STEPS[0]:
+        st.subheader("① Select the current update & register your AI")
+        st.selectbox(
+            "Current accepted update (the analysis schedule)", names,
+            index=names.index(chosen), key="tia_prog",
+            help="AACE RP 52R-06: use the last accepted update with a "
+                 "data date before the event. The fragnet is inserted "
+                 "into an in-memory copy only.")
+        dd = data.project.data_date if data.project else None
+        st.caption(f"Data date: **{dd:%d %b %Y}**" if dd
+                   else "⚠️ No data date in this file.")
+        # Schedule-Health gateway
+        fails = [r for r in run_all_checks(data, DCMAConfig())
+                 if r.status == CheckStatus.FAIL]
+        serious = [r for r in fails if r.number in (1, 2, 5, 7, 9, 11)]
+        if serious:
+            st.warning(
+                "**Schedule-Health gateway:** this update fails "
+                f"{len(fails)} of 14 DCMA checks, including "
+                + ", ".join(f"#{r.number} {r.name}" for r in serious)
+                + ". Serious defects (open logic, leads, constraints, "
+                "negative float, invalid dates, out-of-sequence) weaken "
+                "any TIA built on it — review the Schedule Health tab "
+                "before relying on the result.")
+        else:
+            st.success("Schedule-Health gateway: no serious DCMA "
+                       "failures detected.")
+        st.markdown("**Register your AI once** — every later step "
+                    "(event extraction, fragnet recommendation, "
+                    "narrative) reuses it.")
+        a1, a2 = st.columns(2)
+        a1.selectbox("AI provider", options=list(PROVIDERS.keys()),
+                     format_func=lambda p: PROVIDERS[p]["label"],
+                     key="tia_provider")
+        pinfo = PROVIDERS[st.session_state["tia_provider"]]
+        st.session_state["tia_model"] = model_selector(
+            a2, pinfo, f"tia_shared_{st.session_state['tia_provider']}")
+        env = os.environ.get(pinfo["env_var"], "")
+        if st.session_state["tia_provider"] == "gemini" and not env:
+            env = os.environ.get("GOOGLE_API_KEY", "")
+        st.text_input(f"{pinfo['label']} API key", type="password",
+                      value=st.session_state.get("tia_key", env),
+                      key="tia_key",
+                      help="Held in this session only; never stored.")
+        st.caption("Continue to **② Event** above." +
+                   ("" if st.session_state.get("tia_key") else
+                    "  (You can proceed without a key — AI assistance "
+                    "will be disabled.)"))
+        return
 
-    with st.expander("Standing caveats (always apply)"):
-        for c in res.caveats:
-            st.write("•", c)
+    # ---- ② event ---------------------------------------------------------
+    if step == _TIA_STEPS[1]:
+        st.subheader("② Register the event")
+        reg = st.session_state.setdefault("tia_register", {})
+        with st.expander(f"📇 Event register ({len(reg)} saved)"):
+            for rid, rec in list(reg.items()):
+                rc1, rc2, rc3 = st.columns([4, 1, 1])
+                last = rec.get("last_result", {})
+                delta = last.get("completion_delta_days")
+                rc1.write(f"**{rid}** — {rec['event'].get('title', '')}"
+                          + (f" · impact {delta:+.1f}d"
+                             if delta is not None else " · not yet run"))
+                if rc2.button("Load", key=f"tia_load_{rid}"):
+                    parsed = event_from_dict(rec)
+                    if parsed:
+                        ev_l, fr_l = parsed
+                        st.session_state["tia_ev_id"] = ev_l.event_id
+                        st.session_state["tia_ev_title"] = ev_l.title
+                        st.session_state["tia_ev_desc"] = ev_l.description
+                        st.session_state["tia_ev_date"] = (
+                            f"{ev_l.date_raised:%Y-%m-%d}"
+                            if ev_l.date_raised else "")
+                        st.session_state["tia_ev_resp"] = (
+                            ev_l.responsibility_asserted)
+                        st.session_state["tia_ev_evid"] = ev_l.evidence_note
+                        st.session_state["tia_frag_rows"] = [{
+                            "ID": f.act_id, "Activity": f.name,
+                            "Duration (d)": f.duration_days,
+                            "Predecessors": links_to_text(f.predecessors),
+                            "Successors": links_to_text(f.successors),
+                            "Source / rationale": f.rationale,
+                            "Assumptions": f.assumptions,
+                        } for f in fr_l]
+                        st.session_state["tia_frag_mode"] = "Advanced grid"
+                        st.session_state.pop("tia_result", None)
+                        st.rerun()
+                if rc3.button("Delete", key=f"tia_del_{rid}"):
+                    reg.pop(rid, None)
+                    st.rerun()
+            dc1, dc2 = st.columns(2)
+            if reg:
+                dc1.download_button("⬇️ Download register (JSON)",
+                                    data=register_to_json(
+                                        list(reg.values())),
+                                    file_name="delay_event_register.json",
+                                    mime="application/json",
+                                    key="tia_reg_dl")
+            up = dc2.file_uploader("Load register", type=["json"],
+                                   key="tia_reg_up")
+            if up is not None:
+                loaded = register_from_json(up.getvalue().decode("utf-8"))
+                if loaded and st.button(f"Import {len(loaded)} event(s)",
+                                        key="tia_reg_imp"):
+                    for rec in loaded:
+                        reg[rec["event"]["event_id"]] = rec
+                    st.rerun()
 
+        with st.expander("📄 From letters or a dated narrative "
+                         "(AI extraction, verified quotations)",
+                         expanded=not event.title):
+            ups = st.file_uploader("Documents (txt, docx, pdf)",
+                                   type=["txt", "docx", "pdf"],
+                                   accept_multiple_files=True,
+                                   key="tia_docs")
+            pasted = st.text_area(
+                "Or a short dated narrative of the event(s)",
+                key="tia_narrative", height=90,
+                placeholder="On 12 Mar 2018 the Engineer issued EI-88 "
+                            "requiring additional ceiling works …")
+            docs: list[tuple[str, str]] = []
+            for up in ups or []:
+                text = read_document(up.name, up.getvalue())
+                if text.strip():
+                    docs.append((up.name, text))
+                else:
+                    st.warning(f"Could not read '{up.name}'.")
+            if pasted.strip():
+                docs.append(("analyst narrative", pasted.strip()))
+            if st.button(f"Extract candidate events from {len(docs)} "
+                         "document(s)", key="tia_x_go", type="primary",
+                         disabled=not ai_key or not docs):
+                try:
+                    text = "".join(stream_narrative(
+                        ai_provider, ai_key,
+                        build_event_extraction_prompt(docs),
+                        ai_model, system=EXTRACTION_SYSTEM_PROMPT))
+                    cands, dropped = parse_event_candidates(text, docs)
+                except NarrativeError as exc:
+                    cands, dropped = [], 0
+                    st.error(exc.message)
+                st.session_state["tia_candidates"] = cands
+                st.session_state["tia_cand_dropped"] = dropped
+                st.rerun()
+            if not ai_key:
+                st.caption("Register an API key in step ① to enable "
+                           "extraction.")
+            dropped = st.session_state.get("tia_cand_dropped", 0)
+            if dropped:
+                st.warning(f"{dropped} candidate(s) DROPPED — quoted "
+                           "evidence not found verbatim in the source.")
+            for k, c in enumerate(st.session_state.get("tia_candidates",
+                                                       [])):
+                cc1, cc2 = st.columns([5, 1])
+                d = (f"{c.date_start:%Y-%m-%d}" if c.date_start
+                     else "no date")
+                cc1.markdown(f"**{c.title}** ({d}, {c.confidence})  \n"
+                             f"› *{c.source_doc}*: “{c.source_snippet}”")
+                if cc2.button("Use", key=f"tia_use_{k}"):
+                    st.session_state["tia_ev_id"] = f"EV-{k + 1:03d}"
+                    st.session_state["tia_ev_title"] = c.title
+                    desc = c.description
+                    if c.other_dates:
+                        desc += "\nKey dates: " + ", ".join(c.other_dates)
+                    st.session_state["tia_ev_desc"] = desc
+                    st.session_state["tia_ev_date"] = (
+                        f"{c.date_start:%Y-%m-%d}" if c.date_start else "")
+                    st.session_state["tia_ev_resp"] = c.party_asserted
+                    st.session_state["tia_ev_evid"] = (
+                        f"{c.source_doc}: \"{c.source_snippet}\"")
+                    st.rerun()
+
+        ec1, ec2, ec3 = st.columns([1, 2, 1])
+        ec1.text_input("Event ID", key="tia_ev_id")
+        ec2.text_input("Title", key="tia_ev_title")
+        ec3.text_input("Date raised (YYYY-MM-DD)", key="tia_ev_date")
+        st.text_area("Description (scope of the instructed / delayed "
+                     "work)", key="tia_ev_desc", height=80)
+        ec4, ec5 = st.columns(2)
+        ec4.text_input("Responsibility asserted (not concluded)",
+                       key="tia_ev_resp")
+        ec5.text_input("Evidence noted", key="tia_ev_evid")
+        event = _tia_event_from_state()
+        rec = recommended_analysis_schedule(
+            [(r.file_name, r.data_date) for r in inv.revisions],
+            event.date_raised)
+        if rec and rec != chosen:
+            st.info(f"AACE RP 52R-06: the last update before this event "
+                    f"is **{rec}** — currently analysing **{chosen}** "
+                    "(change in step ①).")
+        st.caption("Continue to **③ Fragnet** above."
+                   if event.title else
+                   "Give the event a title to continue.")
+        return
+
+    if not event.title:
+        st.info("Register the event in step ② first.")
+        return
+
+    # ---- ③ fragnet -------------------------------------------------------
+    if step == _TIA_STEPS[2]:
+        st.subheader("③ Build the fragnet")
+        templates = find_template_activities(
+            data, f"{event.title} {event.description}")
+        with st.expander(f"Comparable activities in this programme "
+                         f"({len(templates)})", expanded=False):
+            if templates:
+                st.dataframe(pd.DataFrame([{
+                    "Activity ID": t["code"], "Activity": t["name"],
+                    "Duration (d)": (round(t["duration_days"], 1)
+                                     if t["duration_days"] is not None
+                                     else None),
+                } for t in templates]), use_container_width=True,
+                    hide_index=True)
+        with st.expander("🤖 Evidence-assisted fragnet recommendation "
+                         "(AI drafts — the planner verifies)",
+                         expanded=False):
+            variant = st.radio("Discipline",
+                               list(FRAGNET_VARIANTS.keys()), index=1,
+                               horizontal=True, key="tia_variant")
+            if st.button(f"Draft {variant} fragnet", key="tia_ai_go",
+                         type="primary",
+                         disabled=not ai_key):
+                try:
+                    text = "".join(stream_narrative(
+                        ai_provider, ai_key,
+                        build_fragnet_variant_prompt(
+                            event, templates, data, variant),
+                        ai_model, system=FRAGNET_SYSTEM_PROMPT))
+                    draft = parse_fragnet_json(text, data)
+                except NarrativeError as exc:
+                    draft = []
+                    st.error(exc.message)
+                if draft:
+                    st.session_state["tia_frag_rows"] = [{
+                        "ID": f.act_id, "Activity": f.name,
+                        "Duration (d)": f.duration_days,
+                        "Predecessors": links_to_text(f.predecessors),
+                        "Successors": links_to_text(f.successors),
+                        "Source / rationale": f.rationale,
+                        "Assumptions": f.assumptions,
+                    } for f in draft]
+                    st.session_state["tia_frag_mode"] = "Advanced grid"
+                    st.rerun()
+                elif ai_key:
+                    st.warning("No valid fragnet returned — add detail "
+                               "to the event description.")
+            if not ai_key:
+                st.caption("Register an API key in step ① to enable the "
+                           "recommendation.")
+
+        st.radio("Builder", ["Chain builder (simple)", "Advanced grid"],
+                 horizontal=True, key="tia_frag_mode")
+        inc_acts = sorted(
+            (t for t in data.tasks
+             if not t.is_loe_or_wbs and t.is_incomplete),
+            key=lambda t: (t.act_finish or t.early_finish
+                           or t.early_start or datetime.max))
+        act_label = {t.task_code: f"{t.task_code} — {t.name}"
+                     for t in inc_acts}
+        ms_codes = [t.task_code for t in reversed(inc_acts)
+                    if t.is_milestone]
+        if st.session_state["tia_frag_mode"].startswith("Chain"):
+            NO_ENTRY = "— none (chain starts at the data date) —"
+            c1, c2 = st.columns(2)
+            c1.selectbox("Where does the event work start from?",
+                         [NO_ENTRY] + list(act_label.keys()),
+                         format_func=lambda c: act_label.get(c, c),
+                         key="tia_entry")
+            exit_opts = ms_codes + [c for c in act_label
+                                    if c not in ms_codes]
+            c2.selectbox("What does it delay?", exit_opts,
+                         format_func=lambda c: act_label.get(c, c),
+                         key="tia_exit")
+            if "tia_chain_steps" not in st.session_state:
+                st.session_state["tia_chain_steps"] = [
+                    {"Step": "", "Duration (d)": 0.0}]
+            steps_df = st.data_editor(
+                pd.DataFrame(st.session_state["tia_chain_steps"]),
+                num_rows="dynamic", use_container_width=True,
+                key="tia_chain_editor")
+            st.session_state["tia_chain_steps"] = steps_df.to_dict(
+                "records")
+            st.caption("Steps link finish-to-start automatically.")
+        else:
+            if "tia_frag_rows" not in st.session_state:
+                st.session_state["tia_frag_rows"] = [{
+                    "ID": "TIA-010", "Activity": "",
+                    "Duration (d)": 0.0, "Predecessors": "",
+                    "Successors": "", "Source / rationale": "",
+                    "Assumptions": ""}]
+            edited = st.data_editor(
+                pd.DataFrame(st.session_state["tia_frag_rows"]),
+                num_rows="dynamic", use_container_width=True,
+                key="tia_grid_editor")
+            st.session_state["tia_frag_rows"] = edited.to_dict("records")
+            st.caption("Links: `ACTIVITYID:FS:0; TIA-010:SS:5`.")
+        fragnet = _tia_fragnet_from_state(data)
+        st.caption(f"{len(fragnet)} fragnet activities. Continue to "
+                   "**④ Validate & confirm** above."
+                   if fragnet else "Add at least one step to continue.")
+        return
+
+    fragnet = _tia_fragnet_from_state(data)
+    if not fragnet:
+        st.info("Build the fragnet in step ③ first.")
+        return
+
+    # ---- ④ validate & confirm -------------------------------------------
+    if step == _TIA_STEPS[3]:
+        st.subheader("④ Validate the logic & confirm the basis")
+        issues = validate_fragnet(data, fragnet)
+        if issues:
+            st.warning("**Validation findings:**\n\n"
+                       + "\n".join(f"- {i}" for i in issues))
+        else:
+            st.success("Fragnet passes the screening checks.")
+        st.dataframe(pd.DataFrame([{
+            "ID": f.act_id, "Activity": f.name,
+            "Duration (d)": f.duration_days,
+            "Predecessors": links_to_text(f.predecessors),
+            "Successors": links_to_text(f.successors),
+        } for f in fragnet]), use_container_width=True, hide_index=True)
+        st.markdown("**Analyst confirmation** — required before the run:")
+        dd = data.project.data_date if data.project else None
+        checks = {
+            "c_dd": f"Data date ({dd:%d %b %Y}) and analysis schedule "
+                    f"('{chosen}') are the correct 52R-06 basis"
+                    if dd else f"Analysis schedule ('{chosen}') confirmed",
+            "c_logic": "Fragnet predecessors/successors reviewed and "
+                       "represent the event realistically",
+            "c_dur": "Durations are reasonable forecasts (calendars "
+                     "approximated as elapsed days — see caveats)",
+            "c_resp": "Responsibility is recorded as ASSERTED, not "
+                      "determined",
+            "c_meth": "Method understood: simplified-CPM delta per "
+                      "AACE RP 52R-06; absolute dates to be confirmed "
+                      "in P6",
+        }
+        all_ok = all(st.checkbox(lbl, key=k) for k, lbl in checks.items())
+        st.session_state["tia_confirmed"] = all_ok
+        st.caption("Continue to **⑤ Run impact** above." if all_ok
+                   else "Tick every confirmation to unlock the run.")
+        return
+
+    if not st.session_state.get("tia_confirmed"):
+        st.info("Complete the confirmation checklist in step ④ first.")
+        return
+
+    # ---- ⑤ run ------------------------------------------------------------
+    if step == _TIA_STEPS[4]:
+        st.subheader("⑤ Run the impact")
+        if st.button("⚡ Run time impact analysis", type="primary",
+                     key="tia_run"):
+            res = run_tia(data, chosen, event, fragnet)
+            st.session_state["tia_result"] = res
+            st.session_state["tia_audit"] = {
+                "analysed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "source_file": chosen,
+                "source_sha256": st.session_state.get(
+                    "xer_hashes", {}).get(chosen, "not recorded"),
+                "data_date": (f"{res.data_date:%Y-%m-%d}"
+                              if res.data_date else "—"),
+                "event_id": event.event_id,
+                "fragnet_activities": len(fragnet),
+                "method": "Simplified-CPM forward pass (elapsed-day "
+                          "calendars), pre/post delta per AACE RP 52R-06",
+                "ai_provider": (PROVIDERS[ai_provider]["label"]
+                                if ai_key else "none (manual)"),
+            }
+            st.success("Run complete — continue to **⑥ Review** above.")
+        elif st.session_state.get("tia_result") is not None:
+            st.info("A result exists — re-run to refresh it, or continue "
+                    "to **⑥ Review**.")
+        return
+
+    res = st.session_state.get("tia_result")
+    if res is None:
+        st.info("Run the impact in step ⑤ first.")
+        return
+
+    # ---- ⑥ review ----------------------------------------------------------
+    if step == _TIA_STEPS[5]:
+        st.subheader("⑥ Review the results")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Completion (pre)", f"{res.completion_pre:%d %b %Y}"
+                  if res.completion_pre else "—")
+        m2.metric("Completion (post)", f"{res.completion_post:%d %b %Y}"
+                  if res.completion_post else "—")
+        m3.metric("Forecast impact",
+                  f"{res.completion_delta_days:+.1f} days"
+                  if res.completion_delta_days is not None else "—")
+        m4.metric("Calibration vs P6",
+                  f"{res.calibration_days:+.1f} d"
+                  if res.calibration_days is not None else "—")
+        for w in res.warnings:
+            (st.success if w.startswith("Favourable")
+             else st.warning)(w)
+        affected = [m for m in res.milestone_impacts
+                    if (m.delta_days or 0) != 0]
+        st.dataframe(pd.DataFrame([{
+            "Milestone": m.code, "Name": m.name,
+            "Pre": f"{m.pre:%Y-%m-%d}" if m.pre else "—",
+            "Post": f"{m.post:%Y-%m-%d}" if m.post else "—",
+            "Delta (d)": m.delta_days,
+        } for m in (affected or res.milestone_impacts)]),
+            use_container_width=True, hide_index=True)
+        with st.expander("Standing caveats (always apply)"):
+            for c in res.caveats:
+                st.write("•", c)
+        st.caption("Continue to **⑦ Export & audit** above.")
+        return
+
+    # ---- ⑦ export & audit ---------------------------------------------------
+    st.subheader("⑦ Export & audit trail")
+    audit = st.session_state.get("tia_audit", {})
+    if audit:
+        st.markdown("**Audit trail**")
+        st.table(pd.DataFrame([{"Item": k.replace("_", " ").title(),
+                                "Value": v} for k, v in audit.items()]))
     narrative = ai_narrative_panel(
         f"nar_tia_{event.event_id}",
         lambda tmpl, r=res: build_tia_prompt(r, tmpl),
-        "tia",
-        DEFAULT_TEMPLATES["tia"],
-    )
+        "tia", DEFAULT_TEMPLATES["tia"])
     sc1, sc2 = st.columns(2)
     if sc1.button("💾 Save event + fragnet to register", key="tia_save"):
-        st.session_state["tia_register"][event.event_id] = event_to_dict(
-            event, fragnet, res)
-        st.success(f"Saved '{event.event_id}' to the register.")
+        st.session_state.setdefault("tia_register", {})[
+            event.event_id] = event_to_dict(event, fragnet, res)
+        st.success(f"Saved '{event.event_id}'.")
     sc2.download_button(
         "⬇️ Download TIA report (Excel)",
         data=build_tia_xlsx(res, narrative),
         file_name=f"tia_{event.event_id}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
+        mime="application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet")
 
 
 # ====================================================================== #
@@ -3487,7 +3559,7 @@ def prospective_section() -> None:
         "📥 Data Intake & Inventory",
         "🩺 Schedule Health (DCMA)",
         "⚡ Time Impact Analysis",
-        "🔎 Explain This Delay",
+        "🔎 Explain This Forecast Impact",
     ])
     with intake:
         intake_tab()
