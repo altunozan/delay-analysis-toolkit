@@ -667,6 +667,118 @@ for name, (prompt, _) in builds.items():
     check(f"C2 {name}: limitations content present",
           "caveat" in prompt.lower() or "<caveats>" in prompt)
 
+print("== D. TIA hardening upgrades ==")
+from datetime import datetime as _dt
+
+from programme.tia import (DelayEvent, FragnetActivity, FragnetLink,
+                           _backward_pass, _build_network, _calendar_masks,
+                           _forward_pass, run_cumulative_tia, run_tia)
+from programme.xer_export import build_impacted_xer
+from programme.events_extract import parse_event_candidates, truncation_notes
+from programme.notice import assess_notice
+
+_masks = _calendar_masks(U)
+check("D1 calendar masks carry holiday exceptions",
+      any(len(v[1]) > 0 for v in _masks.values()),
+      f"{sum(len(v[1]) for v in _masks.values())} holidays total")
+
+_ev = DelayEvent("EV-QA", "Chiller rework", "rework to chiller plant")
+_frag = [FragnetActivity("TIA-010", "Remove", 20,
+                         predecessors=[FragnetLink("RM-AC-005")],
+                         successors=[FragnetLink("TIA-020")]),
+         FragnetActivity("TIA-020", "Reinstall", 40,
+                         predecessors=[FragnetLink("TIA-010")],
+                         successors=[FragnetLink("TOC05")])]
+_r = run_tia(U, "U", _ev, _frag)
+check("D2 start-constraint floors applied and disclosed",
+      any("start constraint" in w for w in _r.warnings))
+check("D3 tie-in float reported, post <= pre",
+      bool(_r.tie_in_float) and all(
+          t["float_post"] <= t["float_pre"]
+          for t in _r.tie_in_float
+          if t["float_pre"] is not None and t["float_post"] is not None))
+check("D4 milestone impacts carry total float",
+      any(m.float_pre is not None and m.float_post is not None
+          for m in _r.milestone_impacts))
+check("D4b calibration still tight with masks+constraints",
+      _r.calibration_days is not None and abs(_r.calibration_days) <= 2,
+      f"calibration {_r.calibration_days}")
+
+# D5 completion symmetry: post completion never taken from a fragnet act
+_dd = U.project.data_date
+_inc, _nodes, _preds, _started, _fm, _ = _build_network(U, cfg, _dd)
+_np = dict(_nodes); _pp = {k: list(v) for k, v in _preds.items()}
+for _f in _frag:
+    _np[_f.act_id] = (max(_f.duration_days, 0.0), None)
+    _pp.setdefault(_f.act_id, [])
+    for _l in _f.predecessors:
+        _pp[_f.act_id].append((_l.other_id, _l.link_type, _l.lag_days))
+    for _l in _f.successors:
+        _pp.setdefault(_l.other_id, []).append(
+            (_f.act_id, _l.link_type, _l.lag_days))
+_, _EF1, _, _ = _forward_pass(_np, _pp, _dd, _started)
+check("D5 completion_post measured over the real network only",
+      _r.completion_post == max(ef for c, ef in _EF1.items()
+                                if c in _nodes))
+
+# D6 backward pass: a genuinely critical chain exists (min TF ~ 0)
+_, _EF0, _, _ = _forward_pass(dict(_nodes),
+                              {k: list(v) for k, v in _preds.items()},
+                              _dd, _started)
+_tf = _backward_pass(_nodes, _preds, _EF0)
+check("D6 backward pass yields a zero-float driving chain",
+      _tf and min(abs(v) for v in _tf.values()) <= 1.0,
+      f"min |TF| = {min(abs(v) for v in _tf.values()) if _tf else '—'}")
+
+# D7 cumulative ID clash is caught and the duplicate skipped
+_ev2 = DelayEvent("EV-QB", "Clash", "")
+_frag2 = [FragnetActivity("TIA-010", "Dup id", 10,
+                          predecessors=[FragnetLink("RM-AC-005")],
+                          successors=[FragnetLink("TOC05")])]
+_cum = run_cumulative_tia(U, "U", [(_ev, _frag), (_ev2, _frag2)])
+check("D7 cumulative flags reused fragnet IDs",
+      any("SKIPPED" in w for w in _cum.get("warnings", [])))
+
+# D8 impacted XER: dedicated fragnet WBS band + exact table anchoring
+with open(_p("sample/Sample Update.xer"), encoding="latin-1") as fh:
+    _raw = fh.read()
+_out = build_impacted_xer(_raw, U, _frag, _r)
+_U2 = parse_xer(_out.encode("latin-1", errors="replace"))
+_wrows = [w for w in _U2.raw_tables.get("PROJWBS", [])
+          if "TIA Fragnet" in (w.get("wbs_name") or "")]
+_trows = [t for t in _U2.raw_tables.get("TASK", [])
+          if (t.get("task_code") or "").startswith("TIA-")]
+check("D8 impacted XER round-trips with fragnet WBS band",
+      len(_wrows) == 1 and len(_trows) == 2
+      and all(t.get("wbs_id") == _wrows[0].get("wbs_id") for t in _trows)
+      and len(_U2.tasks) == len(U.tasks) + 2
+      and len(_U2.relationships) == len(U.relationships) + 3)
+
+# D9 event extraction: documented end date -> stated duration; bad order rejected
+_docs = [("L1.txt", "The Engineer instructed suspension of chiller works "
+          "from 12 May 2018; the suspension was lifted on 3 June 2018.")]
+_resp = ('{"events":[{"title":"Suspension","date_start":"2018-05-12",'
+         '"date_end":"2018-06-03","source_doc":"L1.txt",'
+         '"source_snippet":"instructed suspension of chiller works",'
+         '"confidence":"high"}]}')
+_cands, _ = parse_event_candidates(_resp, _docs)
+check("D9 date_end captured, stated duration computed",
+      _cands and _cands[0].stated_duration_days == 22.0)
+_bad = _resp.replace('"date_end":"2018-06-03"', '"date_end":"2018-05-01"')
+_cands_b, _ = parse_event_candidates(_bad, _docs)
+check("D9b end-before-start rejected",
+      _cands_b and _cands_b[0].date_end is None)
+check("D9c truncation disclosed for oversize documents",
+      truncation_notes([("big.pdf", "x" * 20001)]) != []
+      and truncation_notes(_docs) == [])
+
+# D10 notice basis changes the count and is printed
+_na_c = assess_notice(_dt(2018, 5, 11), _dt(2018, 5, 14), 2, "calendar")
+_na_b = assess_notice(_dt(2018, 5, 11), _dt(2018, 5, 14), 2, "business")
+check("D10 Fri->Mon: 3 calendar days late, 1 business day compliant",
+      _na_c.status == "late" and _na_b.status == "compliant"
+      and "business day" in _na_b.detail)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

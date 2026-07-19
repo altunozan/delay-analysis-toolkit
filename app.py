@@ -61,6 +61,7 @@ from programme import (
     EXTRACTION_SYSTEM_PROMPT,
     build_event_extraction_prompt,
     parse_event_candidates,
+    truncation_notes,
     read_document,
     recommended_analysis_schedule,
     event_from_dict,
@@ -3015,6 +3016,8 @@ def tia_tab() -> None:
                 "tia_ev_title", "tia_ev_desc", "tia_ev_date",
                 "tia_ev_resp", "tia_ev_evid", "tia_frag_mode",
                 "tia_entry", "tia_exit", "tia_target_ms", "tia_variant",
+                "tia_cl_ref", "tia_cl_days", "tia_cl_notice",
+                "tia_cl_basis",
                 "c_dd", "c_logic", "c_dur", "c_resp", "c_meth",
                 "tia_step")
     for _k in _persist:
@@ -3177,6 +3180,8 @@ def tia_tab() -> None:
                     st.warning(f"Could not read '{up.name}'.")
             if pasted.strip():
                 docs.append(("analyst narrative", pasted.strip()))
+            for note in truncation_notes(docs):
+                st.warning(note)
             if st.button(f"Extract candidate events from {len(docs)} "
                          "document(s)", key="tia_x_go", type="primary",
                          disabled=not ai_key or not docs):
@@ -3204,12 +3209,21 @@ def tia_tab() -> None:
                 cc1, cc2 = st.columns([5, 1])
                 d = (f"{c.date_start:%Y-%m-%d}" if c.date_start
                      else "no date")
+                if c.date_end:
+                    d += (f" → {c.date_end:%Y-%m-%d}"
+                          + (f", {c.stated_duration_days:.0f}d documented"
+                             if c.stated_duration_days is not None else ""))
                 cc1.markdown(f"**{c.title}** ({d}, {c.confidence})  \n"
                              f"› *{c.source_doc}*: “{c.source_snippet}”")
                 if cc2.button("Use", key=f"tia_use_{k}"):
                     st.session_state["tia_ev_id"] = f"EV-{k + 1:03d}"
                     st.session_state["tia_ev_title"] = c.title
                     desc = c.description
+                    if c.stated_duration_days is not None:
+                        desc += (f"\nDocumented duration: "
+                                 f"{c.stated_duration_days:.0f} days "
+                                 f"({c.date_start:%Y-%m-%d} to "
+                                 f"{c.date_end:%Y-%m-%d} per source).")
                     if c.other_dates:
                         desc += "\nKey dates: " + ", ".join(c.other_dates)
                     st.session_state["tia_ev_desc"] = desc
@@ -3233,11 +3247,16 @@ def tia_tab() -> None:
         event = _tia_event_from_state()
         with st.expander("⚖️ Contractual notice (screening — date "
                          "arithmetic only)", expanded=False):
-            n1, n2, n3 = st.columns(3)
+            n1, n2, n3, n4 = st.columns([1, 1, 1, 1])
             n1.text_input("Clause ref", key="tia_cl_ref",
                           placeholder="e.g. 20.1")
             n2.text_input("Notice period (days)", key="tia_cl_days")
             n3.text_input("Notice date (YYYY-MM-DD)", key="tia_cl_notice")
+            n4.selectbox("Days basis", ["calendar", "business"],
+                         key="tia_cl_basis",
+                         help="How the clause counts days. Business = "
+                              "Mon-Fri; contract-specific holidays are "
+                              "not modelled.")
             try:
                 _pd_ = float(st.session_state.get("tia_cl_days") or "")
             except ValueError:
@@ -3248,7 +3267,9 @@ def tia_tab() -> None:
                     "%Y-%m-%d")
             except ValueError:
                 _nd_ = None
-            na = assess_notice(event.date_raised, _nd_, _pd_)
+            na = assess_notice(
+                event.date_raised, _nd_, _pd_,
+                basis=st.session_state.get("tia_cl_basis", "calendar"))
             badge = {"compliant": st.success, "late": st.error,
                      "no_notice": st.warning,
                      "indeterminate": st.info}[na.status]
@@ -3604,14 +3625,28 @@ def tia_tab() -> None:
             (st.success if w.startswith("Favourable")
              else st.warning)(w)
         affected = [m for m in res.milestone_impacts
-                    if (m.delta_days or 0) != 0]
+                    if (m.delta_days or 0) != 0
+                    or (m.float_consumed_days or 0) != 0]
         st.dataframe(pd.DataFrame([{
             "Milestone": m.code, "Name": m.name,
             "Pre": f"{m.pre:%Y-%m-%d}" if m.pre else "—",
             "Post": f"{m.post:%Y-%m-%d}" if m.post else "—",
             "Delta (d)": m.delta_days,
+            "TF pre (d)": m.float_pre,
+            "TF post (d)": m.float_post,
+            "TF consumed (d)": m.float_consumed_days,
         } for m in (affected or res.milestone_impacts)]),
             use_container_width=True, hide_index=True)
+        if res.tie_in_float:
+            st.markdown("**Float at the fragnet tie-ins** (screening "
+                        "backward pass)")
+            st.dataframe(pd.DataFrame([{
+                "Tie-in": r["code"], "Name": r["name"],
+                "TF pre (d)": r["float_pre"],
+                "TF post (d)": r["float_post"],
+                "Consumed (d)": r["consumed"],
+            } for r in res.tie_in_float]),
+                use_container_width=True, hide_index=True)
         # --- longest-path comparison: pre vs post impact ---------------
         if res.path_pre or res.path_post:
             st.subheader("Longest-path comparison — pre vs post impact")
@@ -3713,6 +3748,8 @@ def tia_tab() -> None:
                                      if r["completion_after"] else "—"),
             } for r in cum["rows"]]), use_container_width=True,
                 hide_index=True)
+            for w in cum.get("warnings", []):
+                st.error(w)
             for w in cum["concurrency"]:
                 st.warning(w)
             st.caption(cum["caveat"])

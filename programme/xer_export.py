@@ -83,6 +83,35 @@ def build_impacted_xer(
     tfields = task_fields(raw_text, "TASK")
     pfields = task_fields(raw_text, "TASKPRED")
 
+    # dedicated WBS node so the fragnet imports as its own visible band,
+    # a sibling of the tie-in activity's work package
+    wbs_rows = data.raw_tables.get("PROJWBS", [])
+    wbs_lines: list[str] = []
+    frag_wbs_id = anchor.get("wbs_id", "")
+    if wbs_rows:
+        base = next((r for r in wbs_rows
+                     if r.get("wbs_id", "").strip()
+                     == anchor.get("wbs_id", "").strip()), None)
+        try:
+            wfields = task_fields(raw_text, "PROJWBS")
+        except ValueError:
+            wfields = None
+        if base is not None and wfields is not None:
+            frag_wbs_id = str(_max_id(wbs_rows, "wbs_id") + 1)
+            label = (f"TIA Fragnet — {result.event.event_id}"
+                     if result.event and result.event.event_id
+                     else "TIA Fragnet")
+            vals = dict(base)
+            vals.update({
+                "wbs_id": frag_wbs_id,
+                "wbs_short_name": "TIA"[:20],
+                "wbs_name": label[:100],
+                "seq_num": str(_max_id(wbs_rows, "seq_num") + 10),
+                "proj_node_flag": "N",
+            })
+            wbs_lines.append("%R\t" + "\t".join(vals.get(fl, "")
+                                                for fl in wfields))
+
     dates = getattr(result, "fragnet_dates", {}) or {}
     hpd = 8.0
     cal = data.calendars.get(anchor.get("clndr_id", "").strip())
@@ -95,7 +124,7 @@ def build_impacted_xer(
         vals = {
             "task_id": new_task_id[f.act_id],
             "proj_id": anchor.get("proj_id", ""),
-            "wbs_id": anchor.get("wbs_id", ""),
+            "wbs_id": frag_wbs_id,
             "clndr_id": f.calendar_id or anchor.get("clndr_id", ""),
             "task_code": f.act_id,
             "task_name": (f.name or f.act_id)[:100],
@@ -160,14 +189,18 @@ def build_impacted_xer(
     def inject(text: str, table: str, lines: list[str]) -> str:
         if not lines:
             return text
-        start = text.index(f"%T\t{table}")
-        nxt = text.find("\n%T\t", start)
+        # exact-name anchor: "%T\tTASK" must not match TASKPRED/TASKRSRC
+        m = re.search(rf"^%T\t{table}\s*$", text, re.M)
+        if m is None:
+            raise ValueError(f"{table} table not found in the file.")
+        nxt = text.find("\n%T\t", m.start())
         insert_at = nxt if nxt != -1 else text.rfind("\n%E")
         if insert_at == -1:
             insert_at = len(text)
         return (text[:insert_at] + "\n" + "\n".join(lines)
                 + text[insert_at:])
 
-    out = inject(raw_text, "TASK", task_lines)
+    out = inject(raw_text, "PROJWBS", wbs_lines)
+    out = inject(out, "TASK", task_lines)
     out = inject(out, "TASKPRED", pred_lines)
     return out

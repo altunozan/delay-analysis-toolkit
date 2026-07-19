@@ -79,6 +79,7 @@ class EventCandidate:
     title: str
     description: str = ""
     date_start: datetime | None = None
+    date_end: datetime | None = None    # stated end (e.g. suspension lifted)
     other_dates: list[str] = field(default_factory=list)
     party_asserted: str = ""
     affected_scope: str = ""
@@ -86,6 +87,14 @@ class EventCandidate:
     source_snippet: str = ""
     confidence: str = "medium"
     verified: bool = False          # snippet found verbatim in the source
+
+    @property
+    def stated_duration_days(self) -> float | None:
+        """Documented event duration — the strongest duration evidence."""
+        if self.date_start and self.date_end \
+                and self.date_end >= self.date_start:
+            return float((self.date_end - self.date_start).days)
+        return None
 
 
 def build_event_extraction_prompt(
@@ -119,6 +128,9 @@ def build_event_extraction_prompt(
         '<output>Return ONLY JSON: {"events": [{"title": "...", '
         '"description": "what happened / what was instructed", '
         '"date_start": "YYYY-MM-DD or null", '
+        '"date_end": "YYYY-MM-DD or null — ONLY when the document itself '
+        'states when the event ended (e.g. suspension lifted, access '
+        'restored); never estimate it", '
         '"other_dates": ["YYYY-MM-DD", ...], '
         '"party_asserted": "who the document asserts is responsible '
         '(or empty)", "affected_scope": "area/discipline/work package", '
@@ -134,6 +146,33 @@ def build_event_extraction_prompt(
 
 def _norm(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip().lower()
+
+
+def truncation_notes(docs: list[tuple[str, str]]) -> list[str]:
+    """Plain-language disclosure of what the prompt could NOT read.
+
+    Mirrors the clipping in ``build_event_extraction_prompt``: per-doc
+    cap first, then the running total cap. Anything clipped is named so
+    the analyst knows the tail of that document was not analysed.
+    """
+    notes: list[str] = []
+    total = 0
+    for name, text in docs:
+        length = len(text or "")
+        clipped = min(length, MAX_DOC_CHARS)
+        if total + clipped > MAX_TOTAL_CHARS:
+            clipped = max(MAX_TOTAL_CHARS - total, 0)
+        total += clipped
+        if clipped < length:
+            if clipped == 0:
+                notes.append(f"'{name}' was NOT read — the combined "
+                             "document limit was already reached.")
+            else:
+                notes.append(
+                    f"'{name}' was truncated: {clipped:,} of {length:,} "
+                    "characters analysed — events described later in the "
+                    "document were not seen.")
+    return notes
 
 
 def parse_event_candidates(
@@ -176,17 +215,23 @@ def parse_event_candidates(
         if src not in doc_text or _norm(snippet) not in doc_text[src]:
             dropped += 1                 # unverifiable evidence -> gone
             continue
-        try:
-            ds = i.get("date_start")
-            date_start = (datetime.strptime(str(ds), "%Y-%m-%d")
-                          if ds else None)
-        except ValueError:
-            date_start = None
+        def _date(key):
+            try:
+                v = i.get(key)
+                return datetime.strptime(str(v), "%Y-%m-%d") if v else None
+            except ValueError:
+                return None
+
+        date_start = _date("date_start")
+        date_end = _date("date_end")
+        if date_start and date_end and date_end < date_start:
+            date_end = None
         conf = str(i.get("confidence", "medium")).lower()
         out.append(EventCandidate(
             title=title[:160],
             description=str(i.get("description", ""))[:600],
             date_start=date_start,
+            date_end=date_end,
             other_dates=[str(d) for d in (i.get("other_dates") or [])
                          if re.match(r"^\d{4}-\d{2}-\d{2}$", str(d))][:8],
             party_asserted=str(i.get("party_asserted", ""))[:120],

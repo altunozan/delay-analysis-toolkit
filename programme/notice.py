@@ -38,12 +38,32 @@ class NoticeAssessment:
     detail: str = ""
 
 
+def _business_days_between(a: datetime, b: datetime) -> float:
+    """Mon-Fri days from a to b (negative when b precedes a)."""
+    if b < a:
+        return -_business_days_between(b, a)
+    from datetime import timedelta
+    count, cur = 0, a
+    while cur < b:
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            count += 1
+    return float(count)
+
+
 def assess_notice(
     awareness_date: datetime | None,
     notice_date: datetime | None,
     period_days: float | None,
+    basis: str = "calendar",        # "calendar" | "business" (Mon-Fri)
 ) -> NoticeAssessment:
-    """Pure date arithmetic; indeterminate whenever an input is missing."""
+    """Pure date arithmetic; indeterminate whenever an input is missing.
+
+    ``basis`` states how the clause counts days; the chosen basis is
+    printed in the detail so the screening is auditable. Business days
+    are Mon-Fri — contract-specific holidays are not modelled.
+    """
+    label = "business day" if basis == "business" else "calendar day"
     if period_days is None or awareness_date is None:
         return NoticeAssessment(
             "indeterminate", None,
@@ -51,20 +71,24 @@ def assess_notice(
     if notice_date is None:
         return NoticeAssessment(
             "no_notice", None,
-            f"No notice date recorded against a {period_days:.0f}-day "
-            "period.")
-    used = (notice_date - awareness_date).total_seconds() / 86400
+            f"No notice date recorded against a {period_days:.0f} "
+            f"{label} period.")
+    if basis == "business":
+        used = _business_days_between(awareness_date, notice_date)
+    else:
+        used = (notice_date - awareness_date).total_seconds() / 86400
     margin = round(period_days - used, 1)
     if margin >= 0:
         return NoticeAssessment(
             "compliant", margin,
-            f"Notice given {used:.0f} days after awareness — "
-            f"{margin:.0f} day(s) inside the {period_days:.0f}-day "
-            "period.")
+            f"Notice given {used:.0f} {label}(s) after awareness — "
+            f"{margin:.0f} {label}(s) inside the {period_days:.0f} "
+            f"{label} period.")
     return NoticeAssessment(
         "late", margin,
-        f"Notice given {used:.0f} days after awareness — "
-        f"{-margin:.0f} day(s) beyond the {period_days:.0f}-day period.")
+        f"Notice given {used:.0f} {label}(s) after awareness — "
+        f"{-margin:.0f} {label}(s) beyond the {period_days:.0f} "
+        f"{label} period.")
 
 
 def build_clause_extraction_prompt(contract_text: str) -> str:

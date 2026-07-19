@@ -61,29 +61,56 @@ STANDING_CAVEATS = [
 
 
 
-def _calendar_masks(data: XerData) -> dict[str, frozenset]:
-    """clndr_id -> working weekdays (Mon=0..Sun=6) parsed from clndr_data.
+_P6_EPOCH = datetime(1899, 12, 30)      # P6 stores exception dates as ordinals
+
+
+def _calendar_masks(data: XerData) -> dict[str, tuple]:
+    """clndr_id -> (working weekdays Mon=0..Sun=6, holiday dates).
 
     P6 stores shifts per day 1..7 (Sun..Sat); a day with no shift content
-    is non-working. Unparseable calendars fall back to 7-day elapsed.
+    is non-working. Dated exceptions live in the same blob as ordinal
+    days since 1899-12-30: an exception with no shift content is a
+    holiday; one WITH shift content is an extra working day.
+    Unparseable calendars fall back to 7-day elapsed.
     """
-    masks: dict[str, frozenset] = {}
+    masks: dict[str, tuple] = {}
     for row in data.raw_tables.get("CALENDAR", []):
         cid = (row.get("clndr_id") or "").strip()
         blob = row.get("clndr_data") or ""
         working: set[int] = set()
+        weekly = blob.split("Exceptions")[0]
         for d in range(1, 8):
-            m = re.search(r"\(0\|\|" + str(d) + r"\(\)?([^)]*)", blob)
+            m = re.search(r"\(0\|\|" + str(d) + r"\(\)?([^)]*)", weekly)
             if m and (":" in m.group(1) or "|" in m.group(1)):
                 working.add((d + 5) % 7)          # P6 1=Sun -> Mon=0 idx 6
-        if 0 < len(working) < 7:
-            masks[cid] = frozenset(working)
+        holidays: set = set()
+        extra: set = set()
+        for m in re.finditer(r"\(d\|(\d+)\)\(\)?([^)]*)", blob):
+            try:
+                day = (_P6_EPOCH + timedelta(days=int(m.group(1)))).date()
+            except (ValueError, OverflowError):
+                continue
+            if ":" in m.group(2) or "|" in m.group(2):
+                extra.add(day)
+            else:
+                holidays.add(day)
+        if 0 < len(working) < 7 or holidays:
+            masks[cid] = (frozenset(working or range(7)),
+                          frozenset(holidays), frozenset(extra))
     return masks
 
 
+def _is_working(day: datetime, mask: tuple) -> bool:
+    wd, hol, extra = mask
+    d = day.date()
+    if d in extra:
+        return True
+    return day.weekday() in wd and d not in hol
+
+
 def _add_working_days(start: datetime, days: float,
-                      mask: frozenset | None) -> datetime:
-    if not mask or len(mask) >= 7 or days <= 0:
+                      mask: tuple | None) -> datetime:
+    if not mask or days <= 0:
         return start + timedelta(days=days)
     whole, frac = int(days), days - int(days)
     cur = start
@@ -92,9 +119,25 @@ def _add_working_days(start: datetime, days: float,
     while added < whole and guard < 20000:
         cur += timedelta(days=1)
         guard += 1
-        if cur.weekday() in mask:
+        if _is_working(cur, mask):
             added += 1
     return cur + timedelta(days=frac)
+
+
+def _sub_working_days(start: datetime, days: float,
+                      mask: tuple | None) -> datetime:
+    if not mask or days <= 0:
+        return start - timedelta(days=days)
+    whole, frac = int(days), days - int(days)
+    cur = start
+    removed = 0
+    guard = 0
+    while removed < whole and guard < 20000:
+        cur -= timedelta(days=1)
+        guard += 1
+        if _is_working(cur, mask):
+            removed += 1
+    return cur - timedelta(days=frac)
 
 
 LINK_TYPES = ("FS", "SS", "FF", "SF")
@@ -405,11 +448,19 @@ class MilestoneImpact:
     name: str
     pre: datetime | None
     post: datetime | None
+    float_pre: float | None = None      # total float (d) before insertion
+    float_post: float | None = None     # after insertion
 
     @property
     def delta_days(self) -> float | None:
         if self.pre and self.post:
             return round((self.post - self.pre).total_seconds() / 86400, 1)
+        return None
+
+    @property
+    def float_consumed_days(self) -> float | None:
+        if self.float_pre is not None and self.float_post is not None:
+            return round(self.float_pre - self.float_post, 1)
         return None
 
 
@@ -426,6 +477,7 @@ class TIAResult:
     fragnet_dates: dict = field(default_factory=dict)   # act_id -> (ES, EF)
     path_pre: list = field(default_factory=list)    # driving chain dicts
     path_post: list = field(default_factory=list)
+    tie_in_float: list = field(default_factory=list)   # per tie-back dicts
     calibration_days: float | None = None   # our pre vs P6's own forecast
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
@@ -469,34 +521,26 @@ def _forward_pass(
         n_days, n_mask = nodes[n]
         es = started_at.get(n, start)
         ef_c = None
-        drv = None
+        drv_start = None            # predecessor driving the start (FS/SS)
+        drv_fin = None              # predecessor driving the finish (FF/SF)
         for p, ltype, lag in preds.get(n, []):
             if p not in EF:
                 continue
             p_mask = nodes[p][1] if p in nodes else None
-            if ltype == "FS":
-                c = _add_working_days(EF[p], lag, p_mask)
+            if ltype in ("FS", "SS"):
+                base = EF[p] if ltype == "FS" else ES[p]
+                c = _add_working_days(base, lag, p_mask)
                 if c > es:
-                    es, drv = c, p
-            elif ltype == "SS":
-                c = _add_working_days(ES[p], lag, p_mask)
-                if c > es:
-                    es, drv = c, p
-            elif ltype == "FF":
-                c = _add_working_days(EF[p], lag, p_mask)
+                    es, drv_start = c, p
+            else:                                   # FF / SF
+                base = EF[p] if ltype == "FF" else ES[p]
+                c = _add_working_days(base, lag, p_mask)
                 if ef_c is None or c > ef_c:
-                    ef_c = c
-                    if _add_working_days(es, n_days, n_mask) < c:
-                        drv = p
-            elif ltype == "SF":
-                c = _add_working_days(ES[p], lag, p_mask)
-                if ef_c is None or c > ef_c:
-                    ef_c = c
-                    if _add_working_days(es, n_days, n_mask) < c:
-                        drv = p
+                    ef_c, drv_fin = c, p
         ef = _add_working_days(es, max(n_days, 0.0), n_mask)
+        drv = drv_start
         if ef_c is not None and ef_c > ef:
-            ef = ef_c
+            ef, drv = ef_c, drv_fin
         ES[n], EF[n] = es, ef
         if drv is not None:
             driver[n] = drv
@@ -505,9 +549,102 @@ def _forward_pass(
 
 
 
+def _backward_pass(
+    nodes: dict[str, tuple],
+    preds: dict[str, list[tuple[str, str, float]]],
+    EF: dict[str, datetime],
+) -> dict[str, float]:
+    """Total float (days) per activity against latest early finish.
+
+    Screening-level mirror of the forward pass: late dates pulled back
+    from the network's completion through the same links and calendars;
+    TF = late finish - early finish in days.
+    """
+    if not EF or not nodes:
+        return {}
+    completion = max(EF.values())
+    succs: dict[str, list[str]] = {n: [] for n in nodes}
+    indeg = {n: 0 for n in nodes}
+    for n, plist in preds.items():
+        for p, _, _ in plist:
+            if p in nodes and n in nodes:
+                succs[p].append(n)
+                indeg[n] += 1
+    queue = [n for n, d in indeg.items() if d == 0]
+    order: list[str] = []
+    while queue:
+        u = queue.pop()
+        order.append(u)
+        for v in succs[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    order += [n for n in nodes if n not in set(order)]     # cycles: best effort
+
+    cap_lf = {n: completion for n in nodes}
+    cap_ls: dict[str, datetime | None] = {n: None for n in nodes}
+    LF: dict[str, datetime] = {}
+    LS: dict[str, datetime] = {}
+    for s in reversed(order):
+        s_days, s_mask = nodes[s]
+        lf = cap_lf[s]
+        ls = _sub_working_days(lf, max(s_days, 0.0), s_mask)
+        if cap_ls[s] is not None and cap_ls[s] < ls:
+            ls = cap_ls[s]
+            lf = min(lf, _add_working_days(ls, max(s_days, 0.0), s_mask))
+        LF[s], LS[s] = lf, ls
+        for p, ltype, lag in preds.get(s, []):
+            if p not in cap_lf:
+                continue
+            p_mask = nodes[p][1]
+            if ltype == "FS":
+                c = _sub_working_days(ls, lag, p_mask)
+                if c < cap_lf[p]:
+                    cap_lf[p] = c
+            elif ltype == "FF":
+                c = _sub_working_days(lf, lag, p_mask)
+                if c < cap_lf[p]:
+                    cap_lf[p] = c
+            elif ltype == "SS":
+                c = _sub_working_days(ls, lag, p_mask)
+                if cap_ls[p] is None or c < cap_ls[p]:
+                    cap_ls[p] = c
+            elif ltype == "SF":
+                c = _sub_working_days(lf, lag, p_mask)
+                if cap_ls[p] is None or c < cap_ls[p]:
+                    cap_ls[p] = c
+    return {n: round((LF[n] - EF[n]).total_seconds() / 86400, 1)
+            for n in nodes if n in EF}
+
+
+# ES floors: the activity cannot start before the constraint date
+_START_FLOOR_CSTR = {"CS_MSO", "CS_MSOA", "CS_MANDSTART"}
+_CSTR_LABEL = {
+    "CS_MSOB": "start on or before", "CS_MEO": "finish on",
+    "CS_MEOA": "finish on or after", "CS_MEOB": "finish on or before",
+    "CS_MANDFIN": "mandatory finish", "CS_ALAP": "as late as possible",
+}
+
+
+def _parse_xer_date(s: str) -> datetime | None:
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s.strip(), fmt)
+        except ValueError:
+            continue
+    return None
+
+
 def _build_network(data: XerData, config, dd):
-    """Incomplete-activity network with per-activity working-day masks."""
+    """Incomplete-activity network with per-activity working-day masks.
+
+    Returns (inc, nodes, preds, started, masks, warnings). ``started``
+    doubles as the early-start floor: data date for in-progress work,
+    constraint date for start-on(-or-after)/mandatory-start constraints.
+    Finish-side and late constraints are reported, not modelled.
+    """
     masks = _calendar_masks(data)
+    warnings: list[str] = []
     inc = {t.task_id: t for t in data.tasks
            if not t.is_loe_or_wbs and t.is_incomplete}
     code_of = {tid: t.task_code for tid, t in inc.items()}
@@ -521,6 +658,40 @@ def _build_network(data: XerData, config, dd):
         nodes[t.task_code] = (max(rem, 0.0), masks.get(t.clndr_id))
         if t.act_start is not None:
             started[t.task_code] = dd
+
+    unmodelled: dict[str, int] = {}
+    floored = 0
+    for row in data.raw_tables.get("TASK", []):
+        code = (row.get("task_code") or "").strip()
+        if code not in nodes:
+            continue
+        for tkey, dkey in (("cstr_type", "cstr_date"),
+                           ("cstr_type2", "cstr_date2")):
+            ctype = (row.get(tkey) or "").strip()
+            if not ctype:
+                continue
+            if ctype in _START_FLOOR_CSTR:
+                cdate = _parse_xer_date(row.get(dkey) or "")
+                if cdate is not None and code not in started:
+                    started[code] = max(started.get(code, cdate), cdate)
+                    floored += 1
+            else:
+                unmodelled[ctype] = unmodelled.get(ctype, 0) + 1
+    if floored:
+        warnings.append(
+            f"{floored} start constraint(s) (Must Start On / Start On or "
+            "After / mandatory start) applied as early-start floors."
+        )
+    if unmodelled:
+        detail = ", ".join(
+            f"{n}× {_CSTR_LABEL.get(c, c)}"
+            for c, n in sorted(unmodelled.items(), key=lambda x: -x[1]))
+        warnings.append(
+            f"Constraints present but NOT modelled by this simplified pass "
+            f"({detail}) — where these govern in P6, the calibration "
+            "figure will absorb the difference; confirm in P6."
+        )
+
     preds: dict[str, list] = {n: [] for n in nodes}
     for rel in data.relationships:
         s = code_of.get(rel.task_id)
@@ -531,7 +702,7 @@ def _build_network(data: XerData, config, dd):
         hpd = data.hours_per_day(t, config)
         lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
         preds[s].append((p, _REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
-    return inc, nodes, preds, started
+    return inc, nodes, preds, started, masks, warnings
 
 
 def run_tia(
@@ -555,7 +726,8 @@ def run_tia(
         return result
     result.data_date = dd
 
-    inc, nodes, preds, started = _build_network(data, config, dd)
+    inc, nodes, preds, started, fmasks, wn = _build_network(data, config, dd)
+    result.warnings.extend(wn)
 
     ES0, EF0, w0, drv0 = _forward_pass(
         dict(nodes), {k: list(v) for k, v in preds.items()}, dd,
@@ -564,7 +736,6 @@ def run_tia(
     # --- insert the fragnet into a COPY ----------------------------------
     nodes_p = dict(nodes)
     preds_p = {k: list(v) for k, v in preds.items()}
-    fmasks = _calendar_masks(data)
     for f in fragnet:
         nodes_p[f.act_id] = (max(f.duration_days or 0.0, 0.0),
                              fmasks.get(f.calendar_id))
@@ -600,13 +771,36 @@ def run_tia(
     result.path_pre = _chain(EF0, ES0, drv0)
     result.path_post = _chain(EF1, ES1, drv1)
 
+    # --- total float (screening backward pass), pre and post --------------
+    tf0 = _backward_pass(nodes, preds, EF0)
+    tf1 = _backward_pass(nodes_p, preds_p, EF1)
+    if tf1:
+        result.caveats.append(
+            "Total float figures are screening values from the same "
+            "simplified pass (late dates pulled back from the latest "
+            "forecast finish); they support criticality judgement of the "
+            "impacted chain, not P6 float reporting."
+        )
+        tie_ins = {l.other_id for f in fragnet for l in f.successors
+                   if l.other_id in nodes}
+        names_ti = {t.task_code: t.name for t in inc.values()}
+        result.tie_in_float = sorted(({
+            "code": c, "name": names_ti.get(c, c),
+            "float_pre": tf0.get(c), "float_post": tf1.get(c),
+            "consumed": (round(tf0[c] - tf1[c], 1)
+                         if c in tf0 and c in tf1 else None),
+        } for c in tie_ins), key=lambda r: (r["float_post"]
+                                            if r["float_post"] is not None
+                                            else 1e9))
+
     # --- milestone + completion impacts ----------------------------------
     ms = [t for t in inc.values() if t.is_milestone]
     impacts = []
     for t in ms:
         c = t.task_code
         impacts.append(MilestoneImpact(
-            code=c, name=t.name, pre=EF0.get(c), post=EF1.get(c)))
+            code=c, name=t.name, pre=EF0.get(c), post=EF1.get(c),
+            float_pre=tf0.get(c), float_post=tf1.get(c)))
     impacts.sort(key=lambda m: -(m.delta_days or 0))
     if target_milestone:
         targeted = [m for m in impacts if m.code == target_milestone]
@@ -617,9 +811,11 @@ def run_tia(
 
     if EF0:
         result.completion_pre = max(EF0.values())
-    if EF1:
-        result.completion_post = max(
-            ef for code, ef in EF1.items())
+    # symmetric with pre: completion is measured over the REAL network
+    # only — fragnet activities report their own dates separately
+    real_post = [ef for code, ef in EF1.items() if code in nodes]
+    if real_post:
+        result.completion_post = max(real_post)
     if result.completion_pre and result.completion_post:
         result.completion_delta_days = round(
             (result.completion_post
@@ -640,23 +836,36 @@ def run_tia(
         )
     if (result.completion_delta_days is not None
             and result.completion_delta_days <= 0 and fragnet):
-        chain_fins = [EF1[f.act_id] for f in fragnet if f.act_id in EF1]
         detail = ""
-        if chain_fins and result.completion_pre:
-            headroom = (result.completion_pre
-                        - max(chain_fins)).total_seconds() / 86400
-            detail = (f" The event chain finishes "
-                      f"{max(chain_fins):%Y-%m-%d}, "
-                      f"{headroom:.0f} days before pre-impact completion "
-                      f"({result.completion_pre:%Y-%m-%d}) — the delay "
-                      "is absorbed by that headroom. A longer chain, a "
-                      "later start, or a tighter tie-in would surface an "
-                      "impact.")
+        with_float = [r for r in result.tie_in_float
+                      if r["float_post"] is not None]
+        if with_float:
+            tightest = with_float[0]        # sorted by post float ascending
+            consumed = tightest["consumed"]
+            detail = (
+                f" Tightest tie-in {tightest['code']} "
+                f"'{tightest['name']}' retains "
+                f"{tightest['float_post']:.0f}d total float"
+                + (f" (the event consumed {consumed:.0f}d of "
+                   f"{tightest['float_pre']:.0f}d)"
+                   if consumed is not None and tightest["float_pre"]
+                   is not None else "") + ".")
         result.warnings.append(
             "Favourable/neutral: the fragnet as modelled does not move "
             "forecast completion — the impacted path carries float, or "
             "the event ties into non-critical work." + detail
         )
+        near = [r for r in result.tie_in_float
+                if r["float_post"] is not None and r["float_post"] < 10]
+        if near:
+            result.warnings.append(
+                "NEAR-CRITICAL: "
+                + "; ".join(f"{r['code']} is down to "
+                            f"{r['float_post']:.0f}d total float"
+                            for r in near[:4])
+                + " — a modest further slippage would surface a "
+                "completion impact. Monitor these chains."
+            )
     return result
 
 
@@ -1120,15 +1329,30 @@ def run_cumulative_tia(
     dd = data.project.data_date if data.project else None
     if dd is None or not records:
         return {"rows": [], "total_delta_days": None,
-                "concurrency": [], "caveat": CUMULATIVE_CAVEAT}
+                "concurrency": [], "warnings": [],
+                "caveat": CUMULATIVE_CAVEAT}
     ordered = sorted(records,
                      key=lambda r: r[0].date_raised or dd)
-    inc, nodes, preds, started = _build_network(data, config, dd)
+    inc, nodes, preds, started, fmasks, _ = _build_network(data, config, dd)
     _, EF, _, _ = _forward_pass(dict(nodes),
                                 {k: list(v) for k, v in preds.items()},
                                 dd, started)
     pre = max(EF.values()) if EF else None
-    fmasks = _calendar_masks(data)
+
+    # fragnet IDs must be unique across ALL inserted events — a reused ID
+    # would silently overwrite the earlier event's activity
+    warnings: list[str] = []
+    seen_ids: dict[str, str] = {}
+    for event, fragnet in ordered:
+        for f in fragnet:
+            if f.act_id in seen_ids and seen_ids[f.act_id] != event.event_id:
+                warnings.append(
+                    f"Fragnet ID '{f.act_id}' is used by both "
+                    f"{seen_ids[f.act_id]} and {event.event_id} — the "
+                    f"{event.event_id} copy was SKIPPED. Give every "
+                    "event's fragnet unique IDs and re-run.")
+            else:
+                seen_ids[f.act_id] = event.event_id
 
     rows = []
     spans = {}
@@ -1136,6 +1360,8 @@ def run_cumulative_tia(
     nodes_c = dict(nodes)
     preds_c = {k: list(v) for k, v in preds.items()}
     for event, fragnet in ordered:
+        fragnet = [f for f in fragnet
+                   if seen_ids.get(f.act_id) == event.event_id]
         for f in fragnet:
             nodes_c[f.act_id] = (max(f.duration_days or 0.0, 0.0),
                                  fmasks.get(f.calendar_id))
@@ -1177,4 +1403,5 @@ def run_cumulative_tia(
              if prev and pre else None)
     return {"rows": rows, "total_delta_days": total,
             "completion_pre": pre, "completion_final": prev,
-            "concurrency": concurrency, "caveat": CUMULATIVE_CAVEAT}
+            "concurrency": concurrency, "warnings": warnings,
+            "caveat": CUMULATIVE_CAVEAT}

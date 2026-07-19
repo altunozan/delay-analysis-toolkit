@@ -56,6 +56,7 @@ from .events_extract import (
     RP52R06_CAVEAT,
     build_event_extraction_prompt,
     parse_event_candidates,
+    truncation_notes,
     read_document,
     recommended_analysis_schedule,
 )
@@ -284,6 +285,7 @@ __all__ = [
     "RP52R06_CAVEAT",
     "build_event_extraction_prompt",
     "parse_event_candidates",
+    "truncation_notes",
     "read_document",
     "recommended_analysis_schedule",
     # explain this delay
