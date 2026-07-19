@@ -2954,8 +2954,34 @@ def tia_tab() -> None:
                 "modules and Explain This Delay.")
         return
 
+    # Streamlit drops widget-backed state once its widget is not
+    # rendered; each step renders only its own widgets, so every
+    # cross-step key must be re-pinned each run.
+    _persist = ("tia_key", "tia_provider", "tia_prog", "tia_ev_id",
+                "tia_ev_title", "tia_ev_desc", "tia_ev_date",
+                "tia_ev_resp", "tia_ev_evid", "tia_frag_mode",
+                "tia_entry", "tia_exit", "tia_target_ms", "tia_variant",
+                "c_dd", "c_logic", "c_dur", "c_resp", "c_meth",
+                "tia_step")
+    for _k in _persist:
+        if _k in st.session_state:
+            st.session_state[_k] = st.session_state[_k]
+    if "tia_step_next" in st.session_state:
+        st.session_state["tia_step"] = st.session_state.pop(
+            "tia_step_next")
     step = st.radio("TIA workflow", _TIA_STEPS, horizontal=True,
                     key="tia_step", label_visibility="collapsed")
+
+    def _nav(idx: int) -> None:
+        b, c = st.columns([1, 5])
+        if idx > 0 and b.button("← Back", key=f"tia_back_{idx}"):
+            st.session_state["tia_step_next"] = _TIA_STEPS[idx - 1]
+            st.rerun()
+        if idx < len(_TIA_STEPS) - 1 and c.button(
+                f"Continue → {_TIA_STEPS[idx + 1]}",
+                type="primary", key=f"tia_next_{idx}"):
+            st.session_state["tia_step_next"] = _TIA_STEPS[idx + 1]
+            st.rerun()
     names = [r.file_name for r in inv.revisions]
     chosen = st.session_state.get("tia_prog", names[-1])
     if chosen not in names:
@@ -2969,9 +2995,11 @@ def tia_tab() -> None:
     # ---- ① update + AI registration + health gateway --------------------
     if step == _TIA_STEPS[0]:
         st.subheader("① Select the current update & register your AI")
+        if st.session_state.get("tia_prog") not in names:
+            st.session_state["tia_prog"] = names[-1]
         st.selectbox(
             "Current accepted update (the analysis schedule)", names,
-            index=names.index(chosen), key="tia_prog",
+            key="tia_prog",
             help="AACE RP 52R-06: use the last accepted update with a "
                  "data date before the event. The fragnet is inserted "
                  "into an in-memory copy only.")
@@ -3007,14 +3035,14 @@ def tia_tab() -> None:
         env = os.environ.get(pinfo["env_var"], "")
         if st.session_state["tia_provider"] == "gemini" and not env:
             env = os.environ.get("GOOGLE_API_KEY", "")
+        st.session_state.setdefault("tia_key", env)
         st.text_input(f"{pinfo['label']} API key", type="password",
-                      value=st.session_state.get("tia_key", env),
                       key="tia_key",
                       help="Held in this session only; never stored.")
-        st.caption("Continue to **② Event** above." +
-                   ("" if st.session_state.get("tia_key") else
-                    "  (You can proceed without a key — AI assistance "
-                    "will be disabled.)"))
+        if not st.session_state.get("tia_key"):
+            st.caption("You can proceed without a key — AI assistance "
+                       "will be disabled.")
+        _nav(0)
         return
 
     # ---- ② event ---------------------------------------------------------
@@ -3171,9 +3199,9 @@ def tia_tab() -> None:
                                 "(answer to improve the draft):**")
                     for q in scope.unanswered_questions:
                         st.write("•", q)
-        st.caption("Continue to **③ Fragnet** above."
-                   if event.title else
-                   "Give the event a title to continue.")
+        if not event.title:
+            st.caption("Give the event a title to continue.")
+        _nav(1)
         return
 
     if not event.title:
@@ -3329,9 +3357,9 @@ def tia_tab() -> None:
                 st.caption("Apply your chosen tie-ins via the chain "
                            "builder pickers or the advanced grid — "
                            "recommendations are never auto-inserted.")
-        st.caption(f"{len(fragnet)} fragnet activities. Continue to "
-                   "**④ Validate & confirm** above."
+        st.caption(f"{len(fragnet)} fragnet activities."
                    if fragnet else "Add at least one step to continue.")
+        _nav(2)
         return
 
     fragnet = _tia_fragnet_from_state(data)
@@ -3384,8 +3412,9 @@ def tia_tab() -> None:
         }
         all_ok = all(st.checkbox(lbl, key=k) for k, lbl in checks.items())
         st.session_state["tia_confirmed"] = all_ok
-        st.caption("Continue to **⑤ Run impact** above." if all_ok
-                   else "Tick every confirmation to unlock the run.")
+        if not all_ok:
+            st.caption("Tick every confirmation to unlock the run.")
+        _nav(3)
         return
 
     if not st.session_state.get("tia_confirmed"):
@@ -3415,10 +3444,11 @@ def tia_tab() -> None:
                 "ai_provider": (PROVIDERS[ai_provider]["label"]
                                 if ai_key else "none (manual)"),
             }
-            st.success("Run complete — continue to **⑥ Review** above.")
+            st.success("Run complete.")
         elif st.session_state.get("tia_result") is not None:
-            st.info("A result exists — re-run to refresh it, or continue "
-                    "to **⑥ Review**.")
+            st.info("A result exists — re-run to refresh it, or "
+                    "continue.")
+        _nav(4)
         return
 
     res = st.session_state.get("tia_result")
@@ -3455,7 +3485,7 @@ def tia_tab() -> None:
         with st.expander("Standing caveats (always apply)"):
             for c in res.caveats:
                 st.write("•", c)
-        st.caption("Continue to **⑦ Export & audit** above.")
+        _nav(5)
         return
 
     # ---- ⑦ export & audit ---------------------------------------------------
