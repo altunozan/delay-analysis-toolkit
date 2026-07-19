@@ -44,6 +44,8 @@ from dcma.report_xlsx import build_xlsx_report
 from programme.variance import DIMENSION_SEPARATOR
 from programme import (
     DelayEvent,
+    EXPORT_CAVEAT,
+    build_impacted_xer,
     FRAGNET_SYSTEM_PROMPT,
     FragnetActivity,
     activity_code_types,
