@@ -779,6 +779,16 @@ check("D10 Fri->Mon: 3 calendar days late, 1 business day compliant",
       _na_c.status == "late" and _na_b.status == "compliant"
       and "business day" in _na_b.detail)
 
+# D11 impossible notice inputs never yield a contractual status
+check("D11 notice before awareness -> indeterminate",
+      assess_notice(_dt(2018, 5, 10), _dt(2018, 5, 5), 14).status
+      == "indeterminate")
+check("D11b non-positive clause period -> indeterminate",
+      assess_notice(_dt(2018, 5, 10), _dt(2018, 5, 12), -7).status
+      == "indeterminate"
+      and assess_notice(_dt(2018, 5, 10), _dt(2018, 5, 12), 0).status
+      == "indeterminate")
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

@@ -68,6 +68,18 @@ def assess_notice(
         return NoticeAssessment(
             "indeterminate", None,
             "Awareness date and clause period are both required.")
+    if period_days <= 0:
+        return NoticeAssessment(
+            "indeterminate", None,
+            f"Clause period {period_days:.0f} is not a positive number "
+            "of days — check the recorded clause parameters.")
+    if notice_date is not None and notice_date < awareness_date:
+        return NoticeAssessment(
+            "indeterminate", None,
+            f"Notice date ({notice_date:%Y-%m-%d}) precedes the "
+            f"awareness date ({awareness_date:%Y-%m-%d}) — check the "
+            "recorded dates; no compliance status is reported from "
+            "inconsistent inputs.")
     if notice_date is None:
         return NoticeAssessment(
             "no_notice", None,

@@ -359,7 +359,7 @@ def build_gantt_html(tree: dict, zoom_px_per_month: int = 34,
                      data_date: str | None = None,
                      title: str = "Programme",
                      categories: list[dict] | None = None) -> str:
-    """Full HTML document for st.components.v1.html.
+    """Full HTML document for st.iframe.
 
     ``tree`` — from hierarchy.tree_to_dict or group_tree below.
     ``categories`` — bar colour scheme: [{key, label, color}] matched

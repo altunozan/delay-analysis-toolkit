@@ -23,7 +23,6 @@ from datetime import datetime
 import altair as alt
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as st_components
 
 from dcma import DCMAConfig, parse_xer, run_all_checks
 from dcma.checks import CheckStatus
@@ -380,7 +379,7 @@ def intake_tab() -> None:
         }
         for r in inv.revisions
     ])
-    st.dataframe(inv_df, use_container_width=True, hide_index=True)
+    st.dataframe(inv_df, width="stretch", hide_index=True)
 
     for w in inv.warnings:
         st.info(w)
@@ -518,7 +517,7 @@ def detail_section(results) -> None:
                 st.info(r.na_reason)
             if r.detail_rows:
                 df = pd.DataFrame(r.detail_rows)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 st.caption(f"{len(df)} affected item(s).")
             elif r.affected_ids:
                 st.write(", ".join(r.affected_ids[:200]))
@@ -717,7 +716,7 @@ def milestone_tab() -> None:
     )
     st.altair_chart(
         (line + points).properties(height=420).interactive(),
-        use_container_width=True,
+        width="stretch",
     )
     st.caption("◆ = achieved (actual date) · ● = forecast. Positive shift = "
                "milestone moved later.")
@@ -734,7 +733,7 @@ def milestone_tab() -> None:
         }
         for s in by_slip
     ])
-    st.dataframe(summary, use_container_width=True, hide_index=True, height=320)
+    st.dataframe(summary, width="stretch", hide_index=True, height=320)
 
     narrative = ai_narrative_panel(
         "nar_milestones",
@@ -889,7 +888,7 @@ def variance_tab() -> None:
             )
             .properties(height=max(140, 26 * len(delta_df)))
         )
-        st.altair_chart(bar, use_container_width=True)
+        st.altair_chart(bar, width="stretch")
         if multi_dim:
             st.caption(f"Bar colour = {first_dim_name} (first selected "
                        "dimension). Bar direction shows slip (right) vs "
@@ -926,7 +925,7 @@ def variance_tab() -> None:
         st.subheader("Planned vs as-recorded bands")
         dd_v = (f"{cur_data.project.data_date:%Y-%m-%d}"
                 if cur_data.project and cur_data.project.data_date else None)
-        st_components.html(
+        st.iframe(
             build_gantt_html(
                 group_tree(var_groups), data_date=dd_v,
                 title=f"Planned vs as-recorded — {dim_name}",
@@ -936,7 +935,7 @@ def variance_tab() -> None:
                     {"key": "recorded", "label": "as-recorded",
                      "color": RECORDED_COLOR},
                 ]),
-            height=520, scrolling=False)
+            height=520)
         st.caption("Each group carries its planned and as-recorded band; "
                    "navy brackets span both. Expand/collapse"
                    + (f" by {first_dim_name}," if multi_dim else ",")
@@ -956,7 +955,7 @@ def variance_tab() -> None:
         }
         for g in var.groups
     ])
-    st.dataframe(table, use_container_width=True, hide_index=True)
+    st.dataframe(table, width="stretch", hide_index=True)
 
     for w in var.warnings:
         st.warning(w)
@@ -1111,11 +1110,11 @@ def hierarchy_tab() -> None:
     # --- the collapsible gantt ----------------------------------------------
     dd = (f"{data.project.data_date:%Y-%m-%d}"
           if data.project and data.project.data_date else None)
-    st_components.html(
+    st.iframe(
         build_gantt_html(tree_to_dict(h.root), data_date=dd,
                          title=" › ".join(
                              lbl.split(" (")[0] for lbl in dim_labels)),
-        height=720, scrolling=False)
+        height=720)
     st.caption(
         "Click any group to expand/collapse · search auto-expands matching "
         "branches · summary brackets span earliest start → latest finish of "
@@ -1273,7 +1272,7 @@ def sequence_tab() -> None:
                 "Stage evidence": st.column_config.TextColumn(
                     disabled=True),
             },
-            hide_index=True, use_container_width=True, height=360,
+            hide_index=True, width="stretch", height=360,
             key=f"seq_editor_{chosen}_v{editor_ver}",
         )
         if st.button("✅ Confirm mapping", type="primary",
@@ -1451,7 +1450,7 @@ def sequence_tab() -> None:
                                      for b in bs)]
             dd_sq = (f"{data.project.data_date:%Y-%m-%d}"
                      if data.project and data.project.data_date else None)
-            st_components.html(
+            st.iframe(
                 build_gantt_html(
                     group_tree(seq_groups), data_date=dd_sq,
                     title=f"Sequence — Front › Stage ({chosen})",
@@ -1460,13 +1459,13 @@ def sequence_tab() -> None:
                          "color": report_charts.STAGE_COLORS.get(
                              s, "#9e9e9e")}
                         for s in stages_present]),
-                height=620, scrolling=False)
+                height=620)
             st.caption("Code-level gantt: each work front expands into its "
                        "stage bands, coloured by stage · fronts in "
                        "start → finish order · dashed red line = data "
                        "date. (Colour-by applies to the other two views.)")
     if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
         st.caption("Bars = actual dates as recorded. Switch view, colour, "
                    "and front count above — or let the AI recommend the "
                    "clearest configuration.")
@@ -1481,7 +1480,7 @@ def sequence_tab() -> None:
                              if b.act_start else "—"),
             "Actual finish": (f"{b.act_finish:%Y-%m-%d}"
                               if b.act_finish else "—"),
-        } for b in seq.bands]), use_container_width=True,
+        } for b in seq.bands]), width="stretch",
             hide_index=True, height=340)
 
     with st.expander("Standing caveats (always apply)"):
@@ -1541,7 +1540,7 @@ def asbuilt_tab() -> None:
 
     chart = report_charts.asbuilt_persistence_chart(res, max_rows=90)
     if chart is not None:
-        st.altair_chart(chart, use_container_width=True)
+        st.altair_chart(chart, width="stretch")
         st.caption("Bars = actual dates as last recorded; darker red = on "
                    "the forecast critical path in a larger share of "
                    "revisions (the empirical spine of the as-built path).")
@@ -1566,7 +1565,7 @@ def asbuilt_tab() -> None:
                     "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
                                       if a.act_finish else "in progress"),
                     "Persistent core": "✓" if a.task_code in core else "",
-                } for a in w.activities]), use_container_width=True,
+                } for a in w.activities]), width="stretch",
                     hide_index=True, height=300)
             else:
                 st.write("No forecast-critical work recorded as performed "
@@ -1582,7 +1581,7 @@ def asbuilt_tab() -> None:
                              if e.act_start else "—"),
             "Actual finish": (f"{e.act_finish:%Y-%m-%d}"
                               if e.act_finish else "—"),
-        } for e in res.persistence]), use_container_width=True,
+        } for e in res.persistence]), width="stretch",
             hide_index=True, height=340)
 
     # ---- independent check: backward trace on actual dates --------------
@@ -1639,7 +1638,7 @@ def asbuilt_tab() -> None:
                 "Programmed logic": "✓" if lk.had_logic else "✗",
                 "Confidence": lk.score,
                 "Alternatives": lk.alternatives,
-            } for lk in trace.links]), use_container_width=True,
+            } for lk in trace.links]), width="stretch",
                 hide_index=True)
 
         # ---- method agreement -------------------------------------------
@@ -1667,7 +1666,7 @@ def asbuilt_tab() -> None:
                             "Activity": tri.names.get(c, ""),
                             "Identified by": "Trace only"}
                            for c in tri.trace_only])
-                st.dataframe(pd.DataFrame(rows), use_container_width=True,
+                st.dataframe(pd.DataFrame(rows), width="stretch",
                              hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
@@ -2251,7 +2250,7 @@ def resources_tab() -> None:
                          alt.Tooltip("yearmonth(Month):T", format="%b %Y"),
                          alt.Tooltip("Quantity:Q", format=",.0f")],
             ).properties(height=340),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Resources")
@@ -2261,7 +2260,7 @@ def resources_tab() -> None:
         "Type": r.rsrc_type,
         "Total planned qty": round(r.total_qty, 1),
         "Assignments": r.assignment_count,
-    } for r in res.resources]), use_container_width=True, hide_index=True)
+    } for r in res.resources]), width="stretch", hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
         for c in res.caveats:
@@ -2341,7 +2340,7 @@ def float_erosion_tab() -> None:
             ).properties(height=260).facet(
                 column=alt.Column("Metric:N", title=None)
             ).resolve_scale(y="independent"),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Float profile by revision")
@@ -2354,7 +2353,7 @@ def float_erosion_tab() -> None:
         "Critical (TF ≤ 0)": s.critical_count,
         "Negative": s.negative_count,
         f"Near (≤ {near:.0f}d)": s.near_count,
-    } for s in res.snapshots]), use_container_width=True, hide_index=True)
+    } for s in res.snapshots]), width="stretch", hide_index=True)
 
     for w in res.windows:
         if w.top_eroders or w.top_gainers:
@@ -2372,7 +2371,7 @@ def float_erosion_tab() -> None:
                     "Activity": d.name, "TF was (d)": d.old_tf,
                     "TF now (d)": d.new_tf, "Delta (d)": round(d.delta, 1),
                 } for d in w.top_gainers]),
-                    use_container_width=True, hide_index=True)
+                    width="stretch", hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
         for c in res.caveats:
@@ -2479,7 +2478,7 @@ def progress_tab() -> None:
                              alt.Tooltip("Date:T", format="%d %b %Y"),
                              alt.Tooltip("Cum %:Q", format=".1f")]))
     st.altair_chart(alt.layer(*layers).properties(height=380),
-                    use_container_width=True)
+                    width="stretch")
     st.caption("◆ = each revision's overall recorded % at its data date.")
 
     if res.revision_points:
@@ -2493,7 +2492,7 @@ def progress_tab() -> None:
                           if rp.planned_pct is not None
                           and rp.recorded_pct is not None else None),
         } for rp in res.revision_points]),
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
         for c in res.caveats:
@@ -2572,7 +2571,7 @@ def windows_tab() -> None:
                 tooltip=[alt.Tooltip("Data date:T", format="%d %b %Y"),
                          alt.Tooltip("Completion:T", format="%d %b %Y")],
             ).properties(height=260, title="Completion trajectory"),
-            use_container_width=True,
+            width="stretch",
         )
     mv = [{"Window": f"W{w.index}: {w.from_label} → {w.to_label}",
            "Movement (d)": w.movement_days}
@@ -2589,7 +2588,7 @@ def windows_tab() -> None:
                                     alt.value("#1a7f37")),
                 tooltip=["Window", "Movement (d)"],
             ).properties(height=260, title="Movement per window"),
-            use_container_width=True,
+            width="stretch",
         )
 
     st.subheader("Windows")
@@ -2605,7 +2604,7 @@ def windows_tab() -> None:
         "Path similarity": (f"{w.cp_similarity:.0%}"
                             if w.cp_similarity is not None else "—"),
         "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
-    } for w in res.windows]), use_container_width=True, hide_index=True)
+    } for w in res.windows]), width="stretch", hide_index=True)
 
     for w in res.windows:
         if w.shifts:
@@ -2617,7 +2616,7 @@ def windows_tab() -> None:
                     "Direction": s.direction,
                     "Activity ID": s.task_code,
                     "Activity": s.name,
-                } for s in w.shifts]), use_container_width=True,
+                } for s in w.shifts]), width="stretch",
                     hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
@@ -2704,7 +2703,7 @@ def comparison_tab() -> None:
                 alt.value("#cf222e"), alt.value("#3b76c4")),
             tooltip=["Category", "Count"],
         ).properties(height=28 * len(chart_df)),
-        use_container_width=True,
+        width="stretch",
     )
 
     def _acts_table(refs):
@@ -2736,7 +2735,7 @@ def comparison_tab() -> None:
             f"({len(cmp.actual_date_changes)})", expanded=True,
         ):
             st.dataframe(_changes_table(cmp.actual_date_changes),
-                         use_container_width=True, hide_index=True)
+                         width="stretch", hide_index=True)
 
     sections = [
         (f"Activities added ({len(cmp.added)})", _acts_table, cmp.added),
@@ -2760,7 +2759,7 @@ def comparison_tab() -> None:
     for label, fn, items in sections:
         if items:
             with st.expander(label):
-                st.dataframe(fn(items), use_container_width=True,
+                st.dataframe(fn(items), width="stretch",
                              hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
@@ -2884,7 +2883,7 @@ def critical_path_tab() -> None:
         })
     dd_cp = (f"{data.project.data_date:%Y-%m-%d}"
              if data.project and data.project.data_date else None)
-    st_components.html(
+    st.iframe(
         build_gantt_html(
             group_tree(cp_groups), data_date=dd_cp,
             title=f"Critical path — {chosen}",
@@ -2894,7 +2893,7 @@ def critical_path_tab() -> None:
                 {"key": "near-critical", "label": "near-critical",
                  "color": BAND_COLORS["near-critical"]},
             ]),
-        height=560, scrolling=False)
+        height=560)
     st.caption("Early-start order · ◆ = milestone · expand/collapse, "
                "search and zoom in the chart · chain continuity and the "
                "driving logic links are reported in the warnings above and "
@@ -2914,7 +2913,7 @@ def critical_path_tab() -> None:
         }
         for a in (cp.activities if show_near else cp.critical)
     ])
-    st.dataframe(table, use_container_width=True, hide_index=True, height=340)
+    st.dataframe(table, width="stretch", hide_index=True, height=340)
 
     with st.expander("Standing caveats (always apply)"):
         for c in cp.caveats:
@@ -3292,7 +3291,7 @@ def tia_tab() -> None:
                     st.error(exc.message)
             cl = st.session_state.get("tia_clauses")
             if cl:
-                st.dataframe(pd.DataFrame(cl), use_container_width=True,
+                st.dataframe(pd.DataFrame(cl), width="stretch",
                              hide_index=True)
                 st.caption("Silent topics carry no quotation; every "
                            "non-silent entry's quotation was verified "
@@ -3353,7 +3352,7 @@ def tia_tab() -> None:
                     "Duration (d)": (round(t["duration_days"], 1)
                                      if t["duration_days"] is not None
                                      else None),
-                } for t in templates]), use_container_width=True,
+                } for t in templates]), width="stretch",
                     hide_index=True)
         with st.expander("🤖 Evidence-assisted fragnet recommendation "
                          "(AI drafts — the planner verifies)",
@@ -3420,7 +3419,7 @@ def tia_tab() -> None:
                     {"Step": "", "Duration (d)": 0.0}]
             steps_df = st.data_editor(
                 pd.DataFrame(st.session_state["tia_chain_steps"]),
-                num_rows="dynamic", use_container_width=True,
+                num_rows="dynamic", width="stretch",
                 key="tia_chain_editor")
             st.session_state["tia_chain_steps"] = steps_df.to_dict(
                 "records")
@@ -3434,7 +3433,7 @@ def tia_tab() -> None:
                     "Assumptions": ""}]
             edited = st.data_editor(
                 pd.DataFrame(st.session_state["tia_frag_rows"]),
-                num_rows="dynamic", use_container_width=True,
+                num_rows="dynamic", width="stretch",
                 key="tia_grid_editor")
             st.session_state["tia_frag_rows"] = edited.to_dict("records")
             st.caption("Links: `ACTIVITYID:FS:0; TIA-010:SS:5`.")
@@ -3454,7 +3453,7 @@ def tia_tab() -> None:
                 if prev_lid:
                     pacts[-2]["links"] = [lid]
                 prev_lid, es = lid, ef
-            st_components.html(
+            st.iframe(
                 build_gantt_html(
                     group_tree([{"name": "Fragnet preview (sequential, "
                                  "from the data date)",
@@ -3465,7 +3464,7 @@ def tia_tab() -> None:
                     title="Fragnet preview",
                     categories=[{"key": "fragnet", "label": "fragnet",
                                  "color": "#e8a33d"}]),
-                height=170 + 26 * len(pacts), scrolling=False)
+                height=170 + 26 * len(pacts))
             st.caption("Preview only — sequential FS chain from the data "
                        "date; the impact run applies the real tie-ins "
                        "and calendars.")
@@ -3500,7 +3499,7 @@ def tia_tab() -> None:
                 if items:
                     st.markdown(f"**{label_r}** (ranked)")
                     st.dataframe(pd.DataFrame(items),
-                                 use_container_width=True,
+                                 width="stretch",
                                  hide_index=True)
             for w in rec_l.get("warnings", []):
                 st.warning(w)
@@ -3532,7 +3531,7 @@ def tia_tab() -> None:
             "Duration (d)": f.duration_days,
             "Predecessors": links_to_text(f.predecessors),
             "Successors": links_to_text(f.successors),
-        } for f in fragnet]), use_container_width=True, hide_index=True)
+        } for f in fragnet]), width="stretch", hide_index=True)
         ms_opts = [t.task_code for t in sorted(
             (x for x in data.tasks if x.is_milestone
              and not x.is_loe_or_wbs and x.is_incomplete),
@@ -3636,7 +3635,7 @@ def tia_tab() -> None:
             "TF post (d)": m.float_post,
             "TF consumed (d)": m.float_consumed_days,
         } for m in (affected or res.milestone_impacts)]),
-            use_container_width=True, hide_index=True)
+            width="stretch", hide_index=True)
         if res.tie_in_float:
             st.markdown("**Float at the fragnet tie-ins** (screening "
                         "backward pass)")
@@ -3646,7 +3645,7 @@ def tia_tab() -> None:
                 "TF post (d)": r["float_post"],
                 "Consumed (d)": r["consumed"],
             } for r in res.tie_in_float]),
-                use_container_width=True, hide_index=True)
+                width="stretch", hide_index=True)
         # --- longest-path comparison: pre vs post impact ---------------
         if res.path_pre or res.path_post:
             st.subheader("Longest-path comparison — pre vs post impact")
@@ -3685,7 +3684,7 @@ def tia_tab() -> None:
             ])
             dd_t = (f"{res.data_date:%Y-%m-%d}"
                     if res.data_date else None)
-            st_components.html(
+            st.iframe(
                 build_gantt_html(
                     tree, data_date=dd_t,
                     title=f"TIA {event.event_id} — driving paths",
@@ -3697,7 +3696,7 @@ def tia_tab() -> None:
                         {"key": "fragnet", "label": "fragnet (event)",
                          "color": "#e8a33d"},
                     ]),
-                height=430, scrolling=False)
+                height=430)
             st.caption("Arrows = driving logic along each path · the "
                        "fragnet sits as its own group inside the "
                        "post-impact path · dashed red line = data date.")
@@ -3746,7 +3745,7 @@ def tia_tab() -> None:
                 "Incremental (d)": r["incremental_delta_days"],
                 "Completion after": (f"{r['completion_after']:%Y-%m-%d}"
                                      if r["completion_after"] else "—"),
-            } for r in cum["rows"]]), use_container_width=True,
+            } for r in cum["rows"]]), width="stretch",
                 hide_index=True)
             for w in cum.get("warnings", []):
                 st.error(w)
@@ -3847,7 +3846,7 @@ def explain_tab() -> None:
             ).properties(height=260,
                          title=f"{target} — recorded date by data date "
                                "(facts)"),
-            use_container_width=True)
+            width="stretch")
 
     st.subheader("Windows: facts and inferred drivers")
     st.dataframe(pd.DataFrame([{
@@ -3860,7 +3859,7 @@ def explain_tab() -> None:
         "Attribution": ("reliable" if w.attribution_reliable
                         else "UNCERTAIN"),
         "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
-    } for w in res.windows]), use_container_width=True, hide_index=True)
+    } for w in res.windows]), width="stretch", hide_index=True)
 
     for w in res.windows:
         if w.shifts:
@@ -3873,7 +3872,7 @@ def explain_tab() -> None:
                     "Direction": s.direction,
                     "Activity ID": s.task_code,
                     "Activity": s.name,
-                } for s in w.shifts]), use_container_width=True,
+                } for s in w.shifts]), width="stretch",
                     hide_index=True)
 
     with st.expander("Standing caveats (always apply)"):
@@ -3913,7 +3912,7 @@ def landing_page() -> None:
             "- Sequence coding & hierarchy rebuild\n"
             "- Assembled expert-style report")
         if st.button("Open retrospective analysis", type="primary",
-                     use_container_width=True):
+                     width="stretch"):
             st.session_state["app_mode"] = "Retrospective"
             st.rerun()
     with c2:
@@ -3928,7 +3927,7 @@ def landing_page() -> None:
             "- Controlled insertion + pre/post impact measurement\n"
             "- TIA narrative & Excel report")
         if st.button("Open prospective analysis", type="primary",
-                     use_container_width=True):
+                     width="stretch"):
             st.session_state["app_mode"] = "Prospective"
             st.rerun()
     st.caption(

@@ -79,8 +79,11 @@ def main() -> int:
             check("sample load: no exceptions", exc() == 0, f"{exc()}")
 
             # ---- every retrospective tab ----------------------------
-            tabs = page.locator('button[role="tab"]')
+            tabs = page.locator('[role="tab"]')
             n = tabs.count()
+            # 15 tabs is the SHIPPED retrospective design (the 6-screen
+            # redesign was deliberately not adopted) — update this
+            # number only as part of an intentional workflow change
             check("retrospective tab count", n == 15, f"{n}")
             for i in range(n):
                 tabs.nth(i).click()
@@ -93,7 +96,7 @@ def main() -> int:
             page.wait_for_timeout(6000)
             check("prospective renders",
                   page.get_by_text("Prospective Analysis").count() > 0)
-            ptabs = page.locator('button[role="tab"]')
+            ptabs = page.locator('[role="tab"]')
             check("prospective tab count", ptabs.count() == 4,
                   f"{ptabs.count()}")
 
@@ -133,7 +136,7 @@ def main() -> int:
                   f"{exc()}")
 
             # Explain This Forecast Impact tab
-            page.locator('button[role="tab"]').nth(3).click()
+            page.locator('[role="tab"]').nth(3).click()
             page.wait_for_timeout(6000)
             check("explain tab exception-free", exc() == 0, f"{exc()}")
             browser.close()
