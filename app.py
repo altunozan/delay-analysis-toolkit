@@ -2033,10 +2033,12 @@ def report_tab() -> None:
         audit_t = st.session_state.get("tia_audit", {})
         candidates.append(dict(
             label="Time impact analysis", sec=sec,
-            settings=[f"TIA — {audit_t.get('method', 'simplified CPM per '
-                      'AACE RP 52R-06')}; source "
-                      f"{audit_t.get('source_file', '?')} sha256 "
-                      f"{str(audit_t.get('source_sha256', ''))[:16]}"],
+            settings=[
+                "TIA — "
+                + (audit_t.get("method")
+                   or "simplified CPM per AACE RP 52R-06")
+                + f"; source {audit_t.get('source_file', '?')} sha256 "
+                + str(audit_t.get("source_sha256", ""))[:16]],
             nar_key=f"nar_tia_{e_t.event_id}",
             prompt=lambda r=tia_res: build_tia_prompt(r),
             charts=[(lambda r=tia_res: report_charts.tia_paths_chart(r),
