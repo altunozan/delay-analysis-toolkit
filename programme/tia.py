@@ -297,6 +297,9 @@ def validate_fragnet(
     for f in fragnet:
         if f.duration_days is None or f.duration_days < 0:
             issues.append(f"{f.act_id}: negative or missing duration.")
+        elif f.duration_days == 0:
+            issues.append(f"{f.act_id}: zero duration — a 0d step cannot "
+                          "delay anything; enter the forecast duration.")
         elif f.duration_days > 365:
             issues.append(f"{f.act_id}: duration {f.duration_days:.0f}d "
                           "exceeds a year — check the estimate.")
@@ -549,10 +552,22 @@ def run_tia(
         )
     if (result.completion_delta_days is not None
             and result.completion_delta_days <= 0 and fragnet):
+        chain_fins = [EF1[f.act_id] for f in fragnet if f.act_id in EF1]
+        detail = ""
+        if chain_fins and result.completion_pre:
+            headroom = (result.completion_pre
+                        - max(chain_fins)).total_seconds() / 86400
+            detail = (f" The event chain finishes "
+                      f"{max(chain_fins):%Y-%m-%d}, "
+                      f"{headroom:.0f} days before pre-impact completion "
+                      f"({result.completion_pre:%Y-%m-%d}) — the delay "
+                      "is absorbed by that headroom. A longer chain, a "
+                      "later start, or a tighter tie-in would surface an "
+                      "impact.")
         result.warnings.append(
             "Favourable/neutral: the fragnet as modelled does not move "
-            "forecast completion — the impacted path may carry float, or "
-            "the event ties into non-critical work."
+            "forecast completion — the impacted path carries float, or "
+            "the event ties into non-critical work." + detail
         )
     return result
 
