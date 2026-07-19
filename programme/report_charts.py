@@ -330,3 +330,35 @@ def sequence_matrix_chart(seq, max_fronts: int = 25) -> alt.Chart | None:
             .properties(width=620, height=max(220, 16 * len(keep)),
                         title="Construction sequence by work front "
                               "(actual dates)"))
+
+
+def tia_paths_chart(res) -> alt.Chart | None:
+    """Static pre- vs post-impact driving paths for the Word report."""
+    rows = []
+    for series, path in (("Pre-impact", getattr(res, "path_pre", [])),
+                         ("Post-impact", getattr(res, "path_post", []))):
+        for p in path[:30]:
+            if not p.get("start") or not p.get("finish"):
+                continue
+            cat = ("Fragnet" if (series == "Post-impact"
+                                 and p.get("fragnet")) else series)
+            rows.append({"Row": f"{series}: {p['id']}",
+                         "Series": cat, "Start": p["start"],
+                         "Finish": p["finish"]})
+    if not rows:
+        return None
+    order = [r["Row"] for r in rows]
+    return (alt.Chart(pd.DataFrame(rows))
+            .mark_bar(height=8, cornerRadius=2)
+            .encode(
+                x=alt.X("Start:T", title=None,
+                        axis=alt.Axis(format="%b %Y")),
+                x2="Finish:T",
+                y=alt.Y("Row:N", sort=order, title=None,
+                        axis=alt.Axis(labelLimit=280, labelFontSize=8)),
+                color=alt.Color("Series:N", scale=alt.Scale(
+                    domain=["Pre-impact", "Post-impact", "Fragnet"],
+                    range=["#4c8ede", "#cf222e", "#e8a33d"]),
+                    legend=alt.Legend(orient="bottom", title=None)))
+            .properties(width=620, height=max(160, 12 * len(order)),
+                        title="Driving paths — pre vs post impact"))

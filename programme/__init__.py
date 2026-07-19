@@ -191,6 +191,14 @@ from .variance import (
     compute_variance,
     compute_variance_by_mapping,
 )
+from .notice import (
+    CLAUSE_SYSTEM_PROMPT,
+    NOTICE_CAVEAT,
+    NoticeAssessment,
+    assess_notice,
+    build_clause_extraction_prompt,
+    parse_clause_extraction,
+)
 from .progress import (
     CurvePoint,
     ProgressResult,
@@ -342,6 +350,12 @@ __all__ = [
     "parse_links",
     "run_tia",
     "run_cumulative_tia",
+    "CLAUSE_SYSTEM_PROMPT",
+    "NOTICE_CAVEAT",
+    "NoticeAssessment",
+    "assess_notice",
+    "build_clause_extraction_prompt",
+    "parse_clause_extraction",
     "CUMULATIVE_CAVEAT",
     "EXPORT_CAVEAT",
     "build_impacted_xer",

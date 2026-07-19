@@ -75,6 +75,11 @@ from programme import (
     run_tia,
     run_cumulative_tia,
     validate_fragnet,
+    CLAUSE_SYSTEM_PROMPT,
+    NOTICE_CAVEAT,
+    assess_notice,
+    build_clause_extraction_prompt,
+    parse_clause_extraction,
     BasisOfAnalysis,
     ReportSection,
     SourceFile,
@@ -1994,6 +1999,49 @@ def report_tab() -> None:
             charts=[(lambda rl=rl: report_charts.resources_chart(rl),
                      "Planned resource loading by month")]))
 
+    # Time Impact Analysis (when a run exists this session)
+    tia_res = st.session_state.get("tia_result")
+    if tia_res is not None and tia_res.completion_delta_days is not None:
+        e_t = tia_res.event
+        sec = ReportSection("Time Impact Analysis (Prospective)")
+        sec.key_findings = [
+            f"Event {e_t.event_id}: {e_t.title} — forecast impact "
+            f"{tia_res.completion_delta_days:+.1f} days on completion "
+            f"({tia_res.completion_pre:%d %b %Y} → "
+            f"{tia_res.completion_post:%d %b %Y})."
+            if tia_res.completion_pre and tia_res.completion_post else
+            f"Event {e_t.event_id}: {e_t.title}.",
+            f"Fragnet: {len(tia_res.fragnet)} activities; calibration vs "
+            f"P6 {tia_res.calibration_days:+.1f} days."
+            if tia_res.calibration_days is not None else
+            f"Fragnet: {len(tia_res.fragnet)} activities.",
+        ]
+        hit = [m for m in tia_res.milestone_impacts
+               if (m.delta_days or 0) > 0][:3]
+        if hit:
+            sec.key_findings.append(
+                "Most affected milestones: "
+                + "; ".join(f"{m.code} {m.delta_days:+.0f}d"
+                            for m in hit) + ".")
+        cum_t = st.session_state.get("tia_cum")
+        if cum_t and cum_t.get("total_delta_days") is not None:
+            sec.key_findings.append(
+                f"Cumulative register position: "
+                f"{cum_t['total_delta_days']:+.1f} days across "
+                f"{len(cum_t['rows'])} events.")
+        sec.caveats = list(tia_res.caveats) + list(tia_res.warnings)
+        audit_t = st.session_state.get("tia_audit", {})
+        candidates.append(dict(
+            label="Time impact analysis", sec=sec,
+            settings=[f"TIA — {audit_t.get('method', 'simplified CPM per '
+                      'AACE RP 52R-06')}; source "
+                      f"{audit_t.get('source_file', '?')} sha256 "
+                      f"{str(audit_t.get('source_sha256', ''))[:16]}"],
+            nar_key=f"nar_tia_{e_t.event_id}",
+            prompt=lambda r=tia_res: build_tia_prompt(r),
+            charts=[(lambda r=tia_res: report_charts.tia_paths_chart(r),
+                     "Driving paths, pre vs post impact")]))
+
     # Sequence coding (latest revision; analyst-confirmed mapping if any)
     seq_prop = st.session_state.get(f"seq_rows_{curr_name}")
     seq_confirmed = st.session_state.get(f"seq_rows_{curr_name}_confirmed",
@@ -3181,6 +3229,51 @@ def tia_tab() -> None:
                        key="tia_ev_resp")
         ec5.text_input("Evidence noted", key="tia_ev_evid")
         event = _tia_event_from_state()
+        with st.expander("⚖️ Contractual notice (screening — date "
+                         "arithmetic only)", expanded=False):
+            n1, n2, n3 = st.columns(3)
+            n1.text_input("Clause ref", key="tia_cl_ref",
+                          placeholder="e.g. 20.1")
+            n2.text_input("Notice period (days)", key="tia_cl_days")
+            n3.text_input("Notice date (YYYY-MM-DD)", key="tia_cl_notice")
+            try:
+                _pd_ = float(st.session_state.get("tia_cl_days") or "")
+            except ValueError:
+                _pd_ = None
+            try:
+                _nd_ = datetime.strptime(
+                    (st.session_state.get("tia_cl_notice") or "").strip(),
+                    "%Y-%m-%d")
+            except ValueError:
+                _nd_ = None
+            na = assess_notice(event.date_raised, _nd_, _pd_)
+            badge = {"compliant": st.success, "late": st.error,
+                     "no_notice": st.warning,
+                     "indeterminate": st.info}[na.status]
+            badge(f"Status: {na.status.upper()} — {na.detail} "
+                  f"(clause {st.session_state.get('tia_cl_ref') or '—'})")
+            st.caption(NOTICE_CAVEAT)
+            ct = st.text_area("Optional: paste contract extract for AI "
+                              "clause mapping (verbatim-verified)",
+                              key="tia_cl_text", height=80)
+            if st.button("Extract clause mechanics", key="tia_cl_go",
+                         disabled=not ai_key or not ct.strip()):
+                try:
+                    txt = "".join(stream_narrative(
+                        ai_provider, ai_key,
+                        build_clause_extraction_prompt(ct),
+                        ai_model, system=CLAUSE_SYSTEM_PROMPT))
+                    st.session_state["tia_clauses"] = (
+                        parse_clause_extraction(txt, ct))
+                except NarrativeError as exc:
+                    st.error(exc.message)
+            cl = st.session_state.get("tia_clauses")
+            if cl:
+                st.dataframe(pd.DataFrame(cl), use_container_width=True,
+                             hide_index=True)
+                st.caption("Silent topics carry no quotation; every "
+                           "non-silent entry's quotation was verified "
+                           "against the pasted text.")
         rec = recommended_analysis_schedule(
             [(r.file_name, r.data_date) for r in inv.revisions],
             event.date_raised)

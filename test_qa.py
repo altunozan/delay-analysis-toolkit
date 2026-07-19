@@ -562,6 +562,31 @@ check("A26c incremental deltas sum to total",
 check("A26d overlapping driving chains flagged as concurrency candidates",
       len(_cum["concurrency"]) == 1)
 
+
+# A27. Notice screening + clause extraction + TIA report chart
+from programme import (assess_notice, build_clause_extraction_prompt,
+                       parse_clause_extraction)
+from programme import report_charts as _rc27
+from datetime import datetime as _dt7
+check("A27 notice compliant with margin",
+      assess_notice(_dt7(2018,5,3), _dt7(2018,5,20), 28).status
+      == "compliant")
+check("A27b notice late",
+      assess_notice(_dt7(2018,5,3), _dt7(2018,7,1), 28).status == "late")
+check("A27c no notice / indeterminate",
+      assess_notice(_dt7(2018,5,3), None, 28).status == "no_notice"
+      and assess_notice(None, None, None).status == "indeterminate")
+_ct = "Clause 20.1: the Contractor shall give notice within 28 days of awareness."
+_ok = parse_clause_extraction(
+    '{"clauses":[{"topic":"notice","clause_ref":"20.1","period_days":28,'
+    '"requirement":"notify","snippet":"give notice within 28 days",'
+    '"silent":false},{"topic":"float","silent":true},'
+    '{"topic":"fake","snippet":"invented words here","silent":false}]}', _ct)
+check("A27d clause parser: verified kept, silent kept, invented dropped",
+      len(_ok) == 2 and _ok[0]["period_days"] == 28)
+check("A27e TIA paths chart builds",
+      _rc27.tia_paths_chart(_r) is not None)
+
 print("\n== B. Edge cases / degenerate inputs ==")
 
 # B1. Windows with one revision
