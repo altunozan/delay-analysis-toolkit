@@ -81,10 +81,12 @@ def main() -> int:
             # ---- every retrospective tab ----------------------------
             tabs = page.locator('[role="tab"]')
             n = tabs.count()
-            # 15 tabs is the SHIPPED retrospective design (the 6-screen
-            # redesign was deliberately not adopted) — update this
-            # number only as part of an intentional workflow change
-            check("retrospective tab count", n == 15, f"{n}")
+            # 16 tabs is the SHIPPED retrospective design: the original
+            # 15 (the 6-screen redesign was deliberately not adopted)
+            # plus Progress Transfer (Module 17, added 2026-07-23) —
+            # update this number only as part of an intentional
+            # workflow change
+            check("retrospective tab count", n == 16, f"{n}")
             for i in range(n):
                 tabs.nth(i).click()
                 page.wait_for_timeout(5000)

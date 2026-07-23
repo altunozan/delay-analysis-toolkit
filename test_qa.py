@@ -789,6 +789,162 @@ check("D11b non-positive clause period -> indeterminate",
       and assess_notice(_dt(2018, 5, 10), _dt(2018, 5, 12), 0).status
       == "indeterminate")
 
+print("== E. Comparison impact, progress transfer, project library ==")
+
+from programme import (assess_comparison_impact, build_provenance,
+                       out_of_sequence_flags, run_progress_transfer,
+                       ProjectStore)
+import tempfile
+
+# E1. Impact screening — coverage, ordering, and score sanity
+_imp = assess_comparison_impact(B, U, "B", "U")
+_cmp_bu = compare_revisions(B, U, "B", "U")
+_bands_ok = all(c.band_old in ("critical", "near-critical", "off-path",
+                               "completed", "absent")
+                and c.band_new in ("critical", "near-critical", "off-path",
+                                   "completed", "absent")
+                for c in _imp.ranked)
+check("E1 every ranked change carries valid path bands", _bands_ok)
+check("E1b ranked count == diff total minus renames",
+      len(_imp.ranked) == _cmp_bu.total_changes - len(_cmp_bu.renamed),
+      f"ranked={len(_imp.ranked)} vs "
+      f"{_cmp_bu.total_changes - len(_cmp_bu.renamed)}")
+check("E1c rank is sorted by score descending",
+      all(_imp.ranked[i].score >= _imp.ranked[i + 1].score
+          for i in range(len(_imp.ranked) - 1)))
+check("E1d every retrospective actual change is red-flagged",
+      sum(1 for c in _imp.ranked if c.red_flag)
+      >= len(_cmp_bu.actual_date_changes))
+_imp_self = assess_comparison_impact(B, B, "B", "B")
+check("E1e self-impact == 0 ranked changes", len(_imp_self.ranked) == 0,
+      f"got {len(_imp_self.ranked)}")
+
+# E2. Out-of-sequence screening — well-formed, and a manual FS recount
+_oos = out_of_sequence_flags(U)
+check("E2 OOS overlaps positive or None (open predecessor)",
+      all(f.overlap_days is None or f.overlap_days > 0 for f in _oos))
+_by_id = {t.task_id: t for t in U.tasks if not t.is_loe_or_wbs}
+_manual_fs = 0
+for _r in U.relationships:
+    _pt, _st_ = _by_id.get(_r.pred_task_id), _by_id.get(_r.task_id)
+    if (_pt is not None and _st_ is not None and _r.pred_type == "PR_FS"
+            and _st_.act_start and _pt.act_finish
+            and (_pt.act_finish - _st_.act_start).total_seconds()
+            / 86400.0 > 0.1):
+        _manual_fs += 1
+_fs_flags = sum(1 for f in _oos
+                if f.link_type == "FS" and f.overlap_days is not None)
+check("E2b FS overlap flags == manual recount from raw actuals",
+      _fs_flags == _manual_fs, f"flags={_fs_flags} vs manual={_manual_fs}")
+
+# E3. Provenance — windows equal the direct pairwise diffs
+_prov = build_provenance(fix)
+check("E3 provenance windows == revisions - 1",
+      len(_prov.windows) == len(fix) - 1)
+_direct = compare_revisions(fix[0][1], fix[1][1], fix[0][0], fix[1][0])
+check("E3b window counts match direct pairwise diff",
+      _prov.windows[0].counts == _direct.category_counts)
+check("E3c red-flag count mirrors actual-date changes",
+      all(w.red_flag_count == len(w.comparison.actual_date_changes)
+          for w in _prov.windows))
+
+# E4. Progress transfer — self-transfer identity + manual recounts
+_tr_self = run_progress_transfer(U, U, "U", "U")
+check("E4 self-transfer network effect == 0",
+      _tr_self.network_effect_days == 0.0,
+      f"got {_tr_self.network_effect_days}")
+_tr = run_progress_transfer(B, U, "B", "U")
+_b_codes = {t.task_code for t in B.tasks if not t.is_loe_or_wbs}
+_manual_fin = sum(1 for t in U.tasks
+                  if not t.is_loe_or_wbs and t.act_finish is not None
+                  and t.task_code in _b_codes)
+check("E4b transferred completions == manual recount",
+      _tr.applied_finishes == _manual_fin,
+      f"applied={_tr.applied_finishes} vs manual={_manual_fin}")
+_manual_started = sum(1 for t in U.tasks
+                      if not t.is_loe_or_wbs and t.act_start is not None
+                      and t.act_finish is None and t.task_code in _b_codes)
+check("E4c transferred starts == manual recount (in-progress only)",
+      _tr.applied_starts == _manual_started,
+      f"applied={_tr.applied_starts} vs manual={_manual_started}")
+check("E4d reference run stays calibrated to P6 (|err| <= 1.5d)",
+      _tr.calibration_days is not None
+      and abs(_tr.calibration_days) <= 1.5,
+      f"calibration={_tr.calibration_days}")
+check("E4e data date taken from the progress donor",
+      _tr.data_date == U.project.data_date)
+check("E4f statusing caveats always emitted",
+      any("retained logic" in c.lower() for c in _tr.caveats)
+      and any("not a schedule submission" in c for c in _tr.caveats))
+
+# E5. Project library — dedupe by hash, append-only, record round-trip
+with tempfile.TemporaryDirectory() as _td:
+    _store = ProjectStore(os.path.join(_td, "lib.db"))
+    _r1 = _store.register_file("QA", "a.xer", b"AAA", data_date="2020-01-01")
+    _r2 = _store.register_file("QA", "a_renamed.xer", b"AAA")
+    _r3 = _store.register_file("QA", "b.xer", b"BBB")
+    check("E5 identical content deduped by hash",
+          _r2.already_registered and _r2.id == _r1.id
+          and _r2.sha256 == _r1.sha256)
+    check("E5b register holds exactly the distinct files",
+          len(_store.custody_register("QA")) == 2)
+    check("E5c store is append-only (no delete API)",
+          not any(hasattr(_store, m) for m in
+                  ("delete_file", "delete_record", "remove", "clear")))
+    _store.save_record("QA", "tia_audit", "run", {"delta": 12.5, "n": 3})
+    _recs = _store.list_records("QA", "tia_audit")
+    check("E5d analysis record round-trips through JSON",
+          len(_recs) == 1 and _recs[0].payload == {"delta": 12.5, "n": 3})
+    check("E5e sha256 matches an independent hash",
+          _r3.sha256 == __import__("hashlib").sha256(b"BBB").hexdigest())
+
+# E6. Scope/logic decomposition — the fix for the conflated headline
+check("E6 decomposition identity: logic + scope == full - reference",
+      _tr.network_effect_days is not None
+      and _tr.scope_effect_days is not None
+      and abs((_tr.network_effect_days + _tr.scope_effect_days)
+              - (_tr.completion_transferred
+                 - _tr.completion_reference).total_seconds() / 86400)
+      <= 0.21,
+      f"logic={_tr.network_effect_days} scope={_tr.scope_effect_days}")
+check("E6b self-transfer: both effects zero",
+      _tr_self.network_effect_days == 0.0
+      and _tr_self.scope_effect_days == 0.0)
+check("E6c sample: scope dominates logic (the conflation the split "
+      "exposes)",
+      abs(_tr.scope_effect_days) > abs(_tr.network_effect_days),
+      f"scope={_tr.scope_effect_days} logic={_tr.network_effect_days}")
+check("E6d scope caveat discloses the decomposition",
+      any("intersection" in c for c in _tr.caveats))
+
+# E7. OOS flags ranked by criticality inside the impact assessment
+_ord = ["critical", "near-critical", "off-path", "completed", "absent"]
+_idx = [_ord.index(f.band) for f in _imp.oos_flags]
+check("E7 OOS flags ranked driving-path first", _idx == sorted(_idx))
+check("E7b every OOS flag carries a valid band",
+      all(f.band in _ord for f in _imp.oos_flags))
+
+# E8. Excel deliverables open with the expected sheets
+from programme import (build_impact_xlsx, build_transfer_xlsx,
+                       build_custody_xlsx)
+_wb_i = load_workbook(io.BytesIO(build_impact_xlsx(_imp)))
+check("E8 impact workbook: summary + rank + OOS + caveats",
+      {"Summary", "Materiality rank", "Out of sequence",
+       "Warnings & Caveats"} <= set(_wb_i.sheetnames),
+      str(_wb_i.sheetnames))
+_wb_t = load_workbook(io.BytesIO(build_transfer_xlsx(_tr)))
+check("E8b transfer workbook: summary + milestones + chain + caveats",
+      {"Summary", "Milestones", "Driving chain",
+       "Statusing & Caveats"} <= set(_wb_t.sheetnames),
+      str(_wb_t.sheetnames))
+with tempfile.TemporaryDirectory() as _td2:
+    _st2 = ProjectStore(os.path.join(_td2, "l.db"))
+    _st2.register_file("QA", "x.xer", b"X", data_date="2020-01-01")
+    _wb_c = load_workbook(io.BytesIO(
+        build_custody_xlsx(_st2.custody_register())))
+    check("E8c custody workbook opens with the register sheet",
+          "Custody register" in _wb_c.sheetnames)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

@@ -42,6 +42,16 @@ from .comparison import (
     LogicChange,
     compare_revisions,
 )
+from .comparison_impact import (
+    ComparisonImpact,
+    OutOfSequenceFlag,
+    ProvenanceResult,
+    ProvenanceWindow,
+    RankedChange,
+    assess_comparison_impact,
+    build_provenance,
+    out_of_sequence_flags,
+)
 from .critical_path import (
     CriticalPathResult,
     PathActivity,
@@ -120,6 +130,9 @@ from .report_docx import (
 from .report_xlsx import (
     build_asbuilt_xlsx,
     build_comparison_xlsx,
+    build_custody_xlsx,
+    build_impact_xlsx,
+    build_transfer_xlsx,
     build_critical_path_xlsx,
     build_explain_xlsx,
     build_float_erosion_xlsx,
@@ -183,6 +196,17 @@ from .tia import (
     run_cumulative_tia,
     CUMULATIVE_CAVEAT,
     validate_fragnet,
+)
+from .progress_transfer import (
+    ProgressTransferResult,
+    TransferMilestone,
+    run_progress_transfer,
+)
+from .store import (
+    STORE_CAVEATS,
+    AnalysisRecord,
+    FileRecord,
+    ProjectStore,
 )
 from .xer_export import EXPORT_CAVEAT, build_impacted_xer
 from .variance import (
@@ -272,6 +296,24 @@ __all__ = [
     "FieldChange",
     "LogicChange",
     "compare_revisions",
+    # comparison impact & materiality
+    "ComparisonImpact",
+    "OutOfSequenceFlag",
+    "ProvenanceResult",
+    "ProvenanceWindow",
+    "RankedChange",
+    "assess_comparison_impact",
+    "build_provenance",
+    "out_of_sequence_flags",
+    # progress transfer
+    "ProgressTransferResult",
+    "TransferMilestone",
+    "run_progress_transfer",
+    # project library / custody register
+    "STORE_CAVEATS",
+    "AnalysisRecord",
+    "FileRecord",
+    "ProjectStore",
     # critical path
     "CriticalPathResult",
     "PathActivity",
@@ -389,6 +431,9 @@ __all__ = [
     # excel
     "build_asbuilt_xlsx",
     "build_comparison_xlsx",
+    "build_custody_xlsx",
+    "build_impact_xlsx",
+    "build_transfer_xlsx",
     "build_explain_xlsx",
     "build_float_erosion_xlsx",
     "build_progress_xlsx",

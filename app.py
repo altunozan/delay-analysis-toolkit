@@ -129,6 +129,14 @@ from programme import (
     build_windows_prompt,
     build_windows_xlsx,
     compare_revisions,
+    assess_comparison_impact,
+    build_provenance,
+    run_progress_transfer,
+    ProjectStore,
+    STORE_CAVEATS,
+    build_custody_xlsx,
+    build_impact_xlsx,
+    build_transfer_xlsx,
     build_inventory,
     combine_mappings,
     end_activity_candidates,
@@ -400,6 +408,77 @@ def intake_tab() -> None:
         file_name="data_inventory.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
+    # ------------------------------------------------------------------ #
+    # Project library — local chain-of-custody register
+    # ------------------------------------------------------------------ #
+    with st.expander("📚 Project library — local chain-of-custody register"):
+        st.caption(
+            "An append-only local register: each file's SHA-256, size and "
+            "registration time. Identical content is never duplicated, so "
+            "the register can testify when this exact file first entered "
+            "the analysis."
+        )
+        default_project = ""
+        if inv.revisions:
+            default_project = (inv.revisions[0].project_short_name
+                               or inv.revisions[0].file_name)
+        lib_project = st.text_input("Project name for the register",
+                                    value=default_project,
+                                    key="lib_project")
+        if st.button("Register uploaded files in the library",
+                     disabled=not lib_project.strip()):
+            raw_pool = st.session_state.get("xer_raw", {})
+            try:
+                store = ProjectStore()
+                added, dups = 0, 0
+                by_name = {r.file_name: r for r in inv.revisions}
+                for name, _data in files:
+                    raw = raw_pool.get(name)
+                    if raw is None:
+                        continue
+                    r = by_name.get(name)
+                    rec = store.register_file(
+                        lib_project.strip(), name, raw,
+                        data_date=(r.data_date.strftime("%Y-%m-%d")
+                                   if r and r.data_date else None),
+                        project_short_name=(r.project_short_name
+                                            if r else None),
+                        activity_count=(r.activity_count if r else None))
+                    if rec.already_registered:
+                        dups += 1
+                    else:
+                        added += 1
+                st.success(f"Registered {added} file(s); {dups} already "
+                           "in the register (matched by hash).")
+            except Exception as exc:  # noqa: BLE001 - read-only FS etc.
+                st.error(f"Library unavailable on this host: {exc}")
+        try:
+            store = ProjectStore()
+            rows = store.custody_register(lib_project.strip() or None)
+            if rows:
+                lib_df = pd.DataFrame([{
+                    "Registered (UTC)": r.added_utc,
+                    "Project": r.project,
+                    "File": r.file_name,
+                    "Data date": r.data_date or "—",
+                    "Activities": r.activity_count,
+                    "Size (bytes)": r.size_bytes,
+                    "SHA-256": r.sha256,
+                } for r in rows])
+                st.dataframe(lib_df, width="stretch", hide_index=True)
+                st.download_button(
+                    "⬇️ Download custody register (Excel)",
+                    data=build_custody_xlsx(rows),
+                    file_name="custody_register.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument."
+                         "spreadsheetml.sheet",
+                    key="lib_dl",
+                )
+        except Exception:  # noqa: BLE001 - no register yet / no write access
+            pass
+        for c in STORE_CAVEATS:
+            st.caption(f"• {c}")
 
 
 # ====================================================================== #
@@ -2762,6 +2841,134 @@ def comparison_tab() -> None:
                 st.dataframe(fn(items), width="stretch",
                              hide_index=True)
 
+    # ------------------------------------------------------------------ #
+    # Module 6b — impact & materiality screening
+    # ------------------------------------------------------------------ #
+    st.divider()
+    st.subheader("Impact & materiality screening")
+    st.caption(
+        "Places every change on the driving (longest) path of each "
+        "revision, ranks changes by a disclosed screening score, and "
+        "screens the later revision for out-of-sequence progress. "
+        "A screening for analyst attention — not a causation finding."
+    )
+    if st.toggle("Run impact screening",
+                 key=f"impact_on_{old_name}_{new_name}"):
+        with st.spinner("Tracing driving paths and ranking changes…"):
+            imp = assess_comparison_impact(
+                pool[old_name], pool[new_name], old_name, new_name,
+                comparison=cmp)
+        i1, i2, i3, i4 = st.columns(4)
+        i1.metric("Changes on / near driving path",
+                  f"{imp.band_counts.get('critical', 0)} / "
+                  f"{imp.band_counts.get('near-critical', 0)}")
+        i2.metric("Completion moved (cal. days)",
+                  f"{imp.completion_moved_days:+.0f}"
+                  if imp.completion_moved_days is not None else "—")
+        i3.metric("Red-flag changes",
+                  sum(1 for c in imp.ranked if c.red_flag))
+        i4.metric("Out-of-sequence records", len(imp.oos_flags))
+        for w in imp.warnings:
+            st.warning(w)
+
+        _BAND_ICON = {"critical": "🔴 critical",
+                      "near-critical": "🟠 near-critical",
+                      "off-path": "⚪ off-path",
+                      "completed": "✅ completed",
+                      "absent": "◌ absent"}
+        top_n = 50
+        rank_df = pd.DataFrame([{
+            "Score": c.score,
+            "Path position": _BAND_ICON.get(c.band, c.band),
+            "Category": c.category,
+            "Activity / Link": c.ref,
+            "Name": c.name,
+            "Change": c.detail,
+            "Delta (d)": c.delta_days,
+            "TF now (d)": c.total_float_new,
+        } for c in imp.ranked[:top_n]])
+        st.markdown(f"**Materiality rank** — top {min(top_n, len(imp.ranked))} "
+                    f"of {len(imp.ranked)} changes:")
+        st.dataframe(rank_df, width="stretch", hide_index=True)
+
+        if imp.oos_flags:
+            with st.expander(
+                f"Out-of-sequence progress in '{new_name}' "
+                f"({len(imp.oos_flags)}) — recorded actuals contradict "
+                "the logic"
+            ):
+                oos_df = pd.DataFrame([{
+                    "Path position": _BAND_ICON.get(f.band, f.band),
+                    "Predecessor": f.pred_code, "Pred name": f.pred_name,
+                    "Link": f.link_type, "Successor": f.succ_code,
+                    "Succ name": f.succ_name,
+                    "Overlap (d)": f.overlap_days,
+                    "Detail": f.detail,
+                } for f in imp.oos_flags[:300]])
+                st.dataframe(oos_df, width="stretch", hide_index=True)
+                st.caption(
+                    "Ranked by criticality of the link in the later "
+                    "revision, then overlap size"
+                    + (f" — showing 300 of {len(imp.oos_flags)}."
+                       if len(imp.oos_flags) > 300 else "."))
+
+        with st.expander("Screening caveats (always apply)"):
+            for c in imp.caveats:
+                st.write("•", c)
+        st.download_button(
+            "⬇️ Download impact screening (Excel)",
+            data=build_impact_xlsx(imp),
+            file_name="comparison_impact_screening.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            key=f"impact_dl_{old_name}_{new_name}",
+        )
+
+    # ------------------------------------------------------------------ #
+    # Change provenance across the whole revision set
+    # ------------------------------------------------------------------ #
+    if len(files) >= 3:
+        st.divider()
+        st.subheader("Change provenance across revisions")
+        st.caption(
+            "Attributes each category of change to the update window "
+            "that introduced it — the timeline of programme editing."
+        )
+        if st.toggle("Build provenance timeline", key="prov_on"):
+            ordered = [(r.file_name, pool[r.file_name])
+                       for r in inv.revisions if r.file_name in pool]
+            with st.spinner("Diffing consecutive revisions…"):
+                prov = build_provenance(ordered)
+            for w in prov.warnings:
+                st.warning(w)
+            if prov.windows:
+                col_labels = [
+                    f"{w.old_data_date:%d %b %y} → "
+                    f"{w.new_data_date:%d %b %y}"
+                    if w.old_data_date and w.new_data_date
+                    else f"{w.old_label} → {w.new_label}"
+                    for w in prov.windows]
+                matrix = {"Category": prov.categories}
+                for lbl, w in zip(col_labels, prov.windows):
+                    matrix[lbl] = [w.counts.get(c, 0)
+                                   for c in prov.categories]
+                mat_df = pd.DataFrame(matrix)
+                move_row = {"Category": "Completion moved (cal. days)"}
+                for lbl, w in zip(col_labels, prov.windows):
+                    move_row[lbl] = (round(w.completion_moved_days)
+                                     if w.completion_moved_days is not None
+                                     else None)
+                mat_df = pd.concat(
+                    [mat_df, pd.DataFrame([move_row])], ignore_index=True)
+                st.dataframe(mat_df, width="stretch", hide_index=True)
+                st.caption(
+                    "Drill into any window by selecting that revision "
+                    "pair above; red-flag windows (retrospective actual "
+                    "changes) deserve first attention.")
+            with st.expander("Provenance caveats"):
+                for c in prov.caveats:
+                    st.write("•", c)
+
     with st.expander("Standing caveats (always apply)"):
         for c in cmp.caveats:
             st.write("•", c)
@@ -2777,6 +2984,129 @@ def comparison_tab() -> None:
         data=build_comparison_xlsx(cmp, narrative),
         file_name="revision_comparison_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# ====================================================================== #
+# Tab — Progress Transfer (Module 17)
+# ====================================================================== #
+
+def progress_transfer_tab() -> None:
+    st.caption(
+        "Statuses one programme's network with another programme's "
+        "recorded progress, then schedules both under the same "
+        "calendar-exact engine. With progress held identical, the "
+        "difference in forecast completion is attributable to the "
+        "NETWORK changes between the files — the quantity a covert "
+        "re-sequencing tries to hide."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in the **Data Intake** tab "
+                "first.")
+        return
+
+    names = [r.file_name for r in inv.revisions]     # data-date order
+    c1, c2 = st.columns(2)
+    net_name = c1.selectbox(
+        "Network donor (logic & durations)", names, index=0,
+        help="The trusted network — typically the baseline or an earlier "
+             "accepted update.")
+    prog_default = len(names) - 1 if names[-1] != net_name else 0
+    prog_name = c2.selectbox(
+        "Progress donor (recorded actuals & data date)", names,
+        index=prog_default,
+        help="The file whose actual dates and data date are applied.")
+    if net_name == prog_name:
+        st.info("Same file on both sides gives a self-check: the network "
+                "effect should be 0.")
+
+    pool = dict(files)
+    if not st.toggle("Run progress transfer", key="ptr_on"):
+        return
+    with st.spinner("Statusing the network and running both passes…"):
+        tr = run_progress_transfer(pool[net_name], pool[prog_name],
+                                   net_name, prog_name)
+
+    if tr.data_date is None:
+        for w in tr.warnings:
+            st.warning(w)
+        return
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Data date applied",
+              f"{tr.data_date:%d %b %Y}")
+    m2.metric("Progress transferred (started / complete)",
+              f"{tr.applied_starts} / {tr.applied_finishes}")
+    m3.metric(
+        "Logic/duration effect (days)",
+        f"{tr.network_effect_days:+.0f}"
+        if tr.network_effect_days is not None else "—",
+        help="Measured on the activities present in BOTH files, with "
+             "identical progress — scope change cannot contaminate this "
+             "figure. Positive: the progress donor's own network "
+             "schedules earlier than the donor network would — its "
+             "logic/duration edits improved the forecast.")
+    m4.metric(
+        "Scope effect (days)",
+        f"{tr.scope_effect_days:+.0f}"
+        if tr.scope_effect_days is not None else "—",
+        help="Further movement from network-donor activities the "
+             "progress file no longer carries (modelled unstarted at "
+             "full duration). Scope change — NOT re-sequencing.")
+    if tr.completion_reference:
+        st.markdown(
+            f"Forecasts under one engine — `{prog_name}` on its own "
+            f"network: **{tr.completion_reference:%d %b %Y}**"
+            + (f" (calibration vs P6 {tr.calibration_days:+.0f}d)"
+               if tr.calibration_days is not None else "")
+            + (f" · shared activities on `{net_name}` network: "
+               f"**{tr.completion_logic_only:%d %b %Y}**"
+               if tr.completion_logic_only else "")
+            + (f" · full transfer incl. unmatched scope: "
+               f"**{tr.completion_transferred:%d %b %Y}**"
+               if tr.completion_transferred else ""))
+
+    for w in tr.warnings:
+        st.warning(w)
+
+    if tr.milestones:
+        st.markdown("**Milestones — transferred vs reference forecast:**")
+        ms_df = pd.DataFrame([{
+            "Milestone": m.code, "Name": m.name,
+            "Transferred": (m.transferred.strftime("%Y-%m-%d")
+                            if m.transferred else "—"),
+            "Reference": (m.reference.strftime("%Y-%m-%d")
+                          if m.reference else "—"),
+            "Delta (d)": m.delta_days,
+        } for m in tr.milestones])
+        st.dataframe(ms_df, width="stretch", hide_index=True)
+
+    if tr.driving_chain:
+        with st.expander(
+            f"Driving chain of the transferred programme "
+            f"({len(tr.driving_chain)} activities)"
+        ):
+            ch_df = pd.DataFrame([{
+                "Activity": s["id"], "Name": s["name"],
+                "Start": (s["start"].strftime("%Y-%m-%d")
+                          if s["start"] else "—"),
+                "Finish": (s["finish"].strftime("%Y-%m-%d")
+                           if s["finish"] else "—"),
+            } for s in tr.driving_chain])
+            st.dataframe(ch_df, width="stretch", hide_index=True)
+
+    with st.expander("Statusing choices & standing caveats (always apply)"):
+        for c in tr.caveats:
+            st.write("•", c)
+    st.download_button(
+        "⬇️ Download progress-transfer report (Excel)",
+        data=build_transfer_xlsx(tr),
+        file_name="progress_transfer_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet",
+        key="ptr_dl",
     )
 
 
@@ -3978,8 +4308,8 @@ def retrospective_section() -> None:
     st.title("Forensic Programme Analysis")
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
 
-    (intake, dcma, cpath, milestones, variance, compare, windows,
-     scurve, floats, resources, asbuilt, sequence, hierarchy,
+    (intake, dcma, cpath, milestones, variance, compare, ptransfer,
+     windows, scurve, floats, resources, asbuilt, sequence, hierarchy,
      explain, report) = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 DCMA 14-Point",
@@ -3987,6 +4317,7 @@ def retrospective_section() -> None:
         "🏁 Milestone Shift Tracker",
         "📊 As-Planned vs As-Recorded",
         "🔀 Revision Comparison",
+        "🔁 Progress Transfer",
         "🪟 Windows Analysis",
         "📈 Progress S-Curve",
         "🎈 Float Erosion",
@@ -4009,6 +4340,8 @@ def retrospective_section() -> None:
         variance_tab()
     with compare:
         comparison_tab()
+    with ptransfer:
+        progress_transfer_tab()
     with windows:
         windows_tab()
     with scurve:

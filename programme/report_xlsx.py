@@ -983,3 +983,178 @@ def build_explain_xlsx(res, narrative: str | None = None) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Module 6b — comparison impact & materiality
+# --------------------------------------------------------------------------- #
+
+def build_impact_xlsx(imp, narrative: str | None = None) -> bytes:
+    """imp: programme.comparison_impact.ComparisonImpact"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    _title(ws, "Comparison Impact & Materiality Screening", 4)
+    ws.cell(row=3, column=1, value=(
+        f"'{imp.old_label}' vs '{imp.new_label}' — completion moved "
+        + (f"{imp.completion_moved_days:+.0f} calendar days"
+           if imp.completion_moved_days is not None else "n/a")
+        + f"; trace terminals {imp.end_old or '—'} / {imp.end_new or '—'}"
+    )).font = Font(italic=True)
+    _header_row(ws, 5, ["Path position", "Changes"])
+    for i, (band, n) in enumerate(sorted(imp.band_counts.items()), start=6):
+        a = ws.cell(row=i, column=1, value=band)
+        b = ws.cell(row=i, column=2, value=n)
+        a.border = b.border = THIN_BORDER
+        if band == "critical" and n:
+            a.fill = b.fill = SLIP_FILL
+    _autofit(ws, {1: 24, 2: 12})
+
+    s = wb.create_sheet("Materiality rank")
+    _header_row(s, 1, ["Score", "Path position", "Category",
+                       "Activity / Link", "Name", "Change", "Delta (d)",
+                       "TF now (d)", "Red flag"])
+    for i, c in enumerate(imp.ranked, start=2):
+        vals = [c.score, c.band, c.category, c.ref, c.name, c.detail,
+                c.delta_days if c.delta_days is not None else "",
+                c.total_float_new if c.total_float_new is not None else "",
+                "YES" if c.red_flag else ""]
+        for col, v in enumerate(vals, start=1):
+            cell = s.cell(row=i, column=col, value=v)
+            cell.border = THIN_BORDER
+            if c.red_flag and col == 9:
+                cell.fill = SLIP_FILL
+    _autofit(s, {1: 8, 2: 14, 3: 34, 4: 26, 5: 40, 6: 44, 7: 10, 8: 10,
+                 9: 9})
+    s.freeze_panes = "A2"
+
+    if imp.oos_flags:
+        s2 = wb.create_sheet("Out of sequence")
+        _header_row(s2, 1, ["Path position", "Predecessor", "Pred name",
+                            "Link", "Successor", "Succ name",
+                            "Overlap (d)", "Detail"])
+        for i, f in enumerate(imp.oos_flags[:1000], start=2):
+            vals = [f.band, f.pred_code, f.pred_name, f.link_type,
+                    f.succ_code, f.succ_name,
+                    f.overlap_days if f.overlap_days is not None else "",
+                    f.detail]
+            for col, v in enumerate(vals, start=1):
+                cell = s2.cell(row=i, column=col, value=v)
+                cell.border = THIN_BORDER
+                if f.band == "critical" and col == 1:
+                    cell.fill = SLIP_FILL
+        _autofit(s2, {1: 14, 2: 18, 3: 34, 4: 6, 5: 18, 6: 34, 7: 10,
+                      8: 60})
+        s2.freeze_panes = "A2"
+        if len(imp.oos_flags) > 1000:
+            s2.cell(row=1, column=10,
+                    value=f"showing 1000 of {len(imp.oos_flags)}")
+
+    _notes_sheet(wb, imp.warnings + imp.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Module 17 — progress transfer
+# --------------------------------------------------------------------------- #
+
+def build_transfer_xlsx(tr, narrative: str | None = None) -> bytes:
+    """tr: programme.progress_transfer.ProgressTransferResult"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    _title(ws, "Progress Transfer — Network vs Progress Decomposition", 4)
+    ws.cell(row=3, column=1, value=(
+        f"Network donor '{tr.network_label}' · progress donor "
+        f"'{tr.progress_label}' · data date {_fmt(tr.data_date)}"
+    )).font = Font(italic=True)
+    rows = [
+        ("Progress transferred — in-progress starts", tr.applied_starts),
+        ("Progress transferred — completed activities",
+         tr.applied_finishes),
+        ("Network activities with no progress match",
+         tr.not_in_progress_file),
+        ("Actualised activities not in the network donor",
+         len(tr.unmatched_progress)),
+        ("Reference forecast (progress donor, own network)",
+         _fmt(tr.completion_reference)),
+        ("Shared-activity forecast (donor network)",
+         _fmt(tr.completion_logic_only)),
+        ("Full transferred forecast (incl. unmatched scope)",
+         _fmt(tr.completion_transferred)),
+        ("LOGIC/DURATION EFFECT (days, scope excluded)",
+         tr.network_effect_days),
+        ("SCOPE EFFECT (days, unmatched activities)",
+         tr.scope_effect_days),
+        ("Calibration vs P6 own forecast (days)", tr.calibration_days),
+    ]
+    _header_row(ws, 5, ["Measure", "Value"])
+    for i, (k, v) in enumerate(rows, start=6):
+        a = ws.cell(row=i, column=1, value=k)
+        b = ws.cell(row=i, column=2,
+                    value=v if v is not None else "n/a")
+        a.border = b.border = THIN_BORDER
+        if k.startswith(("LOGIC", "SCOPE")):
+            a.font = Font(bold=True)
+    _autofit(ws, {1: 46, 2: 22})
+
+    if tr.milestones:
+        s = wb.create_sheet("Milestones")
+        _header_row(s, 1, ["Milestone", "Name", "Transferred",
+                           "Reference", "Delta (d)"])
+        for i, m in enumerate(tr.milestones, start=2):
+            vals = [m.code, m.name, _fmt(m.transferred),
+                    _fmt(m.reference),
+                    m.delta_days if m.delta_days is not None else ""]
+            for col, v in enumerate(vals, start=1):
+                s.cell(row=i, column=col, value=v).border = THIN_BORDER
+        _autofit(s, {1: 18, 2: 46, 3: 13, 4: 13, 5: 10})
+        s.freeze_panes = "A2"
+
+    if tr.driving_chain:
+        s2 = wb.create_sheet("Driving chain")
+        _header_row(s2, 1, ["Activity", "Name", "Start", "Finish"])
+        for i, step in enumerate(tr.driving_chain, start=2):
+            vals = [step["id"], step["name"], _fmt(step["start"]),
+                    _fmt(step["finish"])]
+            for col, v in enumerate(vals, start=1):
+                s2.cell(row=i, column=col, value=v).border = THIN_BORDER
+        _autofit(s2, {1: 18, 2: 52, 3: 13, 4: 13})
+        s2.freeze_panes = "A2"
+
+    _notes_sheet(wb, tr.warnings + tr.caveats,
+                 "Statusing & Caveats")
+    _narrative_sheet(wb, narrative)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Project library — chain-of-custody register export
+# --------------------------------------------------------------------------- #
+
+def build_custody_xlsx(records) -> bytes:
+    """records: list[programme.store.FileRecord]"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Custody register"
+    _title(ws, "Programme File Custody Register", 7)
+    _header_row(ws, 4, ["Registered (UTC)", "Project", "File",
+                        "Data date", "Activities", "Size (bytes)",
+                        "SHA-256"])
+    for i, r in enumerate(records, start=5):
+        vals = [r.added_utc, r.project, r.file_name,
+                r.data_date or "—",
+                r.activity_count if r.activity_count is not None else "",
+                r.size_bytes, r.sha256]
+        for col, v in enumerate(vals, start=1):
+            ws.cell(row=i, column=col, value=v).border = THIN_BORDER
+    _autofit(ws, {1: 22, 2: 20, 3: 28, 4: 12, 5: 10, 6: 12, 7: 66})
+    ws.freeze_panes = "A5"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
