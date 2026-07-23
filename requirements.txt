@@ -1,10 +1,15 @@
 streamlit>=1.59,<2.0
-altair>=5.0.0,<6
+# altair floor 6.2: 5.x cannot import on Python 3.14 (Streamlit Cloud's
+# runtime since 2026-07) — its generated TypedDict(closed=True) schema
+# classes raise TypeError at import. 6.2.2 verified: test_qa 179 +
+# test_ui 29 all green, vl-convert renders its Vega-Lite v6 specs.
+altair>=6.2,<7
 pandas>=2.0.0,<3
 openpyxl>=3.0.0,<4
 python-docx>=1.1.0,<2
 pypdf>=4.0.0,<7
-vl-convert-python>=1.6.0,<2
+# 1.9 floor: must understand the Vega-Lite v6 specs altair 6 emits
+vl-convert-python>=1.9.0,<2
 anthropic>=0.116.0
 openai>=1.60.0,<3
 google-genai>=1.0.0,<2
