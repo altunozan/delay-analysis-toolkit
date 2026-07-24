@@ -65,13 +65,12 @@ def main() -> int:
                 return page.locator(
                     '[data-testid="stException"]').count()
 
-            # ---- landing --------------------------------------------
-            check("landing renders",
-                  page.get_by_text("Construction Delay "
-                                   "Intelligence").count() > 0)
-            page.get_by_role(
-                "button", name="Open retrospective analysis").click()
-            page.wait_for_timeout(4000)
+            # ---- boots straight into retrospective (no landing) -----
+            check("boots into retrospective (no landing page)",
+                  page.get_by_text("Forensic Programme "
+                                   "Analysis").count() > 0)
+            check("status strip shows empty state",
+                  page.get_by_text("No programmes loaded").count() > 0)
 
             # load bundled samples
             page.get_by_text("Use bundled sample").first.click()

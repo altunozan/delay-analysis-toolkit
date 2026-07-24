@@ -15,6 +15,7 @@ Run with:  streamlit run app.py
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import io
 import os
@@ -189,6 +190,84 @@ GAIN_COLOR = "#1a7f37"
 def get_parsed_files() -> list[tuple[str, object]]:
     """Parsed XER pool from the intake tab (cached in session state)."""
     return st.session_state.get("xer_pool", [])
+
+
+# ---------------------------------------------------------------------- #
+# Cached engine layer.  st.tabs executes EVERY tab body on EVERY rerun,
+# so each unconditional engine call below used to run on every widget
+# interaction anywhere in the app.  Results are memoised on (file SHA-256,
+# parameters); `_`-prefixed arguments are excluded from the cache key.
+# st.cache_data returns a fresh unpickled copy per call, so downstream
+# mutation of a result cannot leak back into the cache.
+# ---------------------------------------------------------------------- #
+
+def _fkey(name: str) -> str:
+    """Cache key for an uploaded file: its intake SHA-256 (name fallback)."""
+    return st.session_state.get("xer_hashes", {}).get(name, name)
+
+
+def _cfgkey(cfg) -> tuple:
+    """Hashable identity for a config dataclass (sets sorted)."""
+    out = []
+    for f in dataclasses.fields(cfg):
+        v = getattr(cfg, f.name)
+        out.append((f.name,
+                    tuple(sorted(v)) if isinstance(v, (set, frozenset))
+                    else v))
+    return tuple(out)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_dcma(key: str, cfg_key: tuple, _data, _cfg):
+    results = run_all_checks(_data, _cfg)
+    trace = build_dcma_trace(_data, _cfg, results)
+    annotate_path_position(results, trace)
+    return results, trace
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_milestone_shifts(key: tuple, _revs):
+    return track_milestone_shifts(_revs)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_compare(key_old: str, key_new: str, label_old: str,
+                   label_new: str, _old, _new):
+    return compare_revisions(_old, _new, label_old, label_new)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_windows(key: tuple, _ordered):
+    return analyse_windows(_ordered)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_longest_path(key: str, label: str, end_code, near: float, _data):
+    return extract_longest_path(_data, label, end_task_code=end_code,
+                                near_critical_days=near)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_float_path(key: str, label: str, tol: float, near: float, _data):
+    return extract_critical_path(_data, label, float_tolerance_days=tol,
+                                 near_critical_days=near)
+
+
+def status_strip() -> None:
+    """One-line persistent state banner: what is loaded, on every page."""
+    inv = st.session_state.get("inventory")
+    files = get_parsed_files()
+    if not files or inv is None:
+        st.caption("📁 No programmes loaded — start at "
+                   "**Data Intake & Inventory**.")
+        return
+    bits = []
+    for r in inv.revisions:
+        tag = (" **(baseline)**" if r.is_baseline
+               else " **(current)**" if r.is_current else "")
+        dd = f" @ {r.data_date:%Y-%m-%d}" if r.data_date else ""
+        bits.append(f"`{r.file_name}`{dd}{tag}")
+    st.caption("📁 " + " · ".join(bits))
 
 
 def model_selector(container, pinfo: dict, state_key: str) -> str:
@@ -742,9 +821,7 @@ def dcma_tab() -> None:
     pc4.metric("Data date",
                f"{proj.data_date:%Y-%m-%d}" if proj and proj.data_date else "—")
 
-    results = run_all_checks(data, cfg)
-    trace = build_dcma_trace(data, cfg, results)
-    annotate_path_position(results, trace)
+    results, trace = cached_dcma(_fkey(chosen), _cfgkey(cfg), data, cfg)
 
     st.header("Scorecard")
     scorecard(results)
@@ -803,7 +880,9 @@ def milestone_tab() -> None:
         st.info("Need at least two revisions with data dates to track shifts.")
         return
 
-    result = track_milestone_shifts(revs)
+    result = cached_milestone_shifts(
+        tuple((_fkey(r.file_name), str(r.data_date))
+              for r in inv.revisions if r.data_date is not None), revs)
     tracked = [s for s in result.series
                if len({p.data_date for p in s.points}) > 1
                and s.total_shift_days is not None]
@@ -1969,7 +2048,8 @@ def report_tab() -> None:
         charts=[]))
 
     # Baseline critical path (longest path, default terminal)
-    cp = extract_longest_path(pool[base_name], base_name)
+    cp = cached_longest_path(_fkey(base_name), base_name, None, 10.0,
+                             pool[base_name])
     sec = ReportSection("Baseline Planned Critical Path")
     sec.key_findings = [
         f"Longest path traced backward from {cp.end_choice}: "
@@ -1989,7 +2069,8 @@ def report_tab() -> None:
 
     if multi:
         # Milestones
-        ms = track_milestone_shifts(
+        ms = cached_milestone_shifts(
+            tuple(_fkey(n) for n, _ in ordered),
             [(n, d.project.data_date if d.project else None, d)
              for n, d in ordered])
         tracked = [s for s in ms.series if s.total_shift_days is not None]
@@ -2041,8 +2122,9 @@ def report_tab() -> None:
                      "Finish slippage by WBS group")]))
 
         # Revision comparison (baseline -> current)
-        cmp = compare_revisions(pool[base_name], pool[curr_name],
-                                base_name, curr_name)
+        cmp = cached_compare(_fkey(base_name), _fkey(curr_name),
+                             base_name, curr_name,
+                             pool[base_name], pool[curr_name])
         sec = ReportSection("Programme Revision Comparison")
         sec.key_findings = [
             f"{cmp.total_changes} recorded changes between '{base_name}' "
@@ -2064,7 +2146,7 @@ def report_tab() -> None:
                      "Changes by category")]))
 
         # Windows
-        wres = analyse_windows(ordered)
+        wres = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
         sec = ReportSection("Windows / Period Movement")
         if wres.total_movement_days is not None:
             sec.key_findings.append(
@@ -2715,7 +2797,7 @@ def windows_tab() -> None:
 
     pool = dict(files)
     ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
-    res = analyse_windows(ordered)
+    res = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
     if not res.windows:
         for w in res.warnings:
             st.warning(w)
@@ -2850,8 +2932,9 @@ def comparison_tab() -> None:
         return
 
     pool = dict(files)
-    cmp = compare_revisions(pool[old_name], pool[new_name],
-                            old_name, new_name)
+    cmp = cached_compare(_fkey(old_name), _fkey(new_name),
+                         old_name, new_name,
+                         pool[old_name], pool[new_name])
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Total changes", cmp.total_changes)
@@ -3271,15 +3354,13 @@ def critical_path_tab() -> None:
         )
         near = cc2.number_input("Near-critical ≤ (days)", 0.0, 200.0, 10.0, 1.0)
         show_near = cc3.toggle("Show near-critical", value=False)
-        cp = extract_longest_path(
-            data, chosen, end_task_code=end_code, near_critical_days=near)
+        cp = cached_longest_path(_fkey(chosen), chosen, end_code, near, data)
     else:
         cc1, cc2, cc3 = st.columns([1, 1, 1])
         tol = cc1.number_input("Critical float ≤ (days)", -100.0, 100.0, 0.0, 1.0)
         near = cc2.number_input("Near-critical ≤ (days)", 0.0, 200.0, 10.0, 1.0)
         show_near = cc3.toggle("Show near-critical", value=False)
-        cp = extract_critical_path(
-            data, chosen, float_tolerance_days=tol, near_critical_days=near)
+        cp = cached_float_path(_fkey(chosen), chosen, tol, near, data)
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Path activities" if cp.method == "longest_path"
@@ -4331,52 +4412,11 @@ def explain_tab() -> None:
 
 # ====================================================================== #
 
-def landing_page() -> None:
-    st.title("Construction Delay Intelligence")
-    st.caption("Primavera P6 (.xer) analytical layer — choose a workflow. "
-               "Both share the same intake, engines, and audit principles.")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.markdown(
-            "### 🔍 Retrospective\n"
-            "**Forensic delay analysis** — what happened, and what drove "
-            "it.\n\n"
-            "- Data intake & inventory, DCMA health\n"
-            "- Baseline critical path & milestone shifts\n"
-            "- Revision comparison, windows, S-curve, float erosion\n"
-            "- As-built critical path with method triangulation\n"
-            "- Sequence coding & hierarchy rebuild\n"
-            "- Assembled expert-style report")
-        if st.button("Open retrospective analysis", type="primary",
-                     width="stretch"):
-            st.session_state["app_mode"] = "Retrospective"
-            st.rerun()
-    with c2:
-        st.markdown(
-            "### ⚡ Prospective\n"
-            "**Time Impact Analysis & forecasting** — what an event will "
-            "do to completion.\n\n"
-            "- Same intake; schedule health check before analysis\n"
-            "- Delay event capture with asserted responsibility\n"
-            "- Comparable-activity evidence search\n"
-            "- AI-drafted fragnet — analyst edits and confirms\n"
-            "- Controlled insertion + pre/post impact measurement\n"
-            "- TIA narrative & Excel report")
-        if st.button("Open prospective analysis", type="primary",
-                     width="stretch"):
-            st.session_state["app_mode"] = "Prospective"
-            st.rerun()
-    st.caption(
-        "Design principles: project evidence over generic knowledge · "
-        "nothing invented · every figure traceable · the analyst confirms "
-        "all material decisions · source data never modified."
-    )
-
-
 def prospective_section() -> None:
     st.title("Prospective Analysis — Time Impact & Forecasting")
     st.caption("Current approved update + delay event → fragnet → "
                "controlled insertion → forecast impact.")
+    _strip = st.empty()
     intake, dcma, tia, explain = st.tabs([
         "📥 Data Intake & Inventory",
         "🩺 Schedule Health (DCMA)",
@@ -4391,19 +4431,18 @@ def prospective_section() -> None:
         tia_tab()
     with explain:
         explain_tab()
+    with _strip.container():
+        status_strip()
 
 
 def main() -> None:
-    mode = st.session_state.get("app_mode")
-    if mode:
-        with st.sidebar:
-            st.radio("Workflow", ["Retrospective", "Prospective"],
-                     key="app_mode")
-            st.caption("Uploaded programmes are shared between both "
-                       "workflows.")
-    if not mode:
-        landing_page()
-        return
+    if "app_mode" not in st.session_state:
+        st.session_state["app_mode"] = "Retrospective"
+    with st.sidebar:
+        st.radio("Workflow", ["Retrospective", "Prospective"],
+                 key="app_mode")
+        st.caption("Uploaded programmes are shared between both "
+                   "workflows.")
     if st.session_state["app_mode"] == "Prospective":
         prospective_section()
         return
@@ -4413,6 +4452,9 @@ def main() -> None:
 def retrospective_section() -> None:
     st.title("Forensic Programme Analysis")
     st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
+    # Placeholder filled AFTER the tabs run, so the strip reflects state
+    # written by the intake tab during this same rerun.
+    _strip = st.empty()
 
     (intake, dcma, cpath, milestones, variance, compare, ptransfer,
      windows, scurve, floats, resources, asbuilt, sequence, hierarchy,
@@ -4466,6 +4508,8 @@ def retrospective_section() -> None:
         explain_tab()
     with report:
         report_tab()
+    with _strip.container():
+        status_strip()
 
 
 if __name__ == "__main__":
