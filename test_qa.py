@@ -945,6 +945,91 @@ with tempfile.TemporaryDirectory() as _td2:
     check("E8c custody workbook opens with the register sheet",
           "Custody register" in _wb_c.sheetnames)
 
+# ===================================================================== #
+# Layer F — DCMA forensic traceback (stored values only)
+# ===================================================================== #
+print("\n--- Layer F: DCMA traceback ---")
+from dcma import build_dcma_trace, annotate_path_position
+from dcma.trace import _LATE_DRIVERS
+from dcma.checks import run_all_checks as _rac
+from dcma.report_xlsx import build_xlsx_report as _bxr
+
+for _label, _path in (("baseline", "sample/Sample Baseline.xer"),
+                      ("update", "sample/Sample Update.xer")):
+    _d = parse_xer(_path)
+    _cfg = DCMAConfig()
+    _res = _rac(_d, _cfg)
+    _t = build_dcma_trace(_d, _cfg, _res)
+
+    _c = _t.chain
+    check(f"F1[{_label}] driving chain non-empty, terminal is last step",
+          _c is not None and _c.steps
+          and _c.steps[-1].task_code == _c.terminal_code)
+    _dates = [s.early_finish or s.early_start for s in _c.steps
+              if (s.early_finish or s.early_start)]
+    check(f"F1b[{_label}] chain ordered towards the terminal",
+          all(_dates[i] <= _dates[-1] for i in range(len(_dates))))
+    check(f"F2[{_label}] continuity is settled: reaches DD or break disclosed",
+          _c.reaches_data_date or (_c.break_code and _c.break_reason))
+
+    _r7 = next(r for r in _res if r.number == 7)
+    check(f"F3[{_label}] one float trace per negative-float activity",
+          len(_t.float_traces) == _r7.affected_count,
+          f"traces={len(_t.float_traces)} check7={_r7.affected_count}")
+    check(f"F3b[{_label}] driver-group counts sum to trace count",
+          sum(g.count for g in _t.float_driver_groups)
+          == len(_t.float_traces))
+    _by_code = {t.task_code: t for t in _d.tasks}
+    _ok_kinds = {"activity constraint", "project must-finish",
+                 "unidentified"}
+    check(f"F4[{_label}] every driver kind valid; constraint drivers "
+          "really carry a late-date constraint",
+          all(g.driver_kind in _ok_kinds for g in _t.float_driver_groups)
+          and all((_by_code[g.driver_code].cstr_type in _LATE_DRIVERS
+                   or _by_code[g.driver_code].cstr_type2 in _LATE_DRIVERS)
+                  for g in _t.float_driver_groups
+                  if g.driver_kind == "activity constraint"))
+
+    annotate_path_position(_res, _t)
+    annotate_path_position(_res, _t)          # idempotency
+    _r1 = next(r for r in _res if r.number == 1)
+    check(f"F5[{_label}] annotate adds Path position once, sorted "
+          "driving-first",
+          _r1.detail_rows
+          and list(_r1.detail_rows[0].keys())[0] == "Path position"
+          and sum(1 for k in _r1.detail_rows[0] if k == "Path position")
+          == 1)
+
+    _tripped = {r.number: set(r.affected_ids) for r in _res
+                if r.number < 12}
+    check(f"F6[{_label}] offenders: >=2 checks each, consistent with "
+          "affected_ids",
+          all(len(o.checks) >= 2
+              and all(o.task_code in _tripped.get(n, set())
+                      for n in o.checks)
+              for o in _t.offenders))
+
+    _wb_f = load_workbook(io.BytesIO(_bxr(_d, _res, trace=_t)))
+    check(f"F7[{_label}] DCMA workbook gains the traceback sheets",
+          {"Driving Chain", "Multi-Check Offenders",
+           "Traceback Notes"} <= set(_wb_f.sheetnames),
+          str([s for s in _wb_f.sheetnames if "Chain" in s or "Multi" in s]))
+
+    _chain_codes = {s.task_code for s in _c.steps}
+    check(f"F8[{_label}] band_map: every driving band is on the chain",
+          all(code in _chain_codes
+              for code, b in _t.band_map.items() if b == "driving"))
+
+with open("dcma/trace.py") as _fh:
+    _src = _fh.read()
+check("F9 layering rule: dcma.trace never imports programme.*",
+      "import programme" not in _src and "from programme" not in _src)
+
+from dcma.narrative import build_report_prompt as _brp
+_p = _brp(_d, _res, trace=_t)
+check("F10 narrative prompt carries traceback facts",
+      "<traceback_facts>" in _p and _t.chain.terminal_code in _p)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

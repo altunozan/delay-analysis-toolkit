@@ -24,7 +24,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from dcma import DCMAConfig, parse_xer, run_all_checks
+from dcma import (DCMAConfig, annotate_path_position, build_dcma_trace,
+                  parse_xer, run_all_checks)
 from dcma.checks import CheckStatus
 from dcma.config import (
     HARD_CONSTRAINT_CODES_EXTENDED,
@@ -602,6 +603,105 @@ def detail_section(results) -> None:
                 st.write(", ".join(r.affected_ids[:200]))
 
 
+_PATH_ICON = {"driving": "🔴 driving", "critical": "🟠 critical",
+              "near-critical": "🟡 near-critical", "off-path": "⚪ off-path"}
+
+
+def traceback_section(trace) -> None:
+    """Forensic traceback: driving chain, float drivers, offender index."""
+    st.subheader("Forensic Traceback")
+    st.caption(
+        "Networked detail behind the scorecard — from the file's own "
+        "stored dates, float and logic; nothing recomputed."
+    )
+
+    c = trace.chain
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Driving chain (Check 12)",
+              f"{len(c.steps)} activities" if c and c.steps else "—",
+              help="Ordered walk of the stored driving logic to the "
+                   "latest incomplete finisher.")
+    m2.metric("Negative-float drivers (5→7)",
+              f"{len(trace.float_driver_groups)} distinct"
+              if trace.float_driver_groups else "none",
+              help="Each negative-float activity traced downstream to the "
+                   "constraint or project date governing its late dates.")
+    m3.metric("Multi-check offenders",
+              str(len(trace.offenders)),
+              help="Activities tripping two or more of checks 1–11, "
+                   "ranked driving-path first.")
+
+    for w in trace.warnings:
+        st.warning(w)
+
+    if c and c.steps:
+        cont = ("✅ traces continuously back to the data date"
+                if c.reaches_data_date
+                else f"⛔ breaks at `{c.break_code}` — {c.break_reason}")
+        with st.expander(
+            f"Driving chain — {len(c.steps)} steps to {c.terminal_code} "
+            f"({'continuous' if c.reaches_data_date else 'BROKEN'})",
+            expanded=not c.reaches_data_date,
+        ):
+            st.markdown(f"The chain {cont}.")
+            chain_df = pd.DataFrame([{
+                "#": s.seq,
+                "Activity ID": s.task_code,
+                "Activity Name": s.name,
+                "MS": "🏁" if s.is_milestone else "",
+                "Early Start": (s.early_start.strftime("%Y-%m-%d")
+                                if s.early_start else ""),
+                "Early Finish": (s.early_finish.strftime("%Y-%m-%d")
+                                 if s.early_finish else ""),
+                "TF (d)": s.total_float_days,
+                "Driven by (link)": s.link_from_prev,
+                "Constraint(s)": s.constraint,
+            } for s in c.steps])
+            st.dataframe(chain_df, width="stretch", hide_index=True)
+
+    if trace.float_driver_groups:
+        with st.expander(
+            f"Negative float → governing constraint — "
+            f"{len(trace.float_traces)} activities, "
+            f"{len(trace.float_driver_groups)} driver(s)"
+        ):
+            drv_df = pd.DataFrame([{
+                "Activities": g.count,
+                "Worst TF (d)": g.worst_tf_days,
+                "Governing driver": g.driver_detail,
+                "Kind": g.driver_kind,
+                "Example trace": (
+                    g.example.origin_code
+                    + (" → " + " → ".join(g.example.via_codes[:6])
+                       if g.example.via_codes else "")
+                ) if g.example else "",
+            } for g in trace.float_driver_groups])
+            st.dataframe(drv_df, width="stretch", hide_index=True)
+            st.caption(
+                "A traced driver is the mechanical cause inside the "
+                "schedule model — not a statement of responsibility."
+            )
+
+    if trace.offenders:
+        with st.expander(
+            f"Activities tripping multiple checks — {len(trace.offenders)}"
+        ):
+            off_df = pd.DataFrame([{
+                "Path position": _PATH_ICON.get(o.band, o.band),
+                "Activity ID": o.task_code,
+                "Activity Name": o.name,
+                "Checks tripped": o.checks_label,
+                "Count": len(o.checks),
+            } for o in trace.offenders[:300]])
+            st.dataframe(off_df, width="stretch", hide_index=True)
+            if len(trace.offenders) > 300:
+                st.caption(f"Showing 300 of {len(trace.offenders)}.")
+
+    with st.expander("Traceback caveats (always apply)"):
+        for cv in trace.caveats:
+            st.write("•", cv)
+
+
 def build_summary_df(results) -> pd.DataFrame:
     return pd.DataFrame([
         {
@@ -643,6 +743,8 @@ def dcma_tab() -> None:
                f"{proj.data_date:%Y-%m-%d}" if proj and proj.data_date else "—")
 
     results = run_all_checks(data, cfg)
+    trace = build_dcma_trace(data, cfg, results)
+    annotate_path_position(results, trace)
 
     st.header("Scorecard")
     scorecard(results)
@@ -650,9 +752,12 @@ def dcma_tab() -> None:
     detail_section(results)
 
     st.divider()
+    traceback_section(trace)
+
+    st.divider()
     narrative = ai_narrative_panel(
         f"nar_dcma_{chosen}",
-        lambda tmpl: build_report_prompt(data, results, tmpl),
+        lambda tmpl: build_report_prompt(data, results, tmpl, trace=trace),
         f"dcma_{proj.short_name if proj else 'project'}",
         DCMA_DEFAULT_TEMPLATE,
     )
@@ -661,7 +766,8 @@ def dcma_tab() -> None:
     col1, col2 = st.columns(2)
     col1.download_button(
         "⬇️ Excel report (.xlsx)",
-        data=build_xlsx_report(data, results, narrative=narrative),
+        data=build_xlsx_report(data, results, narrative=narrative,
+                               trace=trace),
         file_name=f"dcma_report_{proj.short_name if proj else 'project'}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

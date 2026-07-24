@@ -92,6 +92,10 @@ def main() -> int:
                 page.wait_for_timeout(5000)
                 check(f"retro tab {i} exception-free", exc() == 0,
                       f"{exc()} exceptions")
+                if i == 1:      # DCMA tab: traceback layer must render
+                    check("DCMA traceback section renders",
+                          page.get_by_text(
+                              "Forensic Traceback").count() > 0)
 
             # ---- prospective ----------------------------------------
             page.get_by_text("Prospective", exact=True).last.click()

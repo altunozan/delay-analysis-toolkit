@@ -121,8 +121,15 @@ def build_report_prompt(
     data: XerData,
     results: list[CheckResult],
     template: str | None = None,
+    trace=None,
 ) -> str:
-    """Assemble the user prompt from project metadata + check results."""
+    """Assemble the user prompt from project metadata + check results.
+
+    ``trace`` (a dcma.trace.DCMATrace, optional) adds deterministic
+    traceback facts — driving chain, negative-float drivers, multi-check
+    offenders — for the narrative to reference. Facts only; the LLM still
+    computes nothing.
+    """
     proj = data.project
     lines: list[str] = []
 
@@ -164,6 +171,36 @@ def build_report_prompt(
             lines.append(f"  DCMA rationale: {rationale}")
         lines.append("")
     lines.append("</diagnostic_metrics>\n")
+
+    if trace is not None:
+        lines.append("<traceback_facts>")
+        lines.append(
+            "Deterministic traceback derived from the file's own stored "
+            "dates, float and logic (nothing recomputed):")
+        if trace.chain and trace.chain.steps:
+            c = trace.chain
+            cont = ("traces continuously back to the data date"
+                    if c.reaches_data_date else
+                    f"BREAKS at {c.break_code} ({c.break_reason})")
+            lines.append(
+                f"Driving chain (Check 12): {len(c.steps)} activities in "
+                f"sequence ending at {c.terminal_code} "
+                f"'{c.terminal_name}'; the chain {cont}. Sequence: "
+                + " -> ".join(s.task_code for s in c.steps[:20])
+                + (" ..." if len(c.steps) > 20 else ""))
+        for g in trace.float_driver_groups[:6]:
+            lines.append(
+                f"Negative-float driver: {g.count} negative-float "
+                f"activities trace to {g.driver_detail} "
+                f"(worst {g.worst_tf_days:+.0f}d).")
+        for o in trace.offenders[:8]:
+            lines.append(
+                f"Multi-check offender: {o.task_code} '{o.name}' "
+                f"[{o.band}] trips checks {o.checks_label}.")
+        lines.append(
+            "Caveat: a traced driver is the mechanical cause within the "
+            "schedule model, not a statement of responsibility.")
+        lines.append("</traceback_facts>\n")
 
     lines.append("<instructions>")
     lines.append(
