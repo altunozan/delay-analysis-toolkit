@@ -45,7 +45,11 @@ Thumbs.db
 htmlcov/
 
 # Project-specific
+# Ignore all sample XERs (may be client data) EXCEPT the two bundled demo
+# programmes, which ship so the deployed app has a working sample toggle.
 sample/*.xer
+!sample/Sample Baseline.xer
+!sample/Sample Update.xer
 *.xlsx
 *.tmp
 deckforge/.deckforge_autosave.pkl

@@ -85,7 +85,7 @@ def main() -> int:
             # plus Progress Transfer (Module 17, added 2026-07-23) —
             # update this number only as part of an intentional
             # workflow change
-            check("retrospective tab count", n == 16, f"{n}")
+            check("retrospective tab count", n == 17, f"{n}")
             for i in range(n):
                 tabs.nth(i).click()
                 page.wait_for_timeout(5000)
