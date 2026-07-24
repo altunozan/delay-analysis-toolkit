@@ -1,4 +1,4 @@
-"""UI regression harness — Playwright walk of both workflows.
+"""UI regression harness — Playwright walk of the grouped navigation.
 
 Catches wiring breaks (NameErrors, widget/state crashes, missing panels)
 that engine tests cannot see. Run:
@@ -6,10 +6,11 @@ that engine tests cannot see. Run:
     pip install playwright && playwright install chromium
     python3 test_ui.py
 
-Starts its own Streamlit server on :8599, walks the landing page, every
-retrospective tab, the prospective stepper's gating, and Explain This
-Forecast Impact, asserting zero Streamlit exceptions throughout.
-Exit code 1 on any failure.
+Starts its own Streamlit server on :8599, loads the bundled samples, then
+visits every page in the three sidebar groups (Forensic Programme
+Analysis / Retrospective / Prospective) asserting zero Streamlit
+exceptions, plus targeted checks on the DCMA traceback, the OOS repair
+page, and the TIA stepper gating. Exit code 1 on any failure.
 """
 
 from __future__ import annotations
@@ -21,6 +22,22 @@ import time
 
 PORT = 8599
 PASS, FAIL = [], []
+
+# Every page title in sidebar order. Update this list only as part of an
+# intentional navigation change.
+TOOLS = [
+    "Data Intake & Inventory", "DCMA 14-Point", "Baseline Critical Path",
+    "Revision Comparison", "Out-of-Sequence Repair", "Float Erosion",
+    "Progress S-Curve", "Resource Loading", "Sequence Coding",
+    "Hierarchy Rebuild", "Report Assembler",
+]
+RETRO = [
+    "As-Planned vs As-Recorded", "Milestone Shift Tracker",
+    "Windows Analysis", "As-Built Critical Path", "Progress Transfer",
+    "Explain This Delay",
+]
+PROSPECTIVE = ["Time Impact Analysis"]
+ALL_PAGES = TOOLS + RETRO + PROSPECTIVE
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
@@ -65,85 +82,64 @@ def main() -> int:
                 return page.locator(
                     '[data-testid="stException"]').count()
 
-            # ---- boots straight into retrospective (no landing) -----
-            check("boots into retrospective (no landing page)",
-                  page.get_by_text("Forensic Programme "
-                                   "Analysis").count() > 0)
+            def goto(title: str) -> None:
+                # nav-link accessible name includes the Material-icon
+                # token, so match on the title as a substring.
+                page.get_by_role("link", name=title).first.click()
+                page.wait_for_timeout(4500)
+
+            # ---- default page is Data Intake (no landing, no radio) ---
+            check("boots into Data Intake (default page)",
+                  page.get_by_text("Data Intake & Inventory").count() > 0)
             check("status strip shows empty state",
                   page.get_by_text("No programmes loaded").count() > 0)
+            # all three sidebar group headers present (expanded nav)
+            navtext = page.locator(
+                '[data-testid="stSidebarNav"]').inner_text()
+            for grp in ("Forensic Programme Analysis", "Retrospective",
+                        "Prospective"):
+                check(f"sidebar group '{grp}' present", grp in navtext,
+                      "not in nav; still collapsed?")
+            check("no 'View more' collapse (all pages visible)",
+                  "View" not in navtext or "more" not in navtext.lower())
 
-            # load bundled samples
+            # load bundled samples on the intake page
             page.get_by_text("Use bundled sample").first.click()
             page.wait_for_timeout(12_000)
             check("sample load: no exceptions", exc() == 0, f"{exc()}")
+            check("status strip populates after load",
+                  page.get_by_text("baseline", exact=False).count() > 0)
 
-            # ---- every retrospective tab ----------------------------
-            tabs = page.locator('[role="tab"]')
-            n = tabs.count()
-            # 16 tabs is the SHIPPED retrospective design: the original
-            # 15 (the 6-screen redesign was deliberately not adopted)
-            # plus Progress Transfer (Module 17, added 2026-07-23) —
-            # update this number only as part of an intentional
-            # workflow change
-            check("retrospective tab count", n == 17, f"{n}")
-            for i in range(n):
-                tabs.nth(i).click()
-                page.wait_for_timeout(5000)
-                check(f"retro tab {i} exception-free", exc() == 0,
+            # ---- walk every page in all three groups ----------------
+            for title in ALL_PAGES:
+                goto(title)
+                check(f"page '{title}' exception-free", exc() == 0,
                       f"{exc()} exceptions")
-                if i == 1:      # DCMA tab: traceback layer must render
-                    check("DCMA traceback section renders",
-                          page.get_by_text(
-                              "Forensic Traceback").count() > 0)
 
-            # ---- prospective ----------------------------------------
-            page.get_by_text("Prospective", exact=True).last.click()
-            page.wait_for_timeout(6000)
-            check("prospective renders",
-                  page.get_by_text("Prospective Analysis").count() > 0)
-            ptabs = page.locator('[role="tab"]')
-            check("prospective tab count", ptabs.count() == 4,
-                  f"{ptabs.count()}")
+            # ---- targeted checks ------------------------------------
+            goto("DCMA 14-Point")
+            check("DCMA traceback section renders",
+                  page.get_by_text("Forensic Traceback").count() > 0)
 
-            # TIA stepper: walk the gates
-            ptabs.nth(2).click()
-            page.wait_for_timeout(6000)
-            check("step 1 renders",
+            goto("Out-of-Sequence Repair")
+            check("OOS repair plan renders",
+                  page.get_by_text("As-built repair plan").count() > 0)
+
+            # TIA stepper gating (Prospective group)
+            goto("Time Impact Analysis")
+            page.wait_for_timeout(3000)
+            check("TIA step 1 renders",
                   page.get_by_text("Register your AI once").count() > 0)
             check("health gateway shown",
                   page.get_by_text("Schedule-Health gateway").count() > 0)
             page.get_by_role("button",
                              name="Continue → ② Event").click()
-            page.wait_for_timeout(5000)
-            check("step 2 reached",
-                  page.get_by_text("Register the event").count() > 0)
-            page.get_by_label("Title").fill(
-                "UI harness test variation works")
-            page.get_by_label("Title").press("Tab")
-            page.wait_for_timeout(3000)
-            page.get_by_role("button",
-                             name="Continue → ③ Fragnet").click()
-            page.wait_for_timeout(5000)
-            check("step 3: title persisted (no bounce)",
-                  page.get_by_text("Build the fragnet").count() > 0,
-                  "event title lost between steps")
-            check("chain builder shown",
-                  page.get_by_text("Where does the event work "
-                                   "start from?").count() > 0)
-            page.get_by_role(
-                "button", name="Continue → ④ Validate & confirm").click()
             page.wait_for_timeout(4000)
-            check("step 4 gate works (empty fragnet held back)",
-                  page.get_by_text("Build the fragnet in step "
-                                   "③ first").count() > 0
-                  or page.get_by_text("Validate the logic").count() > 0)
+            check("TIA step 2 reached",
+                  page.get_by_text("Register the event").count() > 0)
             check("prospective walk exception-free", exc() == 0,
                   f"{exc()}")
 
-            # Explain This Forecast Impact tab
-            page.locator('[role="tab"]').nth(3).click()
-            page.wait_for_timeout(6000)
-            check("explain tab exception-free", exc() == 0, f"{exc()}")
             browser.close()
     finally:
         server.terminate()

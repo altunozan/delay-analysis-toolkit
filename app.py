@@ -4582,106 +4582,86 @@ def explain_tab() -> None:
 
 # ====================================================================== #
 
-def prospective_section() -> None:
-    st.title("Prospective Analysis — Time Impact & Forecasting")
-    st.caption("Current approved update + delay event → fragnet → "
-               "controlled insertion → forecast impact.")
-    _strip = st.empty()
-    intake, dcma, tia, explain = st.tabs([
-        "📥 Data Intake & Inventory",
-        "🩺 Schedule Health (DCMA)",
-        "⚡ Time Impact Analysis",
-        "🔎 Explain This Forecast Impact",
-    ])
-    with intake:
-        intake_tab()
-    with dcma:
-        dcma_tab()
-    with tia:
-        tia_tab()
-    with explain:
-        explain_tab()
-    with _strip.container():
-        status_strip()
-
-
 def main() -> None:
-    if "app_mode" not in st.session_state:
-        st.session_state["app_mode"] = "Retrospective"
+    # Grouped sidebar navigation: the FORENSIC PROGRAMME ANALYSIS tools
+    # (inspect / validate / screen / structure the schedule) are kept
+    # separate from the recognised delay-analysis METHODS, which are split
+    # RETROSPECTIVE (as-planned vs as-built family) and PROSPECTIVE (TIA).
+    # Every page reads the same shared uploaded-file pool from session
+    # state, so intake done once feeds all three groups.
+    pages = {
+        "\U0001f6e0 Forensic Programme Analysis": [
+            st.Page(intake_tab, title="Data Intake & Inventory",
+                    icon=":material/upload_file:", url_path="intake",
+                    default=True),
+            st.Page(dcma_tab, title="DCMA 14-Point",
+                    icon=":material/health_and_safety:", url_path="dcma"),
+            st.Page(critical_path_tab, title="Baseline Critical Path",
+                    icon=":material/route:",
+                    url_path="baseline-critical-path"),
+            st.Page(comparison_tab, title="Revision Comparison",
+                    icon=":material/compare_arrows:",
+                    url_path="revision-comparison"),
+            st.Page(oos_tab, title="Out-of-Sequence Repair",
+                    icon=":material/link:", url_path="out-of-sequence"),
+            st.Page(float_erosion_tab, title="Float Erosion",
+                    icon=":material/trending_down:",
+                    url_path="float-erosion"),
+            st.Page(progress_tab, title="Progress S-Curve",
+                    icon=":material/show_chart:",
+                    url_path="progress-s-curve"),
+            st.Page(resources_tab, title="Resource Loading",
+                    icon=":material/engineering:",
+                    url_path="resource-loading"),
+            st.Page(sequence_tab, title="Sequence Coding",
+                    icon=":material/extension:",
+                    url_path="sequence-coding"),
+            st.Page(hierarchy_tab, title="Hierarchy Rebuild",
+                    icon=":material/account_tree:",
+                    url_path="hierarchy-rebuild"),
+            st.Page(report_tab, title="Report Assembler",
+                    icon=":material/description:",
+                    url_path="report-assembler"),
+        ],
+        "\U0001f52c Retrospective \u2014 what happened": [
+            st.Page(variance_tab, title="As-Planned vs As-Recorded",
+                    icon=":material/bar_chart:",
+                    url_path="as-planned-vs-as-recorded"),
+            st.Page(milestone_tab, title="Milestone Shift Tracker",
+                    icon=":material/flag:", url_path="milestone-shift"),
+            st.Page(windows_tab, title="Windows Analysis",
+                    icon=":material/grid_view:",
+                    url_path="windows-analysis"),
+            st.Page(asbuilt_tab, title="As-Built Critical Path",
+                    icon=":material/timeline:",
+                    url_path="as-built-critical-path"),
+            st.Page(progress_transfer_tab, title="Progress Transfer",
+                    icon=":material/sync_alt:",
+                    url_path="progress-transfer"),
+            st.Page(explain_tab, title="Explain This Delay",
+                    icon=":material/search:",
+                    url_path="explain-this-delay"),
+        ],
+        "\u26a1 Prospective \u2014 forecast impact": [
+            st.Page(tia_tab, title="Time Impact Analysis",
+                    icon=":material/bolt:",
+                    url_path="time-impact-analysis"),
+        ],
+    }
+
     with st.sidebar:
-        st.radio("Workflow", ["Retrospective", "Prospective"],
-                 key="app_mode")
-        st.caption("Uploaded programmes are shared between both "
-                   "workflows.")
-    if st.session_state["app_mode"] == "Prospective":
-        prospective_section()
-        return
-    retrospective_section()
+        st.caption("Uploaded programmes are shared across every group.")
 
-
-def retrospective_section() -> None:
-    st.title("Forensic Programme Analysis")
-    st.caption("Primavera P6 (.xer) delay-analysis toolkit — one module per tab.")
-    # Placeholder filled AFTER the tabs run, so the strip reflects state
-    # written by the intake tab during this same rerun.
-    _strip = st.empty()
-
-    (intake, dcma, cpath, milestones, variance, compare, ptransfer,
-     oos, windows, scurve, floats, resources, asbuilt, sequence,
-     hierarchy, explain, report) = st.tabs([
-        "📥 Data Intake & Inventory",
-        "🩺 DCMA 14-Point",
-        "🧭 Baseline Critical Path",
-        "🏁 Milestone Shift Tracker",
-        "📊 As-Planned vs As-Recorded",
-        "🔀 Revision Comparison",
-        "🔁 Progress Transfer",
-        "⛓️ Out-of-Sequence Repair",
-        "🪟 Windows Analysis",
-        "📈 Progress S-Curve",
-        "🎈 Float Erosion",
-        "👷 Resource Loading",
-        "🛤️ As-Built Critical Path",
-        "🧩 Sequence Coding",
-        "🗂️ Hierarchy Rebuild",
-        "🔎 Explain This Delay",
-        "📄 Report Assembler",
-    ])
-    with intake:
-        intake_tab()
-    with dcma:
-        dcma_tab()
-    with cpath:
-        critical_path_tab()
-    with milestones:
-        milestone_tab()
-    with variance:
-        variance_tab()
-    with compare:
-        comparison_tab()
-    with ptransfer:
-        progress_transfer_tab()
-    with oos:
-        oos_tab()
-    with windows:
-        windows_tab()
-    with scurve:
-        progress_tab()
-    with floats:
-        float_erosion_tab()
-    with resources:
-        resources_tab()
-    with asbuilt:
-        asbuilt_tab()
-    with sequence:
-        sequence_tab()
-    with hierarchy:
-        hierarchy_tab()
-    with explain:
-        explain_tab()
-    with report:
-        report_tab()
-    with _strip.container():
+    header = st.container()          # reserve the top slot
+    # expanded=True shows every group and page at once; the default
+    # collapses to 10 items behind a "View N more", which would bury the
+    # Retrospective and Prospective method groups.
+    nav = st.navigation(pages, expanded=True)
+    nav.run()                        # the selected page renders here
+    # Fill the header AFTER the page runs, so the status strip reflects
+    # state (e.g. an intake upload) written during this same rerun.
+    with header:
+        st.title(nav.title)
         status_strip()
 
 
