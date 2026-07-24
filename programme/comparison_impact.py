@@ -62,7 +62,10 @@ PROVENANCE_CAVEATS = [
 _BAND_WEIGHT = {"critical": 100.0, "near-critical": 50.0, "off-path": 10.0,
                 "completed": 0.0, "absent": 0.0}
 _RED_FLAG_BONUS = {"Actual dates changed retrospectively": 40.0,
-                   "Constraint changes": 15.0}
+                   "Calendar definitions changed": 40.0,
+                   "Scheduling options changed": 40.0,
+                   "Constraint changes": 15.0,
+                   "Calendar reassignments": 15.0}
 _MAGNITUDE_CAP_DAYS = 60.0
 
 
@@ -239,6 +242,15 @@ def assess_comparison_impact(
         ("Calendar reassignments", cmp.calendar_changes),
         ("Actual dates changed retrospectively", cmp.actual_date_changes),
     ]
+    # Calendar-definition edits are programme-level (the ref is a calendar,
+    # not an activity): no path band applies, but the red-flag bonus alone
+    # pushes them up the rank where they belong.
+    for c in cmp.calendar_def_changes:
+        add("Calendar definitions changed", c.task_code, c.name,
+            f"{c.old_value} -> {c.new_value}", None, "absent", "absent")
+    for c in cmp.sched_options_changes:
+        add("Scheduling options changed", c.task_code, c.name,
+            f"{c.old_value} -> {c.new_value}", None, "absent", "absent")
     for cat, changes in field_cats:
         for c in changes:
             add(cat, c.task_code, c.name,

@@ -20,6 +20,8 @@ from dcma.config import DCMAConfig
 from dcma.models import Task
 from dcma.xer_parser import XerData
 
+from .basis import SCHED_OPTION_LABELS, sched_options_row
+
 STANDING_CAVEATS = [
     "The comparison is between the two programme files as submitted; it "
     "records what changed, not why — changes are descriptive facts, not "
@@ -102,6 +104,13 @@ class ComparisonResult:
     lag_changes: list[FieldChange] = field(default_factory=list)
     constraint_changes: list[FieldChange] = field(default_factory=list)
     calendar_changes: list[FieldChange] = field(default_factory=list)
+    calendar_def_changes: list[FieldChange] = field(default_factory=list)
+    #   ^ SAME calendar id, DIFFERENT working pattern / hours between the
+    #     revisions — every activity on it re-times with no visible edit
+    sched_options_changes: list[FieldChange] = field(default_factory=list)
+    #   ^ P6 SCHEDOPTIONS changed between revisions (retained logic vs
+    #     progress override, float type, longest-path settings...) — the
+    #     two files' forecasts are then NOT like-for-like comparable
     actual_date_changes: list[FieldChange] = field(default_factory=list)
 
     warnings: list[str] = field(default_factory=list)
@@ -113,6 +122,8 @@ class ComparisonResult:
                 + len(self.duration_changes) + len(self.logic_added)
                 + len(self.logic_removed) + len(self.lag_changes)
                 + len(self.constraint_changes) + len(self.calendar_changes)
+                + len(self.calendar_def_changes)
+                + len(self.sched_options_changes)
                 + len(self.actual_date_changes))
 
     @property
@@ -127,6 +138,9 @@ class ComparisonResult:
             "Lag changes": len(self.lag_changes),
             "Constraint changes": len(self.constraint_changes),
             "Calendar reassignments": len(self.calendar_changes),
+            "Calendar definitions changed": len(self.calendar_def_changes),
+            "Scheduling options changed":
+                len(self.sched_options_changes),
             "Actual dates changed retrospectively":
                 len(self.actual_date_changes),
         }
@@ -234,6 +248,58 @@ def compare_revisions(
                     new_value=f"{label} {na:%Y-%m-%d}",
                     delta_days=round((na - oa).total_seconds() / 86400, 1)))
 
+    # --- calendar DEFINITION diff (same id, different working pattern) ---
+    old_cals = {r.get("clndr_id", "").strip(): r
+                for r in old.raw_tables.get("CALENDAR", [])}
+    new_cals = {r.get("clndr_id", "").strip(): r
+                for r in new.raw_tables.get("CALENDAR", [])}
+    def _cal_diff(oc_row: dict, nc_row: dict, ref: str,
+                  note: str = "") -> None:
+        name = (nc_row.get("clndr_name") or oc_row.get("clndr_name")
+                or ref).strip()
+        diffs = []
+        o_hr = (oc_row.get("day_hr_cnt") or "").strip()
+        n_hr = (nc_row.get("day_hr_cnt") or "").strip()
+        if o_hr != n_hr:
+            diffs.append((f"{o_hr or '?'}h/day", f"{n_hr or '?'}h/day"))
+        if ((oc_row.get("clndr_data") or "").strip()
+                != (nc_row.get("clndr_data") or "").strip()):
+            diffs.append(("working pattern / holidays",
+                          "working pattern / holidays REWRITTEN"))
+        if diffs:
+            n_on_cal = sum(
+                1 for t in new_by_code.values()
+                if t.clndr_id == (nc_row.get("clndr_id") or "").strip())
+            result.calendar_def_changes.append(FieldChange(
+                ref, f"{name} ({n_on_cal} activities on it){note}",
+                old_value="; ".join(d[0] for d in diffs),
+                new_value="; ".join(d[1] for d in diffs)))
+
+    shared_ids = old_cals.keys() & new_cals.keys()
+    for cid in shared_ids:
+        _cal_diff(old_cals[cid], new_cals[cid], cid)
+    # Calendar ids drift between exports — pair the leftovers by NAME so
+    # a re-ided calendar with an edited pattern is still caught.
+    old_left = {(r.get("clndr_name") or "").strip(): r
+                for k, r in old_cals.items() if k not in shared_ids}
+    new_left = {(r.get("clndr_name") or "").strip(): r
+                for k, r in new_cals.items() if k not in shared_ids}
+    for cname in old_left.keys() & new_left.keys():
+        if cname:
+            _cal_diff(old_left[cname], new_left[cname], cname,
+                      note=" — matched by name, calendar id changed")
+
+    # --- SCHEDOPTIONS diff: the settings the forecast is calculated under
+    so_old = sched_options_row(old)
+    so_new = sched_options_row(new)
+    if so_old and so_new:
+        for fld, label in SCHED_OPTION_LABELS.items():
+            ov, nv = so_old.get(fld, ""), so_new.get(fld, "")
+            if ov != nv:
+                result.sched_options_changes.append(FieldChange(
+                    fld, label,
+                    old_value=ov or "(unset)", new_value=nv or "(unset)"))
+
     # --- relationship diff ------------------------------------------------
     def rel_map(data: XerData, by_code: dict[str, Task]):
         id_to_code = {t.task_id: t.task_code
@@ -302,9 +368,50 @@ def compare_revisions(
     matched = len(old_by_code.keys() & new_by_code.keys())
     if matched and (len(result.added) + len(result.deleted)) > 0.3 * matched:
         result.warnings.append(
-            "The volume of added/deleted activities exceeds 30% of the "
-            "matched population — the newer file may be a re-baselined or "
-            "restructured programme rather than a routine progress update."
+            "🚩 RED FLAG — possible covert re-baseline: added/deleted "
+            "activities exceed 30% of the matched population. The newer "
+            "file may be a re-baselined or restructured programme "
+            "presented as a routine progress update; establish whether a "
+            "re-baseline was instructed and approved."
+        )
+    if matched and len(result.duration_changes) > 0.3 * matched:
+        result.warnings.append(
+            "🚩 RED FLAG — wholesale duration re-write: original "
+            f"durations changed on {len(result.duration_changes)} "
+            "activities (>30% of the matched population). Plan durations "
+            "re-written at this scale is re-baselining behaviour, not "
+            "progress updating."
+        )
+    if result.calendar_def_changes:
+        result.warnings.append(
+            "🚩 RED FLAG — calendar manipulation: "
+            f"{len(result.calendar_def_changes)} calendar definition(s) "
+            "changed between revisions (same calendar id, different "
+            "working pattern or hours). Every activity on an edited "
+            "calendar re-times with NO visible activity-level change — "
+            "durations, float and the critical path can all shift "
+            "silently. Establish who changed the calendars and why."
+        )
+    if matched and len(result.calendar_changes) > 0.05 * matched:
+        result.warnings.append(
+            "🚩 RED FLAG — mass calendar reassignment: "
+            f"{len(result.calendar_changes)} activities (>5% of matched) "
+            "moved to a different calendar. Reassignment changes working "
+            "time without touching durations; cross-check against the "
+            "calendar definitions and the float profile."
+        )
+    if result.sched_options_changes:
+        flips = "; ".join(f"{c.name}: {c.old_value} -> {c.new_value}"
+                          for c in result.sched_options_changes[:4])
+        result.warnings.append(
+            "🚩 RED FLAG — scheduling options changed between revisions "
+            f"({flips}"
+            + (" …" if len(result.sched_options_changes) > 4 else "")
+            + "). Forecasts calculated under different options (retained "
+            "logic vs progress override, float definition, longest-path "
+            "settings) are NOT comparable like-for-like; every "
+            "cross-revision movement figure must carry this caveat until "
+            "the change is explained."
         )
 
     return result

@@ -74,4 +74,24 @@ CHECK_RATIONALE: dict[int, str] = {
         "Below 0.95 indicates the project is not executing to baseline, an "
         "early warning of cumulative delay."
     ),
+    # Supplementary baseline-quality checks — not part of the DCMA 14.
+    15: (
+        "An LOE/hammock derives its dates from the activities it spans; when "
+        "it also DRIVES real work those derived dates re-enter the network "
+        "and the critical path can run through a summary. Supplementary "
+        "check, not part of the DCMA 14."
+    ),
+    16: (
+        "A direct link duplicated by a longer path adds nothing but noise: "
+        "it hides the true driver and pads the logic density the other "
+        "checks rely on. Topological screening — an intentional duplicate "
+        "carrying a different lag is legitimate. Supplementary check."
+    ),
+    17: (
+        "Open ends are caught by Check 1, but an activity can hold logic on "
+        "both ends and still dangle: a start driven only by FF/SF links, or "
+        "a finish that controls nothing. Its duration can then grow without "
+        "any downstream effect — a classic float-hiding defect. "
+        "Supplementary check."
+    ),
 }

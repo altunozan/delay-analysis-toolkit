@@ -18,6 +18,7 @@ from enum import Enum
 
 from .config import DCMAConfig
 from .models import (
+    REL_FF,
     REL_FS,
     REL_SF,
     Task,
@@ -661,6 +662,184 @@ def check_14_bei(data: XerData, config: DCMAConfig) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Supplementary baseline-quality checks 15-17 (NOT part of the DCMA 14).
+# The 14-point gate misses three classic baseline defects; these close the
+# gap and are labelled "supp." so the scorecard never overstates the
+# standard's scope.
+# ---------------------------------------------------------------------------
+def check_15_loe_logic(data: XerData, config: DCMAConfig) -> CheckResult:
+    """LOE / WBS-summary activities must never DRIVE real work.
+
+    A hammock's dates should be derived from the activities it spans;
+    when an LOE is the predecessor of a real task it injects derived
+    dates back into the driving network."""
+    by_id = {t.task_id: t for t in data.tasks}
+    affected: list[str] = []
+    detail: list[dict] = []
+    for rel in data.relationships:
+        pred = by_id.get(rel.pred_task_id)
+        succ = by_id.get(rel.task_id)
+        if pred is None or succ is None:
+            continue
+        if pred.is_loe_or_wbs and not succ.is_loe_or_wbs:
+            affected.append(succ.task_code)
+            detail.append({
+                "LOE / summary": pred.task_code,
+                "LOE name": pred.name,
+                "Drives activity": succ.task_code,
+                "Activity name": succ.name,
+                "Link": rel.pred_type.replace("PR_", ""),
+            })
+    count = len(affected)
+    status = (CheckStatus.PASS if count <= config.loe_driving_max_count
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=15,
+        name="LOE Driving Logic (supp.)",
+        status=status,
+        metric_label="Relationships where an LOE/summary drives real work",
+        metric_value=str(count),
+        threshold=f"<= {config.loe_driving_max_count}",
+        summary=(f"{count} relationship(s) have an LOE/hammock or summary "
+                 "activity as the predecessor of a real activity — "
+                 "derived dates are feeding the driving network."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+def check_16_redundant_logic(data: XerData,
+                             config: DCMAConfig) -> CheckResult:
+    """Direct FS links duplicated by a longer path (transitive logic).
+
+    Redundant links hide the true driver, inflate the logic count and
+    make float analysis noisy. Topological screening only: a redundant
+    link may still be intentional (e.g. carrying a different lag), so
+    flags are prompts for tidy-up, not errors."""
+    real = {t.task_id for t in data.tasks if not t.is_loe_or_wbs}
+    # FS-only edges: only an unbroken FS chain strictly implies the direct
+    # FS link (mixed SS/FF paths do not carry the same dependency).
+    succs: dict[str, set[str]] = {}
+    for rel in data.relationships:
+        if (rel.pred_type == REL_FS
+                and rel.pred_task_id in real and rel.task_id in real):
+            succs.setdefault(rel.pred_task_id, set()).add(rel.task_id)
+
+    by_id = {t.task_id: t for t in data.tasks}
+
+    def reachable_avoiding_direct(src: str, dst: str) -> bool:
+        """Path src -> dst of length >= 2 (skip the direct edge once)."""
+        stack = [n for n in succs.get(src, ()) if n != dst]
+        seen = set(stack)
+        while stack:
+            cur = stack.pop()
+            nxt = succs.get(cur, ())
+            if dst in nxt:
+                return True
+            for n in nxt:
+                if n not in seen:
+                    seen.add(n)
+                    stack.append(n)
+        return False
+
+    total_rels = len(data.relationships)
+    affected: list[str] = []
+    detail: list[dict] = []
+    for rel in data.relationships:
+        if rel.pred_type != REL_FS:
+            continue
+        if rel.pred_task_id not in real or rel.task_id not in real:
+            continue
+        if reachable_avoiding_direct(rel.pred_task_id, rel.task_id):
+            p, s = by_id[rel.pred_task_id], by_id[rel.task_id]
+            affected.append(s.task_code)
+            detail.append({
+                "Predecessor": p.task_code,
+                "Pred name": p.name,
+                "Successor": s.task_code,
+                "Succ name": s.name,
+                "Note": "direct FS duplicated by a longer path",
+            })
+    pct = _pct(len(affected), total_rels)
+    status = (CheckStatus.PASS if pct <= config.redundant_max_pct
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=16,
+        name="Redundant Logic (supp.)",
+        status=status,
+        metric_label="Direct FS links duplicated by a longer path",
+        metric_value=f"{len(affected)} of {total_rels} ({pct:.1f}%)",
+        threshold=f"<= {config.redundant_max_pct:.0f}%",
+        summary=(f"{len(affected)} relationship(s) ({pct:.1f}%) are "
+                 "topologically redundant — the same dependency is also "
+                 "carried by a longer path. Screening only; a redundant "
+                 "link may be intentional."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+def check_17_dangling_ends(data: XerData,
+                           config: DCMAConfig) -> CheckResult:
+    """Dangling ends beyond simple open ends (Check 1 catches those).
+
+    An activity can have both predecessors and successors yet still be
+    unmoored: a START driven by nothing (only FF/SF predecessors) or a
+    FINISH that controls nothing (only SS/SF successors). Such logic
+    lets duration changes vanish without downstream effect."""
+    preds_of: dict[str, list[str]] = {}
+    succs_of: dict[str, list[str]] = {}
+    for rel in data.relationships:
+        preds_of.setdefault(rel.task_id, []).append(rel.pred_type)
+        succs_of.setdefault(rel.pred_task_id, []).append(rel.pred_type)
+
+    activities = [t for t in _eligible_activities(data)
+                  if t.is_incomplete and not t.is_milestone]
+    affected: list[str] = []
+    detail: list[dict] = []
+    for t in activities:
+        p_types = preds_of.get(t.task_id)
+        s_types = succs_of.get(t.task_id)
+        if not p_types or not s_types:
+            continue                     # open end — already Check 1
+        issues = []
+        # start driven only by finish-anchored links at the successor side
+        if all(pt in (REL_FF, REL_SF) for pt in p_types):
+            issues.append("start not logic-driven (only FF/SF "
+                          "predecessors)")
+        # finish consumed by nothing: only links leaving its start
+        if all(st_ in ("PR_SS", REL_SF) for st_ in s_types):
+            issues.append("finish controls nothing (only SS/SF "
+                          "successors)")
+        if issues:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Issue": "; ".join(issues),
+            })
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = (CheckStatus.PASS if pct <= config.dangling_max_pct
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=17,
+        name="Dangling Ends (supp.)",
+        status=status,
+        metric_label="Activities with an undriven start or "
+                     "non-controlling finish",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.dangling_max_pct:.0f}%",
+        summary=(f"{len(affected)} incomplete activities ({pct:.1f}%) "
+                 "have logic on both ends yet a dangling start or "
+                 "finish — their duration can change with no downstream "
+                 "effect."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
 ALL_CHECKS = [
     check_01_logic,
     check_02_leads,
@@ -678,8 +857,22 @@ ALL_CHECKS = [
     check_14_bei,
 ]
 
+SUPPLEMENTARY_CHECKS = [
+    check_15_loe_logic,
+    check_16_redundant_logic,
+    check_17_dangling_ends,
+]
 
-def run_all_checks(data: XerData, config: DCMAConfig | None = None) -> list[CheckResult]:
-    """Run the full DCMA 14-point assessment and return ordered results."""
+
+def run_all_checks(
+    data: XerData,
+    config: DCMAConfig | None = None,
+    *,
+    include_supplementary: bool = True,
+) -> list[CheckResult]:
+    """Run the DCMA 14-point assessment plus the supplementary
+    baseline-quality checks (15-17, clearly labelled "supp.")."""
     config = config or DCMAConfig()
-    return [check(data, config) for check in ALL_CHECKS]
+    checks = (ALL_CHECKS + SUPPLEMENTARY_CHECKS
+              if include_supplementary else ALL_CHECKS)
+    return [check(data, config) for check in checks]

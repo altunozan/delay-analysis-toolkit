@@ -405,7 +405,9 @@ def build_dcma_trace(
         by_code = {t.task_code: t for t in data.tasks}
         hits: dict[str, list[int]] = {}
         for r in results:
-            if r.number >= 12:      # 12 is not an offence; 13/14 project-level
+            if r.number in (12, 13, 14):
+                # 12 is not an offence; 13/14 are project-level indices.
+                # Supplementary activity-level checks (15-17) DO count.
                 continue
             for code in set(r.affected_ids):
                 hits.setdefault(code, []).append(r.number)
@@ -446,7 +448,7 @@ def annotate_path_position(results: list[CheckResult],
         return _BAND_ORDER.index(band) if band in _BAND_ORDER else 9
 
     for r in results:
-        if not r.detail_rows or r.number >= 12:
+        if not r.detail_rows or r.number in (12, 13, 14):
             continue
         new_rows = []
         for row in r.detail_rows:
