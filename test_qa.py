@@ -928,9 +928,11 @@ check("E7b every OOS flag carries a valid band",
 from programme import (build_impact_xlsx, build_transfer_xlsx,
                        build_custody_xlsx)
 _wb_i = load_workbook(io.BytesIO(build_impact_xlsx(_imp)))
-check("E8 impact workbook: summary + rank + OOS + caveats",
-      {"Summary", "Materiality rank", "Out of sequence",
-       "Warnings & Caveats"} <= set(_wb_i.sheetnames),
+check("E8 impact workbook: summary + rank + caveats (OOS now its own "
+      "module)",
+      {"Summary", "Materiality rank", "Warnings & Caveats"}
+      <= set(_wb_i.sheetnames)
+      and "Out of sequence" not in _wb_i.sheetnames,
       str(_wb_i.sheetnames))
 _wb_t = load_workbook(io.BytesIO(build_transfer_xlsx(_tr)))
 check("E8b transfer workbook: summary + milestones + chain + caveats",
@@ -1034,8 +1036,7 @@ check("F10 narrative prompt carries traceback facts",
 # Layer G — out-of-sequence: as-built fits, evolution, transfer wiring
 # ===================================================================== #
 print("\n--- Layer G: OOS as-built recommendations ---")
-from programme.comparison_impact import (oos_evolution,
-                                         out_of_sequence_flags)
+from programme.oos import (oos_evolution, out_of_sequence_flags)
 
 _gb = parse_xer("sample/Sample Baseline.xer")
 _gu = parse_xer("sample/Sample Update.xer")
@@ -1089,11 +1090,96 @@ from programme import build_impact_xlsx as _bix, build_transfer_xlsx as _btx
 from programme import assess_comparison_impact as _aci
 _gimp = _aci(_gb, _gu, "Base", "Upd")
 _wb_g = load_workbook(io.BytesIO(_bix(_gimp)))
-check("G6 impact workbook OOS sheet carries the as-built fix column",
-      "As-built fix" in [c.value for c in _wb_g["Out of sequence"][1]])
+check("G6 OOS is un-embedded: impact workbook has NO out-of-sequence sheet",
+      "Out of sequence" not in _wb_g.sheetnames)
 _wb_g2 = load_workbook(io.BytesIO(_btx(_gtr)))
-check("G6b transfer workbook gains the out-of-sequence sheet",
-      "Out of sequence" in _wb_g2.sheetnames)
+check("G6b OOS is un-embedded: transfer workbook has NO OOS sheet",
+      "Out of sequence" not in _wb_g2.sheetnames)
+
+# ===================================================================== #
+# Layer H — standalone OOS module: as-built repair -> revised .xer
+# ===================================================================== #
+print("\n--- Layer H: OOS as-built repair engine ---")
+from programme.oos import (build_repair_plan as _brp,
+                           apply_asbuilt_repairs as _aar,
+                           out_of_sequence_flags as _oosf, _TYPE_CODE)
+from programme import build_oos_xlsx as _box
+
+_hraw = open("sample/Sample Update.xer", encoding="latin-1").read()
+_hflags = _oosf(_gu)
+_hplan = _brp(_gu, _hflags)
+check("H1 plan holds only concrete fits (no review-class)",
+      len(_hplan) == sum(1 for f in _hflags
+                         if f.rec_link_type not in ("", "review")))
+check("H1b every plan item has a positive-or-zero calendar lag "
+      "and an hour conversion",
+      all(r.new_lag_days_cal >= 0 and r.new_lag_hr >= 0 for r in _hplan))
+
+# blocked items are those whose pair already carries the target link
+_hexist = {(t.task_id) for t in _gu.tasks}
+_hcode = {t.task_code: t.task_id for t in _gu.tasks}
+_hrels = {(r.pred_task_id, r.task_id, r.pred_type)
+          for r in _gu.relationships}
+_hblocked = [r for r in _hplan if r.blocked]
+check("H2 blocked == plan items that would duplicate an existing link",
+      all((_hcode[r.pred_code], _hcode[r.succ_code], r.new_type) in _hrels
+          for r in _hblocked)
+      and all((_hcode[r.pred_code], _hcode[r.succ_code], r.new_type)
+              not in _hrels
+              for r in _hplan if not r.blocked))
+
+_hout, _hrep = _aar(_hraw, _gu, _hplan)
+check("H3 round-trip QA passes", _hrep.qa_passed, str(_hrep.qa_notes[:2]))
+check("H3b relationship & task counts unchanged by the repair",
+      _hrep.rel_count_after == _hrep.rel_count_before)
+check("H3c applied == selected non-blocked; nothing lost",
+      len(_hrep.applied) == len(_hplan) - len(_hblocked)
+      and not _hrep.not_found)
+check("H4 source file untouched: output hash differs, source hash "
+      "matches the on-disk bytes",
+      _hrep.output_sha256 != _hrep.source_sha256
+      and _hrep.source_sha256 == __import__("hashlib").sha256(
+          _hraw.encode("latin-1")).hexdigest())
+
+# only TASKPRED %R rows changed; line count identical
+_sl = _hraw.split("\n")
+_ol = _hout.split("\n")
+_diff = [i for i in range(min(len(_sl), len(_ol))) if _sl[i] != _ol[i]]
+check("H5 only %R rows changed, line count identical",
+      len(_sl) == len(_ol)
+      and all(_sl[i].startswith("%R") for i in _diff)
+      and len(_diff) == len(_hrep.applied))
+
+# re-parse and confirm a repaired link now carries the fitted type+lag
+_rep_parsed = parse_xer(_hout)
+_r0 = _hrep.applied[0]
+_key0 = (_hcode[_r0.pred_code], _hcode[_r0.succ_code], _r0.new_type)
+_found0 = [rel for rel in _rep_parsed.relationships
+           if (rel.pred_task_id, rel.task_id, rel.pred_type) == _key0]
+check("H6 a repaired link is present as the fitted type after re-parse",
+      len(_found0) >= 1
+      and any(abs((rel.lag_hr or 0) - _r0.new_lag_hr) <= 0.51
+              for rel in _found0))
+
+# unselecting everything => empty, safe output identical to source
+for _r in _hplan:
+    _r.apply = False
+_hout2, _hrep2 = _aar(_hraw, _gu, _hplan)
+check("H7 with nothing selected, output == source (no-op is safe)",
+      _hrep2.output_sha256 == _hrep2.source_sha256
+      and len(_hrep2.applied) == 0)
+for _r in _hplan:
+    _r.apply = not _r.blocked
+
+# bytes input path (as the app stores raw) works identically
+_hout3, _hrep3 = _aar(_hraw.encode("latin-1"), _gu, _hplan)
+check("H8 bytes input yields the same repaired output as str input",
+      _hrep3.output_sha256 == _hrep.output_sha256 and _hrep3.qa_passed)
+
+_wb_h = load_workbook(io.BytesIO(_box("Upd", _hflags, _hplan, _hrep, _gev)))
+check("H9 OOS workbook has Summary/Flags/Repair register/Evolution/QA",
+      {"Summary", "Flags", "Repair register", "Evolution",
+       "QA & Caveats"} <= set(_wb_h.sheetnames), str(_wb_h.sheetnames))
 
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:

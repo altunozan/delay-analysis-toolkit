@@ -50,7 +50,7 @@ from datetime import datetime
 from dcma.config import DCMAConfig
 from dcma.xer_parser import XerData
 
-from .comparison_impact import OOS_CAVEATS, out_of_sequence_flags
+from .oos import OOS_CAVEATS, out_of_sequence_flags
 from .tia import (
     _START_FLOOR_CSTR,
     _REL_TO_SHORT,

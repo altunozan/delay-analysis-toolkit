@@ -1028,31 +1028,6 @@ def build_impact_xlsx(imp, narrative: str | None = None) -> bytes:
                  9: 9})
     s.freeze_panes = "A2"
 
-    if imp.oos_flags:
-        s2 = wb.create_sheet("Out of sequence")
-        _header_row(s2, 1, ["Path position", "Predecessor", "Pred name",
-                            "Link", "Successor", "Succ name",
-                            "Overlap (d)", "Detail", "As-built fix",
-                            "Fix basis (analyst to confirm)"])
-        for i, f in enumerate(imp.oos_flags[:1000], start=2):
-            vals = [f.band, f.pred_code, f.pred_name, f.link_type,
-                    f.succ_code, f.succ_name,
-                    f.overlap_days if f.overlap_days is not None else "",
-                    f.detail, f.rec_link, f.rec_basis]
-            for col, v in enumerate(vals, start=1):
-                cell = s2.cell(row=i, column=col, value=v)
-                cell.border = THIN_BORDER
-                if f.band == "critical" and col == 1:
-                    cell.fill = SLIP_FILL
-                if col == 9 and f.rec_link_type not in ("", "review"):
-                    cell.fill = GAIN_FILL
-        _autofit(s2, {1: 14, 2: 18, 3: 30, 4: 6, 5: 18, 6: 30, 7: 10,
-                      8: 52, 9: 16, 10: 60})
-        s2.freeze_panes = "A2"
-        if len(imp.oos_flags) > 1000:
-            s2.cell(row=1, column=10,
-                    value=f"showing 1000 of {len(imp.oos_flags)}")
-
     _notes_sheet(wb, imp.warnings + imp.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
     buf = io.BytesIO()
@@ -1117,28 +1092,6 @@ def build_transfer_xlsx(tr, narrative: str | None = None) -> bytes:
         _autofit(s, {1: 18, 2: 46, 3: 13, 4: 13, 5: 10})
         s.freeze_panes = "A2"
 
-    if getattr(tr, "oos_flags", None):
-        so = wb.create_sheet("Out of sequence")
-        so["A1"] = ("Out-of-sequence records in the progress donor — "
-                    "actuals contradicting its own logic; as-built "
-                    "relation fits are calendar-day offsets for as-built "
-                    "modelling only, analyst to confirm")
-        so["A1"].font = Font(italic=True)
-        _header_row(so, 3, ["Predecessor", "Link", "Successor",
-                            "Succ name", "Overlap (d)", "As-built fix",
-                            "Fix basis"])
-        for i, f in enumerate(tr.oos_flags[:1000], start=4):
-            vals = [f.pred_code, f.link_type, f.succ_code, f.succ_name,
-                    f.overlap_days if f.overlap_days is not None else "",
-                    f.rec_link, f.rec_basis]
-            for col, v in enumerate(vals, start=1):
-                cell = so.cell(row=i, column=col, value=v)
-                cell.border = THIN_BORDER
-                if col == 6 and f.rec_link_type not in ("", "review"):
-                    cell.fill = GAIN_FILL
-        _autofit(so, {1: 18, 2: 6, 3: 18, 4: 34, 5: 10, 6: 16, 7: 60})
-        so.freeze_panes = "A4"
-
     if tr.driving_chain:
         s2 = wb.create_sheet("Driving chain")
         _header_row(s2, 1, ["Activity", "Name", "Start", "Finish"])
@@ -1180,6 +1133,115 @@ def build_custody_xlsx(records) -> bytes:
             ws.cell(row=i, column=col, value=v).border = THIN_BORDER
     _autofit(ws, {1: 22, 2: 20, 3: 28, 4: 12, 5: 10, 6: 12, 7: 66})
     ws.freeze_panes = "A5"
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Module 18 — out-of-sequence screening & as-built repair
+# --------------------------------------------------------------------------- #
+
+def build_oos_xlsx(label, flags, plan, report=None,
+                   evolution=None) -> bytes:
+    """OOS module workbook: flags, repair plan/register, evolution.
+
+    flags: list[programme.oos.OutOfSequenceFlag]
+    plan:  list[programme.oos.RepairItem]
+    report: programme.oos.RepairReport | None (after an export)
+    evolution: programme.oos.OOSEvolution | None
+    """
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    _title(ws, "Out-of-Sequence Screening & As-Built Repair", 4)
+    concrete = sum(1 for f in flags if f.rec_link_type
+                   not in ("", "review"))
+    rows = [
+        ("Programme", label),
+        ("Out-of-sequence records", len(flags)),
+        ("Concrete as-built fits", concrete),
+        ("Review-class flags (never auto-applied)",
+         len(flags) - concrete),
+        ("Repair plan items", len(plan)),
+        ("Blocked (would duplicate an existing link)",
+         sum(1 for r in plan if r.blocked)),
+    ]
+    if report is not None:
+        rows += [
+            ("Repairs applied to the exported copy",
+             len(report.applied)),
+            ("Round-trip QA", "PASSED" if report.qa_passed else "FAILED"),
+            ("Source SHA-256", report.source_sha256),
+            ("Repaired-copy SHA-256", report.output_sha256),
+        ]
+    _header_row(ws, 3, ["Measure", "Value"])
+    for i, (k, v) in enumerate(rows, start=4):
+        a = ws.cell(row=i, column=1, value=k)
+        b = ws.cell(row=i, column=2, value=v)
+        a.border = b.border = THIN_BORDER
+    _autofit(ws, {1: 44, 2: 70})
+
+    s = wb.create_sheet("Flags")
+    _header_row(s, 1, ["Predecessor", "Pred name", "Link", "Successor",
+                       "Succ name", "Overlap (d)", "As-built fix",
+                       "Fix basis (analyst to confirm)", "Detail"])
+    for i, f in enumerate(flags[:2000], start=2):
+        vals = [f.pred_code, f.pred_name, f.link_type, f.succ_code,
+                f.succ_name,
+                f.overlap_days if f.overlap_days is not None else "",
+                f.rec_link, f.rec_basis, f.detail]
+        for col, v in enumerate(vals, start=1):
+            cell = s.cell(row=i, column=col, value=v)
+            cell.border = THIN_BORDER
+            if col == 7 and f.rec_link_type not in ("", "review"):
+                cell.fill = GAIN_FILL
+    _autofit(s, {1: 18, 2: 30, 3: 6, 4: 18, 5: 30, 6: 10, 7: 16, 8: 58,
+                 9: 52})
+    s.freeze_panes = "A2"
+
+    if plan:
+        sp = wb.create_sheet("Repair register")
+        _header_row(sp, 1, ["Predecessor", "Successor", "Old link",
+                            "New link", "Lag (cal. d)", "Lag (hr)",
+                            "Applied", "Blocked", "Basis"])
+        applied_keys = ({(r.pred_code, r.succ_code)
+                         for r in report.applied}
+                        if report is not None else set())
+        for i, r in enumerate(plan, start=2):
+            applied = ("YES" if (r.pred_code, r.succ_code) in applied_keys
+                       else ("" if report is not None
+                             else ("planned" if r.apply and not r.blocked
+                                   else "")))
+            vals = [r.pred_code, r.succ_code, r.old_link,
+                    f"{r.new_type.replace('PR_', '')} "
+                    f"{r.new_lag_days_cal:+.0f}d",
+                    r.new_lag_days_cal, r.new_lag_hr, applied,
+                    r.blocked, r.basis]
+            for col, v in enumerate(vals, start=1):
+                cell = sp.cell(row=i, column=col, value=v)
+                cell.border = THIN_BORDER
+                if col == 8 and r.blocked:
+                    cell.fill = SLIP_FILL
+        _autofit(sp, {1: 18, 2: 18, 3: 12, 4: 12, 5: 11, 6: 9, 7: 9,
+                      8: 40, 9: 58})
+        sp.freeze_panes = "A2"
+
+    if evolution is not None and evolution.windows:
+        se = wb.create_sheet("Evolution")
+        _header_row(se, 1, ["Window", "New OOS", "Resolved",
+                            "Total after"])
+        for i, w in enumerate(evolution.windows, start=2):
+            vals = [f"{w.from_label} -> {w.to_label}", len(w.new_flags),
+                    w.resolved_count, w.total_after]
+            for col, v in enumerate(vals, start=1):
+                se.cell(row=i, column=col, value=v).border = THIN_BORDER
+        _autofit(se, {1: 52, 2: 10, 3: 10, 4: 12})
+
+    from .oos import OOS_CAVEATS, REPAIR_CAVEATS
+    notes = (report.qa_notes if report is not None else [])
+    _notes_sheet(wb, notes + REPAIR_CAVEATS + OOS_CAVEATS,
+                 "QA & Caveats")
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
