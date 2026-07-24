@@ -1032,19 +1032,22 @@ def build_impact_xlsx(imp, narrative: str | None = None) -> bytes:
         s2 = wb.create_sheet("Out of sequence")
         _header_row(s2, 1, ["Path position", "Predecessor", "Pred name",
                             "Link", "Successor", "Succ name",
-                            "Overlap (d)", "Detail"])
+                            "Overlap (d)", "Detail", "As-built fix",
+                            "Fix basis (analyst to confirm)"])
         for i, f in enumerate(imp.oos_flags[:1000], start=2):
             vals = [f.band, f.pred_code, f.pred_name, f.link_type,
                     f.succ_code, f.succ_name,
                     f.overlap_days if f.overlap_days is not None else "",
-                    f.detail]
+                    f.detail, f.rec_link, f.rec_basis]
             for col, v in enumerate(vals, start=1):
                 cell = s2.cell(row=i, column=col, value=v)
                 cell.border = THIN_BORDER
                 if f.band == "critical" and col == 1:
                     cell.fill = SLIP_FILL
-        _autofit(s2, {1: 14, 2: 18, 3: 34, 4: 6, 5: 18, 6: 34, 7: 10,
-                      8: 60})
+                if col == 9 and f.rec_link_type not in ("", "review"):
+                    cell.fill = GAIN_FILL
+        _autofit(s2, {1: 14, 2: 18, 3: 30, 4: 6, 5: 18, 6: 30, 7: 10,
+                      8: 52, 9: 16, 10: 60})
         s2.freeze_panes = "A2"
         if len(imp.oos_flags) > 1000:
             s2.cell(row=1, column=10,
@@ -1113,6 +1116,28 @@ def build_transfer_xlsx(tr, narrative: str | None = None) -> bytes:
                 s.cell(row=i, column=col, value=v).border = THIN_BORDER
         _autofit(s, {1: 18, 2: 46, 3: 13, 4: 13, 5: 10})
         s.freeze_panes = "A2"
+
+    if getattr(tr, "oos_flags", None):
+        so = wb.create_sheet("Out of sequence")
+        so["A1"] = ("Out-of-sequence records in the progress donor — "
+                    "actuals contradicting its own logic; as-built "
+                    "relation fits are calendar-day offsets for as-built "
+                    "modelling only, analyst to confirm")
+        so["A1"].font = Font(italic=True)
+        _header_row(so, 3, ["Predecessor", "Link", "Successor",
+                            "Succ name", "Overlap (d)", "As-built fix",
+                            "Fix basis"])
+        for i, f in enumerate(tr.oos_flags[:1000], start=4):
+            vals = [f.pred_code, f.link_type, f.succ_code, f.succ_name,
+                    f.overlap_days if f.overlap_days is not None else "",
+                    f.rec_link, f.rec_basis]
+            for col, v in enumerate(vals, start=1):
+                cell = so.cell(row=i, column=col, value=v)
+                cell.border = THIN_BORDER
+                if col == 6 and f.rec_link_type not in ("", "review"):
+                    cell.fill = GAIN_FILL
+        _autofit(so, {1: 18, 2: 6, 3: 18, 4: 34, 5: 10, 6: 16, 7: 60})
+        so.freeze_panes = "A4"
 
     if tr.driving_chain:
         s2 = wb.create_sheet("Driving chain")

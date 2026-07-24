@@ -44,12 +44,15 @@ from .comparison import (
 )
 from .comparison_impact import (
     ComparisonImpact,
+    OOSEvolution,
+    OOSWindow,
     OutOfSequenceFlag,
     ProvenanceResult,
     ProvenanceWindow,
     RankedChange,
     assess_comparison_impact,
     build_provenance,
+    oos_evolution,
     out_of_sequence_flags,
 )
 from .critical_path import (
@@ -305,6 +308,9 @@ __all__ = [
     "assess_comparison_impact",
     "build_provenance",
     "out_of_sequence_flags",
+    "oos_evolution",
+    "OOSEvolution",
+    "OOSWindow",
     # progress transfer
     "ProgressTransferResult",
     "TransferMilestone",

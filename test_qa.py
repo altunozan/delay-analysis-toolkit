@@ -1030,6 +1030,71 @@ _p = _brp(_d, _res, trace=_t)
 check("F10 narrative prompt carries traceback facts",
       "<traceback_facts>" in _p and _t.chain.terminal_code in _p)
 
+# ===================================================================== #
+# Layer G — out-of-sequence: as-built fits, evolution, transfer wiring
+# ===================================================================== #
+print("\n--- Layer G: OOS as-built recommendations ---")
+from programme.comparison_impact import (oos_evolution,
+                                         out_of_sequence_flags)
+
+_gb = parse_xer("sample/Sample Baseline.xer")
+_gu = parse_xer("sample/Sample Update.xer")
+_gflags = out_of_sequence_flags(_gu)
+_gby = {t.task_code: t for t in _gu.tasks}
+
+check("G1 every OOS flag carries a recommendation",
+      _gflags and all(f.rec_link for f in _gflags))
+check("G2 concrete fits are non-negative; reversed order is always "
+      "'review'",
+      all((f.rec_lag_days is None or f.rec_lag_days >= 0)
+          and (f.rec_link_type != "review" or f.rec_lag_days is None)
+          for f in _gflags))
+
+_conc = [f for f in _gflags if f.rec_link_type == "SS"]
+check("G3 sample has concrete SS fits", len(_conc) > 0, str(len(_conc)))
+_f0 = _conc[0]
+_lag = round((_gby[_f0.succ_code].act_start
+              - _gby[_f0.pred_code].act_start).total_seconds() / 86400, 1)
+check("G3b SS-fit lag equals the recorded start offset (manual recount)",
+      abs(_f0.rec_lag_days - _lag) < 0.05,
+      f"rec={_f0.rec_lag_days} manual={_lag}")
+check("G3c FS/SS flags with ordered starts always get the SS fit",
+      all(f.rec_link_type == "SS"
+          for f in _gflags if f.link_type in ("FS", "SS")
+          and _gby[f.pred_code].act_start and _gby[f.succ_code].act_start
+          and _gby[f.succ_code].act_start >= _gby[f.pred_code].act_start))
+
+_gev = oos_evolution([("Base", _gb), ("Upd", _gu)])
+check("G4 evolution per-revision counts match direct screening",
+      _gev.per_revision[0][1] == len(out_of_sequence_flags(_gb))
+      and _gev.per_revision[1][1] == len(_gflags))
+_gw = _gev.windows[0]
+check("G4b window identity: after == before - resolved + new",
+      _gw.total_after == _gev.per_revision[0][1] - _gw.resolved_count
+      + len(_gw.new_flags),
+      f"{_gw.total_after} vs {_gev.per_revision[0][1]}"
+      f"-{_gw.resolved_count}+{len(_gw.new_flags)}")
+check("G4c resolved contradictions raise the retro-edit warning",
+      _gw.resolved_count == 0 or any("disappeared" in w
+                                     for w in _gev.warnings))
+
+from programme.progress_transfer import run_progress_transfer as _rpt
+_gtr = _rpt(_gb, _gu, "Base", "Upd")
+check("G5 transfer discloses the progress donor's OOS flags",
+      len(_gtr.oos_flags) == len(_gflags)
+      and any("out-of-sequence" in w for w in _gtr.warnings)
+      and any("as-built" in c.lower() for c in _gtr.caveats))
+
+from programme import build_impact_xlsx as _bix, build_transfer_xlsx as _btx
+from programme import assess_comparison_impact as _aci
+_gimp = _aci(_gb, _gu, "Base", "Upd")
+_wb_g = load_workbook(io.BytesIO(_bix(_gimp)))
+check("G6 impact workbook OOS sheet carries the as-built fix column",
+      "As-built fix" in [c.value for c in _wb_g["Out of sequence"][1]])
+_wb_g2 = load_workbook(io.BytesIO(_btx(_gtr)))
+check("G6b transfer workbook gains the out-of-sequence sheet",
+      "Out of sequence" in _wb_g2.sheetnames)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

@@ -139,6 +139,7 @@ from programme import (
     build_custody_xlsx,
     build_impact_xlsx,
     build_transfer_xlsx,
+    oos_evolution,
     build_inventory,
     combine_mappings,
     end_activity_candidates,
@@ -239,6 +240,11 @@ def cached_compare(key_old: str, key_new: str, label_old: str,
 @st.cache_data(show_spinner=False, max_entries=16)
 def cached_windows(key: tuple, _ordered):
     return analyse_windows(_ordered)
+
+
+@st.cache_data(show_spinner=False, max_entries=16)
+def cached_oos_evolution(key: tuple, _ordered):
+    return oos_evolution(_ordered)
 
 
 @st.cache_data(show_spinner=False, max_entries=24)
@@ -2886,6 +2892,38 @@ def windows_tab() -> None:
                 } for s in w.shifts]), width="stretch",
                     hide_index=True)
 
+    # --- out-of-sequence progress, attributed to its window --------------
+    ev = cached_oos_evolution(tuple(_fkey(n) for n, _ in ordered), ordered)
+    if any(n for _, n in ev.per_revision):
+        with st.expander(
+            "Out-of-sequence progress by window — "
+            + " → ".join(f"{l}: {n}" for l, n in ev.per_revision)
+        ):
+            for w in ev.warnings:
+                st.warning(w)
+            st.dataframe(pd.DataFrame([{
+                "Window": f"{w.from_label} → {w.to_label}",
+                "New OOS": len(w.new_flags),
+                "Resolved": w.resolved_count,
+                "Total after": w.total_after,
+            } for w in ev.windows]), width="stretch", hide_index=True)
+            new_rows = [{
+                "Window": f"{w.from_label} → {w.to_label}",
+                "Predecessor": f.pred_code, "Link": f.link_type,
+                "Successor": f.succ_code, "Succ name": f.succ_name,
+                "Overlap (d)": f.overlap_days,
+                "As-built fix": f.rec_link, "Basis": f.rec_basis,
+            } for w in ev.windows for f in w.new_flags]
+            if new_rows:
+                st.markdown("**New out-of-sequence records, with the "
+                            "as-built relation the actuals evidence:**")
+                st.dataframe(pd.DataFrame(new_rows[:300]),
+                             width="stretch", hide_index=True)
+                if len(new_rows) > 300:
+                    st.caption(f"Showing 300 of {len(new_rows)}.")
+            for c in ev.caveats:
+                st.caption(f"• {c}")
+
     with st.expander("Standing caveats (always apply)"):
         for c in res.caveats:
             st.write("•", c)
@@ -3092,7 +3130,9 @@ def comparison_tab() -> None:
                     "Link": f.link_type, "Successor": f.succ_code,
                     "Succ name": f.succ_name,
                     "Overlap (d)": f.overlap_days,
+                    "As-built fix": f.rec_link,
                     "Detail": f.detail,
+                    "Basis": f.rec_basis,
                 } for f in imp.oos_flags[:300]])
                 st.dataframe(oos_df, width="stretch", hide_index=True)
                 st.caption(
@@ -3285,6 +3325,25 @@ def progress_transfer_tab() -> None:
                            if s["finish"] else "—"),
             } for s in tr.driving_chain])
             st.dataframe(ch_df, width="stretch", hide_index=True)
+
+    if tr.oos_flags:
+        with st.expander(
+            f"Out-of-sequence in the progress donor — "
+            f"{len(tr.oos_flags)} record(s) + as-built relation fits"
+        ):
+            st.dataframe(pd.DataFrame([{
+                "Predecessor": f.pred_code, "Link": f.link_type,
+                "Successor": f.succ_code, "Succ name": f.succ_name,
+                "Overlap (d)": f.overlap_days,
+                "As-built fix": f.rec_link, "Basis": f.rec_basis,
+            } for f in tr.oos_flags[:300]]), width="stretch",
+                hide_index=True)
+            st.caption(
+                "Ranked by overlap. Fits are calendar-day offsets from "
+                "recorded actuals, for as-built modelling only — the "
+                "contemporaneous files are never altered"
+                + (f" — showing 300 of {len(tr.oos_flags)}."
+                   if len(tr.oos_flags) > 300 else "."))
 
     with st.expander("Statusing choices & standing caveats (always apply)"):
         for c in tr.caveats:

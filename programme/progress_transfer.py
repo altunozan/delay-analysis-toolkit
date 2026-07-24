@@ -50,6 +50,7 @@ from datetime import datetime
 from dcma.config import DCMAConfig
 from dcma.xer_parser import XerData
 
+from .comparison_impact import OOS_CAVEATS, out_of_sequence_flags
 from .tia import (
     _START_FLOOR_CSTR,
     _REL_TO_SHORT,
@@ -110,6 +111,11 @@ class ProgressTransferResult:
     applied_finishes: int = 0         # completed activities transferred
     not_in_progress_file: int = 0     # network acts with no progress match
     unmatched_progress: list[str] = field(default_factory=list)
+    oos_flags: list = field(default_factory=list)
+    #   ^ out-of-sequence records in the PROGRESS DONOR: actuals that
+    #     contradict its own logic. Retained-logic statusing re-imposes
+    #     the planned logic these records contradict, so they qualify
+    #     the transferred forecast and are disclosed explicitly.
     #   ^ actualised activities in the progress donor absent from the
     #     network donor — their progress cannot be transferred
 
@@ -259,6 +265,22 @@ def run_progress_transfer(
         t.task_code for t in progress.tasks
         if not t.is_loe_or_wbs and t.task_code not in net_codes
         and (t.act_start or t.act_finish))
+    # --- out-of-sequence disclosure (progress donor) ---------------------
+    result.oos_flags = out_of_sequence_flags(progress)
+    if result.oos_flags:
+        n_conc = sum(1 for f in result.oos_flags
+                     if f.rec_link_type not in ("", "review"))
+        result.warnings.append(
+            f"{len(result.oos_flags)} out-of-sequence progress record(s) "
+            f"in '{progress_label}' — retained-logic statusing re-imposes "
+            "planned logic that these recorded actuals contradict, so "
+            "where out-of-sequence work is heavy the transferred forecast "
+            "overstates the planned network's constraint. "
+            f"{n_conc} of the flags carry a concrete as-built relation "
+            "fit; see the out-of-sequence table.")
+        result.caveats.extend(
+            c for c in OOS_CAVEATS if c not in result.caveats)
+
     if result.unmatched_progress:
         sample = ", ".join(result.unmatched_progress[:8])
         result.warnings.append(

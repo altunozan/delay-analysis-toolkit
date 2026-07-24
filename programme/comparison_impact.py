@@ -53,6 +53,14 @@ OOS_CAVEATS = [
     "the relationship type only; relationship lags and calendars are "
     "not applied, so small overlaps within a lag allowance may be "
     "legitimate. Flags are prompts for enquiry, not findings.",
+    "Recommended as-built relations are mechanical fits to the recorded "
+    "actual dates, expressed in CALENDAR days. They are offered for "
+    "constructing an as-built / logic-repair model only — never as "
+    "corrections to the contemporaneous files, which must not be "
+    "altered — and every recommendation requires analyst confirmation. "
+    "Where the as-built order is REVERSED relative to the planned link, "
+    "no relation is auto-fitted; the reversed candidate is stated for "
+    "the analyst to accept or reject.",
 ]
 
 PROVENANCE_CAVEATS = [
@@ -111,6 +119,12 @@ class OutOfSequenceFlag:
     #                               flags are produced inside an impact
     #                               assessment; standalone calls keep the
     #                               default)
+    rec_link_type: str = ""       # "SS" / "FF" for a concrete as-built
+    #                               fit; "review" where the analyst must
+    #                               decide (reversed order / thin actuals)
+    rec_lag_days: float | None = None   # calendar-day lag of a concrete fit
+    rec_link: str = ""            # display form, e.g. "SS +12d" / "review"
+    rec_basis: str = ""           # the dates the recommendation rests on
 
 
 @dataclass
@@ -206,6 +220,67 @@ def _split_lag_ref(ref: str) -> tuple[str, str] | None:
 # Out-of-sequence screening (single revision)
 # --------------------------------------------------------------------------- #
 
+def _recommend_asbuilt(lt: str, pred, succ,
+                       interim: bool) -> tuple[str, float | None, str, str]:
+    """Fit the relation the recorded actuals evidence for a violated link.
+
+    Returns (rec_link_type, rec_lag_days, rec_link, rec_basis).
+    Concrete fits keep the planned direction and a non-negative
+    calendar-day lag; reversed as-built order is never auto-fitted —
+    it comes back as 'review' with the reversed candidate stated.
+    """
+    AS_p, AF_p = pred.act_start, pred.act_finish
+    AS_s, AF_s = succ.act_start, succ.act_finish
+
+    def days(a, b) -> float:
+        return round((a - b).total_seconds() / 86400.0, 1)
+
+    suffix = " (interim — predecessor still open)" if interim else ""
+
+    if lt in ("FS", "SS"):
+        if AS_p and AS_s and AS_s >= AS_p:
+            lag = days(AS_s, AS_p)
+            return ("SS", lag, f"SS {lag:+.0f}d" + suffix,
+                    f"{succ.task_code} started {AS_s:%Y-%m-%d}, "
+                    f"{lag:.0f}d after {pred.task_code} started "
+                    f"{AS_p:%Y-%m-%d}; an SS link fits the record")
+        if AS_p and AS_s:
+            lead = days(AS_p, AS_s)
+            return ("review", None, "review (order reversed)",
+                    f"{succ.task_code} started {lead:.0f}d BEFORE "
+                    f"{pred.task_code} started — the planned dependency "
+                    f"is not evidenced as-built; candidate: SS "
+                    f"{succ.task_code} -> {pred.task_code} {lead:+.0f}d, "
+                    "analyst to confirm the as-built driver")
+        return ("review", None, "review (incomplete actuals)",
+                f"{pred.task_code} has no recorded start; the dependency "
+                "is not evidenced as-built yet")
+
+    if lt == "FF":
+        if AF_p and AF_s:                 # violated => AF_s < AF_p
+            lead = days(AF_p, AF_s)
+            return ("review", None, "review (order reversed)",
+                    f"{succ.task_code} finished {lead:.0f}d BEFORE "
+                    f"{pred.task_code} finished — candidate: FF "
+                    f"{succ.task_code} -> {pred.task_code} {lead:+.0f}d, "
+                    "analyst to confirm the as-built driver")
+        if AS_p and AF_s and AF_s >= AS_p:
+            lag = days(AF_s, AS_p)
+            return ("SF", lag, f"SF {lag:+.0f}d" + suffix,
+                    f"{succ.task_code} finished {AF_s:%Y-%m-%d}, "
+                    f"{lag:.0f}d after {pred.task_code} started "
+                    f"{AS_p:%Y-%m-%d}; only a start-to-finish fit is "
+                    "evidenced while the predecessor is open")
+        return ("review", None, "review (incomplete actuals)",
+                f"{pred.task_code} has no recorded finish; the "
+                "dependency is not evidenced as-built yet")
+
+    # SF violated: successor finished before the predecessor started.
+    return ("review", None, "review (order reversed)",
+            f"{succ.task_code} finished before {pred.task_code} "
+            "started — the planned SF link is not evidenced as-built")
+
+
 def out_of_sequence_flags(
     data: XerData,
     *,
@@ -217,8 +292,8 @@ def out_of_sequence_flags(
     SS: successor started before the predecessor started.
     FF: successor finished before the predecessor finished.
     SF: successor finished before the predecessor started.
-    Lags/calendars are not applied (see OOS_CAVEATS).
-    """
+    Lags/calendars are not applied (see OOS_CAVEATS). Each flag carries
+    the as-built relation the recorded dates evidence (rec_*)."""
     usable = {t.task_id: t for t in data.tasks if not t.is_loe_or_wbs}
     labels = {"PR_FS": "FS", "PR_SS": "SS", "PR_FF": "FF", "PR_SF": "SF"}
     flags: list[OutOfSequenceFlag] = []
@@ -239,6 +314,8 @@ def out_of_sequence_flags(
             # still unrecorded — flag only if the predecessor is open.
             if pred.is_complete:
                 continue
+            rt, rl, rlink, rbasis = _recommend_asbuilt(
+                lt, pred, succ, interim=True)
             flags.append(OutOfSequenceFlag(
                 pred_code=pred.task_code, pred_name=pred.name,
                 link_type=lt, succ_code=succ.task_code,
@@ -246,10 +323,14 @@ def out_of_sequence_flags(
                 detail=(f"{succ.task_code} {verb} "
                         f"{s_move:%Y-%m-%d} but predecessor has not "
                         f"{gate_verb} (still open)"),
-                overlap_days=None))
+                overlap_days=None,
+                rec_link_type=rt, rec_lag_days=rl,
+                rec_link=rlink, rec_basis=rbasis))
             continue
         overlap = (p_gate - s_move).total_seconds() / 86400.0
         if overlap > tolerance_days:
+            rt, rl, rlink, rbasis = _recommend_asbuilt(
+                lt, pred, succ, interim=False)
             flags.append(OutOfSequenceFlag(
                 pred_code=pred.task_code, pred_name=pred.name,
                 link_type=lt, succ_code=succ.task_code,
@@ -257,10 +338,82 @@ def out_of_sequence_flags(
                 detail=(f"{succ.task_code} {verb} {s_move:%Y-%m-%d}, "
                         f"{overlap:.0f}d before predecessor "
                         f"{gate_verb} {p_gate:%Y-%m-%d}"),
-                overlap_days=round(overlap, 1)))
+                overlap_days=round(overlap, 1),
+                rec_link_type=rt, rec_lag_days=rl,
+                rec_link=rlink, rec_basis=rbasis))
     flags.sort(key=lambda f: -(f.overlap_days
                                if f.overlap_days is not None else -1.0))
     return flags
+
+
+# --------------------------------------------------------------------------- #
+# Out-of-sequence evolution across the revision set
+# --------------------------------------------------------------------------- #
+
+OOS_EVOLUTION_CAVEATS = [
+    "A flag 'resolved' in a window means the contradiction is no longer "
+    "present in the later file — because the logic was changed, the "
+    "actual dates were changed, or the activity was removed. Resolution "
+    "is therefore itself a change worth cross-checking in the revision "
+    "comparison, not automatically good news.",
+]
+
+
+@dataclass
+class OOSWindow:
+    """One update window's out-of-sequence movement."""
+
+    from_label: str
+    to_label: str
+    new_flags: list[OutOfSequenceFlag] = field(default_factory=list)
+    resolved_count: int = 0
+    total_after: int = 0
+
+
+@dataclass
+class OOSEvolution:
+    per_revision: list[tuple[str, int]] = field(default_factory=list)
+    windows: list[OOSWindow] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+def oos_evolution(
+    ordered: list[tuple[str, XerData]],
+    *,
+    tolerance_days: float = 0.1,
+) -> OOSEvolution:
+    """Attribute each out-of-sequence record to the update window in
+    which it first appears. ``ordered`` — (label, data) pairs, earliest
+    first (same shape as the windows engine input)."""
+    result = OOSEvolution()
+    result.caveats.extend(OOS_CAVEATS + OOS_EVOLUTION_CAVEATS)
+
+    def key(f: OutOfSequenceFlag):
+        return (f.pred_code, f.succ_code, f.link_type)
+
+    prev_keys: set | None = None
+    prev_label = ""
+    for label, data in ordered:
+        flags = out_of_sequence_flags(data, tolerance_days=tolerance_days)
+        keys = {key(f) for f in flags}
+        result.per_revision.append((label, len(flags)))
+        if prev_keys is not None:
+            result.windows.append(OOSWindow(
+                from_label=prev_label, to_label=label,
+                new_flags=[f for f in flags if key(f) not in prev_keys],
+                resolved_count=len(prev_keys - keys),
+                total_after=len(flags)))
+        prev_keys, prev_label = keys, label
+
+    resolved_total = sum(w.resolved_count for w in result.windows)
+    if resolved_total:
+        result.warnings.append(
+            f"{resolved_total} out-of-sequence contradiction(s) "
+            "disappeared between revisions — logic or recorded actuals "
+            "were changed after the fact; cross-check those links in the "
+            "revision comparison's change log.")
+    return result
 
 
 # --------------------------------------------------------------------------- #
