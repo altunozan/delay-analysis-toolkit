@@ -50,6 +50,21 @@ from .comparison_impact import (
     assess_comparison_impact,
     build_provenance,
 )
+from .basis import (
+    SCHED_OPTION_LABELS,
+    progress_treatment,
+    sched_options_row,
+    sched_options_summary,
+)
+from .concurrency import (
+    CONCURRENCY_CAVEATS,
+    ConcurrencyResult,
+    ConcurrencyWindow,
+    EventSpan,
+    classify_responsibility,
+    screen_concurrency,
+)
+from .impacted_asplanned import IAP_CAVEATS, run_impacted_asplanned
 from .oos import (
     OOS_CAVEATS,
     OOSEvolution,
@@ -145,6 +160,8 @@ from .report_xlsx import (
     build_impact_xlsx,
     build_transfer_xlsx,
     build_oos_xlsx,
+    build_concurrency_xlsx,
+    build_iap_xlsx,
     build_critical_path_xlsx,
     build_explain_xlsx,
     build_float_erosion_xlsx,
@@ -456,6 +473,20 @@ __all__ = [
     "build_impact_xlsx",
     "build_transfer_xlsx",
     "build_oos_xlsx",
+    "build_concurrency_xlsx",
+    "build_iap_xlsx",
+    "SCHED_OPTION_LABELS",
+    "progress_treatment",
+    "sched_options_row",
+    "sched_options_summary",
+    "CONCURRENCY_CAVEATS",
+    "ConcurrencyResult",
+    "ConcurrencyWindow",
+    "EventSpan",
+    "classify_responsibility",
+    "screen_concurrency",
+    "IAP_CAVEATS",
+    "run_impacted_asplanned",
     "build_explain_xlsx",
     "build_float_erosion_xlsx",
     "build_progress_xlsx",

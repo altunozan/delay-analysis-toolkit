@@ -1003,7 +1003,7 @@ for _label, _path in (("baseline", "sample/Sample Baseline.xer"),
           == 1)
 
     _tripped = {r.number: set(r.affected_ids) for r in _res
-                if r.number < 12}
+                if r.number not in (12, 13, 14)}
     check(f"F6[{_label}] offenders: >=2 checks each, consistent with "
           "affected_ids",
           all(len(o.checks) >= 2
@@ -1180,6 +1180,154 @@ _wb_h = load_workbook(io.BytesIO(_box("Upd", _hflags, _hplan, _hrep, _gev)))
 check("H9 OOS workbook has Summary/Flags/Repair register/Evolution/QA",
       {"Summary", "Flags", "Repair register", "Evolution",
        "QA & Caveats"} <= set(_wb_h.sheetnames), str(_wb_h.sheetnames))
+
+# ===================================================================== #
+# Layer I — supplementary DCMA checks, red-flag events, basis,
+#           concurrency screening, impacted as-planned
+# ===================================================================== #
+print("\n--- Layer I: forensic upgrades ---")
+from datetime import timedelta as _td
+import copy as _copy
+
+# I1. DCMA supplementary checks
+_res17 = _rac(_gu, DCMAConfig())
+check("I1 run_all_checks returns 17 (14 + 3 supplementary)",
+      len(_res17) == 17 and [r.number for r in _res17[-3:]] == [15, 16, 17])
+check("I1b supplementary checks labelled '(supp.)'",
+      all("supp." in r.name for r in _res17[14:]))
+check("I1c include_supplementary=False keeps the pure DCMA 14",
+      len(_rac(_gu, DCMAConfig(), include_supplementary=False)) == 14)
+_r16 = _res17[15]
+check("I2 check 16 flags exist on sample and are all FS links",
+      _r16.affected_count > 0
+      and all("FS" in d["Note"] or "duplicated" in d["Note"]
+              for d in _r16.detail_rows))
+_r17 = _res17[16]
+_gu_by_id = {t.task_id: t for t in _gu.tasks}
+_p_of, _s_of = {}, {}
+for _rel in _gu.relationships:
+    _p_of.setdefault(_rel.task_id, []).append(_rel.pred_type)
+    _s_of.setdefault(_rel.pred_task_id, []).append(_rel.pred_type)
+_gu_code2id = {t.task_code: t.task_id for t in _gu.tasks}
+check("I3 check 17 never re-flags open ends (all have preds AND succs)",
+      all(_p_of.get(_gu_code2id[c]) and _s_of.get(_gu_code2id[c])
+          for c in _r17.affected_ids))
+
+# I4. SCHEDOPTIONS diff on the real samples (retained-logic flip!)
+from programme import compare_revisions as _cr
+_cmp_i = _cr(_gb, _gu, "B", "U")
+check("I4 SCHEDOPTIONS changes caught on real samples",
+      len(_cmp_i.sched_options_changes) == 4
+      and any(c.name == "Retained Logic" and c.old_value == "Y"
+              and c.new_value == "N"
+              for c in _cmp_i.sched_options_changes))
+check("I4b scheduling-options red flag raised",
+      any("RED FLAG" in w and "scheduling options" in w
+          for w in _cmp_i.warnings))
+check("I4c category counts carry the new categories",
+      "Scheduling options changed" in _cmp_i.category_counts
+      and "Calendar definitions changed" in _cmp_i.category_counts)
+
+# I5. calendar-definition tamper (shared id) caught + red-flagged
+_gu2 = _copy.deepcopy(_gu)
+for _row in _gu2.raw_tables["CALENDAR"]:
+    if _row.get("clndr_id", "").strip() == "640":
+        _row["day_hr_cnt"] = "10"
+_cmp_i2 = _cr(_gb, _gu2, "B", "U2")
+check("I5 calendar-definition change detected and red-flagged",
+      len(_cmp_i2.calendar_def_changes) == 1
+      and any("calendar manipulation" in w for w in _cmp_i2.warnings))
+
+# I6. impact ranking red-flags the programme-level events
+_imp_i = _aci(_gb, _gu, "B", "U", comparison=_cmp_i)
+_so_ranked = [c for c in _imp_i.ranked
+              if c.category == "Scheduling options changed"]
+check("I6 sched-option changes ranked, red-flagged, scored 40",
+      len(_so_ranked) == 4 and all(c.red_flag and c.score == 40.0
+                                   for c in _so_ranked))
+
+# I7. concurrency screening (synthetic, engine-level)
+from programme.tia import DelayEvent as _DE, FragnetActivity as _FA, \
+    FragnetLink as _FL
+from programme.windows import analyse_windows as _aw
+from programme.concurrency import screen_concurrency as _sc
+_wres_i = _aw([("Base", _gb), ("Upd", _gu)])
+_w0 = _wres_i.windows[0]
+_mid = _w0.start + (_w0.end - _w0.start) / 2
+_ev_e = _DE("EMP-01", "Late access", date_raised=_mid,
+            responsibility_asserted="Employer")
+_fr_e = [_FA("EMP-01-F1", "Await access", 400.0,
+             predecessors=[_FL("A1870")], successors=[_FL("KD15")])]
+_ev_c = _DE("CON-01", "Rework", date_raised=_mid + _td(days=5),
+            responsibility_asserted="Contractor")
+_fr_c = [_FA("CON-01-F1", "Rework", 12.0,
+             predecessors=[_FL("A1870")], successors=[_FL("KD15")])]
+_ev_u = _DE("UNK-01", "Weather", date_raised=_mid,
+            responsibility_asserted="force majeure")
+_conc = _sc(_wres_i, [(_ev_e, _fr_e), (_ev_c, _fr_c), (_ev_u, [])])
+_cw0 = _conc.windows[0]
+check("I7 overlap arithmetic: both == contractor span (nested case)",
+      abs(_cw0.both_days - 12.0) < 0.1
+      and _cw0.employer_days > _cw0.contractor_days)
+check("I7b concurrent candidate + pacing shape flagged",
+      _cw0.concurrent_candidate and _cw0.pacing_flag)
+check("I7c unclassified party disclosed, not silently dropped",
+      _cw0.unclassified_days > 0
+      and any("neither party" in w for w in _conc.warnings))
+check("I7d no-fragnet event screened as single day + warned",
+      any(e.single_day for e in _conc.events)
+      and any("no fragnet" in w for w in _conc.warnings))
+
+# I8. impacted as-planned
+from programme.impacted_asplanned import run_impacted_asplanned as _iap
+_bad = _DE("BAD-01", "Missing tie-in", date_raised=_mid,
+           responsibility_asserted="Employer")
+_fr_bad = [_FA("BAD-01-F1", "x", 5.0, predecessors=[_FL("NOPE-999")])]
+_iapr = _iap(_gb, "Base", [(_ev_e, _fr_e), (_ev_c, _fr_c),
+                           (_ev_u, []), (_bad, _fr_bad)])
+check("I8 IAP skips no-fragnet and missing-tie-in events, uses the rest",
+      _iapr["events_used"] == 2 and len(_iapr["skipped_events"]) == 2
+      and any("NOPE-999" in s for s in _iapr["skipped_events"]))
+check("I8b IAP identity: total == final - pre == sum of increments",
+      _iapr["total_delta_days"] is not None
+      and abs(_iapr["total_delta_days"]
+              - (_iapr["completion_final"]
+                 - _iapr["completion_pre"]).total_seconds() / 86400) < 0.6
+      and abs(_iapr["total_delta_days"]
+              - sum(r["incremental_delta_days"]
+                    for r in _iapr["rows"])) < 0.2)
+check("I8c IAP carries the weak-method caveats",
+      any("THEORETICAL" in c for c in _iapr["caveats"]))
+
+# I9. scheduling-basis helpers
+from programme.basis import (progress_treatment as _pt,
+                             sched_options_row as _sor,
+                             sched_options_summary as _sos)
+check("I9 progress treatment: baseline Retained Logic, update Actual "
+      "Dates",
+      _pt(_sor(_gb)) == "Retained Logic"
+      and _pt(_sor(_gu)) == "Actual Dates")
+check("I9b basis summary discloses must-finish float trap on the update",
+      any("must-finish" in ln for ln in _sos(_gu)))
+
+# I10. new workbooks open
+from programme import (build_concurrency_xlsx as _bcx,
+                       build_iap_xlsx as _bix2,
+                       build_explain_xlsx as _bex)
+check("I10 concurrency workbook opens with matrix + events + caveats",
+      {"Screening Matrix", "Events Screened", "Warnings & Caveats"}
+      <= set(load_workbook(io.BytesIO(_bcx(_conc))).sheetnames))
+check("I10b IAP workbook opens with summary + increments",
+      {"Summary", "Per-Event Increments"}
+      <= set(load_workbook(io.BytesIO(
+          _bix2("Base", _iapr))).sheetnames))
+from programme.explain import explain_delay as _ed
+_exp = _ed([("Base", _gb), ("Upd", _gu)], "KD15")
+_wb_e = load_workbook(io.BytesIO(_bex(_exp, confirmed=[{
+    "window": "W1", "task_code": "X", "direction": "joined",
+    "name": "x", "note": "Letter ref 123"}])))
+check("I10c explain workbook gains the Confirmed Drivers sheet",
+      "Confirmed Drivers" in _wb_e.sheetnames)
 
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:

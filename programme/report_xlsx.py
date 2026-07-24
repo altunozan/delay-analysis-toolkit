@@ -330,6 +330,10 @@ def build_comparison_xlsx(cmp, narrative: str | None = None) -> bytes:
     _changes_sheet("Duration Changes", cmp.duration_changes)
     _changes_sheet("Constraint Changes", cmp.constraint_changes)
     _changes_sheet("Calendar Changes", cmp.calendar_changes)
+    _changes_sheet("Calendar Definitions", cmp.calendar_def_changes,
+                   red_all=True)
+    _changes_sheet("Scheduling Options", cmp.sched_options_changes,
+                   red_all=True)
     _changes_sheet("Renamed", cmp.renamed)
     _changes_sheet("Lag Changes", cmp.lag_changes)
     _changes_sheet("Actuals Changed", cmp.actual_date_changes, red_all=True)
@@ -932,7 +936,8 @@ def build_tia_xlsx(res, narrative: str | None = None,
 # --------------------------------------------------------------------------- #
 # Explain This Delay
 # --------------------------------------------------------------------------- #
-def build_explain_xlsx(res, narrative: str | None = None) -> bytes:
+def build_explain_xlsx(res, narrative: str | None = None,
+                       confirmed: list[dict] | None = None) -> bytes:
     """res: programme.explain.ExplainResult"""
     wb = Workbook()
     ws = wb.active
@@ -976,6 +981,27 @@ def build_explain_xlsx(res, narrative: str | None = None) -> bytes:
             r += 1
     _autofit(s2, {1: 34, 2: 12, 3: 13, 4: 12, 5: 10, 6: 18, 7: 44})
     s2.freeze_panes = "A2"
+
+    if confirmed:
+        s3 = wb.create_sheet("Confirmed Drivers")
+        s3["A1"] = ("Drivers PROMOTED from candidate to confirmed by the "
+                    "analyst, with the evidence relied on. Everything "
+                    "not listed here remains an inferred candidate.")
+        s3["A1"].font = Font(italic=True)
+        _header_row(s3, 3, ["Window", "Direction", "Activity ID",
+                            "Activity", "Evidence relied on"])
+        for i, row in enumerate(confirmed, start=4):
+            vals = [row.get("window", ""), row.get("direction", ""),
+                    row.get("task_code", ""), row.get("name", ""),
+                    row.get("note", "") or "(no evidence note recorded)"]
+            for col, v in enumerate(vals, start=1):
+                c = s3.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                c.alignment = WRAP
+                if col == 5 and not row.get("note"):
+                    c.fill = SLIP_FILL
+        _autofit(s3, {1: 34, 2: 10, 3: 18, 4: 40, 5: 56})
+        s3.freeze_panes = "A4"
 
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
@@ -1242,6 +1268,113 @@ def build_oos_xlsx(label, flags, plan, report=None,
     notes = (report.qa_notes if report is not None else [])
     _notes_sheet(wb, notes + REPAIR_CAVEATS + OOS_CAVEATS,
                  "QA & Caveats")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Module 19 — concurrency screening
+# --------------------------------------------------------------------------- #
+
+def build_concurrency_xlsx(res, narrative: str | None = None) -> bytes:
+    """res: programme.concurrency.ConcurrencyResult"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Screening Matrix"
+    _title(ws, "Concurrent-Delay Screening (time-overlap, per window)", 9)
+    _header_row(ws, 4, ["Window", "Period", "Movement (d)",
+                        "Employer days", "Contractor days", "Both (d)",
+                        "Unclassified (d)", "Concurrent candidate",
+                        "Pacing flag"])
+    for i, w in enumerate(res.windows, start=5):
+        period = (f"{w.start:%Y-%m-%d} -> {w.end:%Y-%m-%d}"
+                  if w.start and w.end else "-")
+        vals = [f"W{w.index}: {w.from_label} -> {w.to_label}", period,
+                w.movement_days, w.employer_days, w.contractor_days,
+                w.both_days, w.unclassified_days,
+                "YES" if w.concurrent_candidate else "",
+                "enquire" if w.pacing_flag else ""]
+        for col, v in enumerate(vals, start=1):
+            c = ws.cell(row=i, column=col, value=v)
+            c.border = THIN_BORDER
+            if col == 8 and w.concurrent_candidate:
+                c.fill = SLIP_FILL
+    _autofit(ws, {1: 34, 2: 24, 3: 12, 4: 13, 5: 14, 6: 9, 7: 14,
+                  8: 18, 9: 11})
+    ws.freeze_panes = "A5"
+
+    s = wb.create_sheet("Events Screened")
+    _header_row(s, 1, ["Event", "Title", "Asserted responsibility",
+                       "Screened party", "From", "To", "Duration (d)",
+                       "Note"])
+    for i, e in enumerate(res.events, start=2):
+        vals = [e.event_id, e.title, e.asserted, e.party,
+                f"{e.start:%Y-%m-%d}", f"{e.end:%Y-%m-%d}",
+                e.duration_days,
+                "no fragnet - screened as a single day"
+                if e.single_day else ""]
+        for col, v in enumerate(vals, start=1):
+            s.cell(row=i, column=col, value=v).border = THIN_BORDER
+    _autofit(s, {1: 14, 2: 40, 3: 22, 4: 14, 5: 12, 6: 12, 7: 12, 8: 34})
+    s.freeze_panes = "A2"
+
+    _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Module 20 — impacted as-planned
+# --------------------------------------------------------------------------- #
+
+def build_iap_xlsx(label: str, iap: dict,
+                   narrative: str | None = None) -> bytes:
+    """iap: dict from programme.impacted_asplanned.run_impacted_asplanned"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Summary"
+    _title(ws, "Impacted As-Planned (baseline + event fragnets)", 4)
+    rows = [
+        ("Baseline programme", label),
+        ("Events inserted", iap.get("events_used", 0)),
+        ("Events skipped (no tie-in / no fragnet)",
+         len(iap.get("skipped_events", []))),
+        ("Baseline modelled completion",
+         _fmt(iap.get("completion_pre"))),
+        ("Impacted modelled completion",
+         _fmt(iap.get("completion_final"))),
+        ("TOTAL MODELLED IMPACT (days)", iap.get("total_delta_days")),
+    ]
+    _header_row(ws, 4, ["Measure", "Value"])
+    for i, (k, v) in enumerate(rows, start=5):
+        a = ws.cell(row=i, column=1, value=k)
+        b = ws.cell(row=i, column=2, value=v if v is not None else "n/a")
+        a.border = b.border = THIN_BORDER
+        if k.startswith("TOTAL"):
+            a.font = Font(bold=True)
+    _autofit(ws, {1: 42, 2: 24})
+
+    if iap.get("rows"):
+        s = wb.create_sheet("Per-Event Increments")
+        _header_row(s, 1, ["Event", "Title", "Date", "Incremental (d)",
+                           "Completion after"])
+        for i, r in enumerate(iap["rows"], start=2):
+            vals = [r.get("event_id"), r.get("title"),
+                    _fmt(r.get("date_raised")),
+                    r.get("incremental_delta_days"),
+                    _fmt(r.get("completion_after"))]
+            for col, v in enumerate(vals, start=1):
+                s.cell(row=i, column=col, value=v).border = THIN_BORDER
+        _autofit(s, {1: 14, 2: 44, 3: 12, 4: 14, 5: 15})
+        s.freeze_panes = "A2"
+
+    notes = (iap.get("warnings", []) + iap.get("concurrency", [])
+             + iap.get("caveats", []) + [iap.get("caveat", "")])
+    _notes_sheet(wb, [n for n in notes if n], "Warnings & Caveats")
+    _narrative_sheet(wb, narrative)
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

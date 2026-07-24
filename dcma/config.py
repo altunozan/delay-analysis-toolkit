@@ -93,6 +93,17 @@ class DCMAConfig:
     # Target: >= 0.95.
     bei_min: float = 0.95
 
+    # --- Supplementary baseline-quality checks (NOT part of DCMA 14) ---
+    # Check 15: LOE/hammock activities must never DRIVE real work.
+    loe_driving_max_count: int = 0
+    # Check 16: <= 2% of relationships topologically redundant (a direct
+    # FS link duplicated by a longer path between the same activities).
+    redundant_max_pct: float = 2.0
+    # Check 17: <= 5% of incomplete activities with a dangling end (start
+    # not logic-driven, or finish controlling nothing) despite having
+    # both predecessors and successors.
+    dangling_max_pct: float = 5.0
+
     # --- Conversion fallback ---
     # Hours-per-day used when an activity's calendar is missing day_hr_cnt.
     default_hours_per_day: float = 8.0

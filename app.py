@@ -146,6 +146,11 @@ from programme import (
     apply_asbuilt_repairs,
     REPAIR_CAVEATS,
     OOS_CAVEATS,
+    sched_options_summary,
+    screen_concurrency,
+    build_concurrency_xlsx,
+    run_impacted_asplanned,
+    build_iap_xlsx,
     build_inventory,
     combine_mappings,
     end_activity_candidates,
@@ -273,6 +278,27 @@ def cached_longest_path(key: str, label: str, end_code, near: float, _data):
 def cached_float_path(key: str, label: str, tol: float, near: float, _data):
     return extract_critical_path(_data, label, float_tolerance_days=tol,
                                  near_critical_days=near)
+
+
+def basis_panel(module: str, data, engine_lines: list[str]) -> None:
+    """Scheduling-basis disclosure: what OUR engine did (method, tolerance,
+    terminal, statusing rule) plus the settings the FILE's own forecast was
+    calculated under (P6 SCHEDOPTIONS). Recorded in session state so the
+    Report Assembler prints every module's basis in the Basis of Analysis —
+    the first thing an opposing expert attacks."""
+    file_lines = sched_options_summary(data) if data is not None else []
+    st.session_state.setdefault("analysis_basis", {})[module] = (
+        engine_lines + [f"P6 scheduling options (file): {ln}"
+                        for ln in file_lines])
+    with st.expander("Scheduling basis (disclosed in the report)"):
+        st.markdown("**This module's settings**")
+        for ln in engine_lines:
+            st.write("•", ln)
+        if file_lines:
+            st.markdown("**The file's own P6 scheduling options "
+                        "(SCHEDOPTIONS as submitted)**")
+            for ln in file_lines:
+                st.write("•", ln)
 
 
 def status_strip() -> None:
@@ -646,6 +672,16 @@ def dcma_config_panel() -> DCMAConfig:
                 "13 · Min CPLI", 0.0, 5.0, cfg.cpli_min, 0.01)
             cfg.bei_min = st.number_input(
                 "14 · Min BEI", 0.0, 5.0, cfg.bei_min, 0.01)
+            st.markdown("**Supplementary (not DCMA 14)**")
+            cfg.loe_driving_max_count = st.number_input(
+                "15 · Max LOE-driving links", 0, 1000,
+                cfg.loe_driving_max_count, 1)
+            cfg.redundant_max_pct = st.number_input(
+                "16 · Max redundant-logic %", 0.0, 100.0,
+                cfg.redundant_max_pct, 0.5)
+            cfg.dangling_max_pct = st.number_input(
+                "17 · Max dangling-ends %", 0.0, 100.0,
+                cfg.dangling_max_pct, 0.5)
     return cfg
 
 
@@ -657,7 +693,9 @@ def scorecard(results) -> None:
     score_pct = (passed / scored * 100.0) if scored else 0.0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Checks Passed", f"{passed}/14")
+    c1.metric("Checks Passed", f"{passed}/{scored}",
+              help="DCMA 14 plus 3 supplementary baseline-quality checks "
+                   "(15-17, labelled 'supp.' — not part of the standard).")
     c2.metric("Checks Failed", failed)
     c3.metric("Not Applicable", na)
     c4.metric("Score (of scored)", f"{score_pct:.0f}%")
@@ -2455,7 +2493,11 @@ def report_tab() -> None:
                   else "Current" if r.is_current else "Update"),
             activity_count=r.activity_count,
         ) for r in inv.revisions],
-        settings=[s for c in selected for s in c["settings"]],
+        settings=[s for c in selected for s in c["settings"]]
+        + [f"{m} — {s}"
+           for m, lines in sorted(
+               st.session_state.get("analysis_basis", {}).items())
+           for s in lines],
     )
 
     n_narr = sum(1 for c in selected if c["sec"].narrative_md)
@@ -2955,6 +2997,176 @@ def oos_tab() -> None:
             st.write("•", c)
 
 
+def _register_records(*, require_fragnet: bool = False) -> list:
+    """(DelayEvent, fragnet) pairs from the shared TIA event register."""
+    recs = []
+    for rec in st.session_state.get("tia_register", {}).values():
+        parsed = event_from_dict(rec)
+        if parsed and (parsed[1] or not require_fragnet):
+            recs.append(parsed)
+    return recs
+
+
+def concurrency_tab() -> None:
+    st.caption(
+        "The most-litigated question in delay disputes: per analysis "
+        "window, do Employer-asserted and Contractor-asserted events "
+        "overlap while completion moved? Screening only — overlap is "
+        "necessary but not sufficient for concurrency; the contractual "
+        "test is the analyst's."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes in **Data Intake** "
+                "first — the screening works per analysis window.")
+        return
+    recs = _register_records()
+    if not recs:
+        st.info(
+            "No delay events in the register yet. Capture events (with "
+            "asserted responsibility) in **Time Impact Analysis** step "
+            "② and save them to the register — this screening reads "
+            "the same register.")
+        return
+
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    wres = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
+    res = screen_concurrency(wres, recs)
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Windows screened", len(res.windows))
+    m2.metric("Events screened", len(res.events))
+    m3.metric("Concurrent candidates",
+              sum(1 for w in res.windows if w.concurrent_candidate))
+    m4.metric("Pacing flags",
+              sum(1 for w in res.windows if w.pacing_flag))
+    for w in res.warnings:
+        st.warning(w)
+
+    st.markdown("**Screening matrix** — asserted-event overlap per "
+                "window:")
+    st.dataframe(pd.DataFrame([{
+        "Window": f"W{w.index}: {w.from_label} → {w.to_label}",
+        "Movement (d)": w.movement_days,
+        "Employer (d)": w.employer_days,
+        "Contractor (d)": w.contractor_days,
+        "Both (d)": w.both_days,
+        "Unclassified (d)": w.unclassified_days,
+        "Concurrent candidate": "🚩 YES" if w.concurrent_candidate else "",
+        "Pacing": "❓ enquire" if w.pacing_flag else "",
+        "Events": ", ".join((w.employer_events + w.contractor_events
+                             + w.unclassified_events)[:6]),
+    } for w in res.windows]), width="stretch", hide_index=True)
+
+    with st.expander("Events as screened (spans and asserted party)"):
+        st.dataframe(pd.DataFrame([{
+            "Event": e.event_id, "Title": e.title,
+            "Asserted": e.asserted, "Party": e.party,
+            "From": f"{e.start:%Y-%m-%d}", "To": f"{e.end:%Y-%m-%d}",
+            "Days": e.duration_days,
+            "Note": ("no fragnet — single day" if e.single_day else ""),
+        } for e in res.events]), width="stretch", hide_index=True)
+
+    with st.expander("Screening caveats (always apply)"):
+        for c in res.caveats:
+            st.write("•", c)
+
+    st.download_button(
+        "⬇️ Download concurrency screening (Excel)",
+        data=build_concurrency_xlsx(res),
+        file_name="concurrency_screening.xlsx",
+        mime="application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet",
+        key="conc_dl",
+    )
+
+
+def impacted_asplanned_tab() -> None:
+    st.caption(
+        "Impacted As-Planned: the event fragnets inserted into the "
+        "ORIGINAL BASELINE (no progress), completion movement measured "
+        "per event. A recognised but weak, theoretical method — use "
+        "where the contract prescribes it, and disclose its limits."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload programmes in **Data Intake** first.")
+        return
+    recs = _register_records(require_fragnet=True)
+    if not recs:
+        st.info(
+            "No events with fragnets in the register yet. Build and "
+            "save them in **Time Impact Analysis** (steps ②-⑤) — this "
+            "method re-uses the same confirmed fragnets against the "
+            "baseline.")
+        return
+
+    names = [r.file_name for r in inv.revisions]
+    base_idx = (names.index(inv.baseline.file_name)
+                if inv.baseline else 0)
+    chosen = st.selectbox("Baseline programme", names, index=base_idx,
+                          help="Defaults to the flagged contract "
+                               "baseline.")
+    data = dict(files)[chosen]
+
+    if st.button(f"Run impacted as-planned ({len(recs)} event(s), "
+                 "date order)", type="primary", key="iap_go"):
+        st.session_state["iap_res"] = run_impacted_asplanned(
+            data, chosen, recs)
+        st.session_state["iap_label"] = chosen
+    iap = st.session_state.get("iap_res")
+    if not iap:
+        return
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Baseline completion",
+              f"{iap['completion_pre']:%d %b %Y}"
+              if iap.get("completion_pre") else "—")
+    m2.metric("Impacted completion",
+              f"{iap['completion_final']:%d %b %Y}"
+              if iap.get("completion_final") else "—")
+    m3.metric("Total modelled impact",
+              f"{iap['total_delta_days']:+.1f} d"
+              if iap.get("total_delta_days") is not None else "—")
+    for w in iap.get("warnings", []):
+        st.warning(w)
+    if iap.get("rows"):
+        st.dataframe(pd.DataFrame([{
+            "Event": r["event_id"], "Title": r["title"],
+            "Date": (f"{r['date_raised']:%Y-%m-%d}"
+                     if r["date_raised"] else "—"),
+            "Incremental (d)": r["incremental_delta_days"],
+            "Completion after": (f"{r['completion_after']:%Y-%m-%d}"
+                                 if r["completion_after"] else "—"),
+        } for r in iap["rows"]]), width="stretch", hide_index=True)
+    for c in iap.get("concurrency", []):
+        st.warning(c)
+    basis_panel("Impacted As-Planned", data, [
+        "Method: impacted as-planned — fragnets inserted into the "
+        "ORIGINAL BASELINE in date order; no progress applied",
+        "Same calendar-exact engine pre- and post-insertion; movement "
+        "reported as the delta between runs",
+    ])
+    with st.expander("Method caveats (always apply — this method is "
+                     "the weakest of the recognised family)"):
+        for c in iap.get("caveats", []):
+            st.write("•", c)
+        if iap.get("caveat"):
+            st.write("•", iap["caveat"])
+    st.download_button(
+        "⬇️ Download impacted as-planned report (Excel)",
+        data=build_iap_xlsx(st.session_state.get("iap_label", chosen),
+                            iap),
+        file_name="impacted_asplanned_report.xlsx",
+        mime="application/vnd.openxmlformats-officedocument."
+             "spreadsheetml.sheet",
+        key="iap_dl",
+    )
+
+
 def windows_tab() -> None:
     st.caption(
         "Movement per window between consecutive data dates: how much "
@@ -2970,6 +3182,12 @@ def windows_tab() -> None:
     pool = dict(files)
     ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
     res = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
+    basis_panel("Windows Analysis", ordered[-1][1], [
+        "Per-window driving path: independent longest-path trace of each "
+        "revision from its latest incomplete finisher",
+        "Completion movement: calendar days between the revisions' "
+        "scheduled finish dates as submitted (no recompute)",
+    ])
     if not res.windows:
         for w in res.warnings:
             st.warning(w)
@@ -3197,6 +3415,12 @@ def comparison_tab() -> None:
          _changes_table, cmp.constraint_changes),
         (f"Calendar reassignments ({len(cmp.calendar_changes)})",
          _changes_table, cmp.calendar_changes),
+        (f"🚩 Calendar definitions changed "
+         f"({len(cmp.calendar_def_changes)})",
+         _changes_table, cmp.calendar_def_changes),
+        (f"🚩 Scheduling options changed "
+         f"({len(cmp.sched_options_changes)})",
+         _changes_table, cmp.sched_options_changes),
         (f"Renamed activities ({len(cmp.renamed)})", _changes_table,
          cmp.renamed),
     ]
@@ -3456,6 +3680,15 @@ def progress_transfer_tab() -> None:
             "the repaired-.xer export live in the **Out-of-Sequence "
             "Repair** tab.")
 
+    basis_panel("Progress Transfer", pool[prog_name], [
+        "Statusing rule: RETAINED LOGIC — the network donor's planned "
+        "logic is re-imposed on the transferred actuals (out-of-sequence "
+        "records qualify this; see the OOS module)",
+        "Both runs scheduled by the same calendar-exact engine; effects "
+        "reported as DELTAS between runs, never absolute dates",
+        "Logic/duration effect measured on the intersection network "
+        "(activities in both files); scope effect reported separately",
+    ])
     with st.expander("Statusing choices & standing caveats (always apply)"):
         for c in tr.caveats:
             st.write("•", c)
@@ -3498,9 +3731,13 @@ def critical_path_tab() -> None:
         "Identification method",
         ["Longest path (backward driving trace)", "Float-based (TF ≤ tolerance)"],
         horizontal=True,
-        help="Longest path traces the driving logic backward from the end "
-             "activity — robust with multiple calendars. Float-based flags "
-             "everything at or below the tolerance.",
+        help="Longest path is an INDEPENDENT driving-logic trace computed "
+             "by this tool from the file's dates — robust with multiple "
+             "calendars. Float-based reads the STORED total float that P6 "
+             "wrote into the submitted file (it reflects the file's own "
+             "scheduling options, including any must-finish date). The "
+             "two can legitimately disagree; the basis panel below "
+             "records which definition this analysis used.",
     )
     data = dict(files)[chosen]
 
@@ -3524,13 +3761,39 @@ def critical_path_tab() -> None:
         )
         near = cc2.number_input("Near-critical ≤ (days)", 0.0, 200.0, 10.0, 1.0)
         show_near = cc3.toggle("Show near-critical", value=False)
+        if st.checkbox(
+            "Treat this as the CONTRACTUAL completion milestone",
+            value=(st.session_state.get("contract_completion_ms")
+                   == end_code),
+            help="Recorded in the Basis of Analysis and offered as the "
+                 "default trace terminal across the toolkit.",
+        ):
+            st.session_state["contract_completion_ms"] = end_code
         cp = cached_longest_path(_fkey(chosen), chosen, end_code, near, data)
+        basis_panel("Baseline Critical Path", data, [
+            "Criticality definition: INDEPENDENT longest-path trace "
+            "(backward driving-logic walk computed by this tool), not "
+            "the file's stored total float",
+            f"Trace terminal: {end_code}"
+            + (" (contractual completion milestone)"
+               if st.session_state.get("contract_completion_ms")
+               == end_code else ""),
+            f"Near-critical band: stored total float ≤ {near:.0f} "
+            "working days",
+        ])
     else:
         cc1, cc2, cc3 = st.columns([1, 1, 1])
         tol = cc1.number_input("Critical float ≤ (days)", -100.0, 100.0, 0.0, 1.0)
         near = cc2.number_input("Near-critical ≤ (days)", 0.0, 200.0, 10.0, 1.0)
         show_near = cc3.toggle("Show near-critical", value=False)
         cp = cached_float_path(_fkey(chosen), chosen, tol, near, data)
+        basis_panel("Baseline Critical Path", data, [
+            "Criticality definition: STORED total float as written by P6 "
+            "into the submitted file (reflects the file's own scheduling "
+            "options, including any must-finish date)",
+            f"Critical threshold: total float ≤ {tol:.0f} working days; "
+            f"near-critical ≤ {near:.0f}",
+        ])
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Path activities" if cp.method == "longest_path"
@@ -4401,6 +4664,15 @@ def tia_tab() -> None:
         st.markdown("**Audit trail**")
         st.table(pd.DataFrame([{"Item": k.replace("_", " ").title(),
                                 "Value": v} for k, v in audit.items()]))
+        basis_panel("Time Impact Analysis", data, [
+            "Method: prospective TIA aligned to AACE RP 52R-06 — fragnet "
+            "inserted into the current accepted update at the data date",
+            "CPM: calendar-exact simplified forward/backward pass run "
+            "IDENTICALLY pre- and post-insertion, so the impact DELTA is "
+            "method-consistent; calibration vs P6's own forecast "
+            "disclosed per run",
+            "Statusing: retained logic; remaining durations as stored",
+        ])
     reg7 = st.session_state.get("tia_register", {})
     with st.expander(f"Σ Cumulative impact across the register "
                      f"({len(reg7)} event(s))", expanded=False):
@@ -4562,6 +4834,54 @@ def explain_tab() -> None:
                 } for s in w.shifts]), width="stretch",
                     hide_index=True)
 
+    # ---------------- analyst confirmation of drivers ------------------- #
+    st.subheader("Promote candidates to confirmed drivers")
+    st.caption(
+        "Everything above is INFERENCE — candidates only. Tick a driver "
+        "you have verified against the records and say what the evidence "
+        "is; unconfirmed rows stay candidates. Confirmations flow into "
+        "the Excel export and the assembled report."
+    )
+    cand_rows = [{
+        "Window": f"W{w.index}: {w.from_label} → {w.to_label}",
+        "Direction": s.direction,
+        "Activity ID": s.task_code,
+        "Activity": s.name,
+        "Confirmed": False,
+        "Evidence note": "",
+    } for w in res.windows for s in w.shifts]
+    if cand_rows:
+        saved = st.session_state.get(f"explain_confirmed_{target}", {})
+        for row in cand_rows:
+            k = (row["Window"], row["Activity ID"], row["Direction"])
+            if k in saved:
+                row["Confirmed"] = True
+                row["Evidence note"] = saved[k]
+        edited = st.data_editor(
+            pd.DataFrame(cand_rows), width="stretch", hide_index=True,
+            disabled=["Window", "Direction", "Activity ID", "Activity"],
+            key=f"explain_ed_{target}")
+        confirmed = {}
+        missing_note = 0
+        for _, row in edited.iterrows():
+            if bool(row["Confirmed"]):
+                note = str(row["Evidence note"] or "").strip()
+                if not note:
+                    missing_note += 1
+                confirmed[(row["Window"], row["Activity ID"],
+                           row["Direction"])] = note
+        st.session_state[f"explain_confirmed_{target}"] = confirmed
+        if missing_note:
+            st.warning(f"{missing_note} confirmed driver(s) have no "
+                       "evidence note — a confirmation without evidence "
+                       "is just an assertion; add the document/record "
+                       "you verified against.")
+        if confirmed:
+            st.success(f"{len(confirmed)} driver(s) confirmed by the "
+                       "analyst (of "
+                       f"{len(cand_rows)} candidates). The rest remain "
+                       "candidates.")
+
     with st.expander("Standing caveats (always apply)"):
         for c in res.caveats:
             st.write("•", c)
@@ -4572,9 +4892,16 @@ def explain_tab() -> None:
         "explain",
         DEFAULT_TEMPLATES["explain"],
     )
+    conf_map = st.session_state.get(f"explain_confirmed_{target}", {})
+    names_by_code = {s.task_code: s.name
+                     for w in res.windows for s in w.shifts}
+    conf_rows = [{
+        "window": k[0], "task_code": k[1], "direction": k[2],
+        "name": names_by_code.get(k[1], ""), "note": note,
+    } for k, note in conf_map.items()]
     st.download_button(
         "⬇️ Download 'explain this delay' report (Excel)",
-        data=build_explain_xlsx(res, narrative),
+        data=build_explain_xlsx(res, narrative, confirmed=conf_rows),
         file_name=f"explain_delay_{target}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
@@ -4638,6 +4965,12 @@ def main() -> None:
             st.Page(progress_transfer_tab, title="Progress Transfer",
                     icon=":material/sync_alt:",
                     url_path="progress-transfer"),
+            st.Page(impacted_asplanned_tab, title="Impacted As-Planned",
+                    icon=":material/event_upcoming:",
+                    url_path="impacted-as-planned"),
+            st.Page(concurrency_tab, title="Concurrency Screening",
+                    icon=":material/balance:",
+                    url_path="concurrency-screening"),
             st.Page(explain_tab, title="Explain This Delay",
                     icon=":material/search:",
                     url_path="explain-this-delay"),
