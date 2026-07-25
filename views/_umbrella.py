@@ -2,6 +2,11 @@
 
 The grouping lives in ONE session key (sk.UMBRELLAS) so a work-package
 breakdown defined here is the same breakdown everywhere it is used.
+Adoption is single-action: typing a name in the table (or accepting an
+AI proposal) IS the analyst's confirming act — there is no separate
+"adopt" button to forget, which previously left the grouping defined
+but the measurement switched off.
+
 Nothing here does arithmetic: the roll-up rules, and in particular the
 critical-path-members-only measurement rule, live in programme/rollup.py.
 """
@@ -15,23 +20,19 @@ import state as sk
 from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
     UMBRELLA_SYSTEM_PROMPT, build_rollup, build_umbrella_prompt,
-    parse_umbrella_grouping,
+    merge_grouping, parse_umbrella_grouping,
 )
 from views._shared import ai_credentials_panel
 
 
-def _groups_from_editor(df) -> dict[str, list[str]]:
-    groups: dict[str, list[str]] = {}
-    for _, r in df.iterrows():
-        name = str(r.get("Umbrella") or "").strip()
-        if name:
-            groups.setdefault(name, []).append(str(r["Activity ID"]))
-    return groups
+def _adopt(groups: dict[str, list[str]]) -> None:
+    st.session_state[sk.UMBRELLAS] = groups
+    st.session_state[sk.UMBRELLA_ON] = bool(groups)
 
 
 def umbrella_editor(rows: list[dict], path_codes: set[str],
                     key_prefix: str = "umb") -> dict[str, list[str]]:
-    """Propose → confirm → persist. Returns the confirmed grouping."""
+    """Propose → confirm → auto-adopt. Returns the adopted grouping."""
     st.caption(
         "Group the as-built activities into work packages a reader "
         "recognises — 'Electrical First Fix' rather than twenty rows of "
@@ -40,19 +41,13 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         "members alone, so grouping can never move the measured delay.")
 
     saved = dict(st.session_state.get(sk.UMBRELLAS) or {})
-    # Only activities in the current comparison set can be grouped.
-    codes = [r["task_code"] for r in rows]
     names = {r["task_code"]: r["name"] for r in rows}
-    valid = set(codes)
+    valid = set(names)
+    ed_key = f"{key_prefix}_editor"
 
     # ---- AI proposal ------------------------------------------------
-    with st.expander("Propose work packages with AI (you confirm every "
-                     "one)", expanded=not saved):
-        st.caption(
-            "The model only proposes groupings of activity codes that "
-            "appear verbatim in the programme; any code it invents is "
-            "dropped before you see it. Nothing is applied until you "
-            "press Adopt below.")
+    with st.expander("Propose work packages with AI (you confirm before "
+                     "anything is applied)", expanded=not saved):
         scope_cp = st.toggle(
             "Only offer critical-path activities for grouping",
             value=True, key=f"{key_prefix}_scope_cp",
@@ -61,12 +56,9 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         pool = [r for r in rows
                 if not scope_cp or r["task_code"] in path_codes]
         st.write(f"{len(pool)} activities in scope for grouping.")
+        with st.expander("AI settings (shared across the whole app)"):
+            ai_credentials_panel("umbrella")
         ai_key = st.session_state.get(sk.AI_KEY, "")
-        if not ai_key:
-            with st.expander("Register your AI (shared across the whole "
-                             "app)"):
-                ai_credentials_panel("umbrella")
-            ai_key = st.session_state.get(sk.AI_KEY, "")
         if st.button("Propose work packages", key=f"{key_prefix}_go",
                      disabled=not (pool and ai_key)):
             try:
@@ -85,8 +77,12 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
                     st.warning("No usable groups were returned — try "
                                "again, or type groups in the table.")
             except NarrativeError as exc:
-                st.error(f"{exc.message}  You can still group by hand "
-                         "in the table below.")
+                st.error(
+                    f"{exc.message}\n\nIf this is the managed endpoint "
+                    "returning 403, its key has likely been rotated — "
+                    "update NVIDIA_API_KEY in the secrets, or open the "
+                    "AI settings above and use your own key. Grouping "
+                    "by hand in the table below works regardless.")
 
         proposed = st.session_state.get(sk.UMBRELLA_PROPOSED) or []
         if proposed:
@@ -95,46 +91,60 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
                 "Activities": len(g["codes"]),
                 "Rationale": g.get("rationale", ""),
             } for g in proposed]), width="stretch", hide_index=True)
-            if st.button("Load this proposal into the table below",
-                         key=f"{key_prefix}_load"):
-                saved = {g["label"]: list(g["codes"]) for g in proposed}
-                st.session_state[sk.UMBRELLAS] = saved
+            if st.button("✔ Use this proposal (loads into the table — "
+                         "edit or blank any name after)",
+                         type="primary", key=f"{key_prefix}_load"):
+                _adopt({g["label"]: list(g["codes"]) for g in proposed})
+                # the editor must reseed from the new grouping, not
+                # replay stale cell edits recorded under its old key
+                st.session_state.pop(ed_key, None)
                 st.rerun()
 
     # ---- confirmation table (also the manual fallback) --------------
-    assigned = {c: nm for nm, cs in saved.items() for c in cs if c in valid}
+    show_all = st.toggle(
+        f"Show all {len(rows)} activities (default: the "
+        f"{sum(1 for r in rows if r['task_code'] in path_codes)} on the "
+        "critical path)",
+        value=False, key=f"{key_prefix}_show_all",
+        help="The critical-path activities are the ones whose grouping "
+             "moves anything. Show all only to add off-path context "
+             "members to a package.")
+    # Path activities first, in as-built order; the rest only on demand.
+    visible = ([r for r in rows if r["task_code"] in path_codes]
+               + ([r for r in rows if r["task_code"] not in path_codes]
+                  if show_all else []))
+    visible_codes = [r["task_code"] for r in visible]
+    assigned = {c: nm for nm, cs in saved.items() for c in cs}
     df = pd.DataFrame([{
         "Activity ID": c,
         "Activity": names[c][:60],
         "On CP": "✓" if c in path_codes else "",
         "Umbrella": assigned.get(c, ""),
-    } for c in codes])
-    st.markdown("**Confirm the grouping** — edit any name; blank leaves "
-                "the activity standalone.")
+    } for c in visible_codes])
+    st.markdown("**Type an umbrella name against each activity** — the "
+                "grouping applies as you edit; blank un-groups.")
     edited = st.data_editor(
         df, width="stretch", hide_index=True, height=360,
-        disabled=["Activity ID", "Activity", "On CP"],
-        key=f"{key_prefix}_editor")
-    groups = _groups_from_editor(edited)
+        disabled=["Activity ID", "Activity", "On CP"], key=ed_key)
+    typed = {str(r["Activity ID"]): str(r.get("Umbrella") or "")
+             for _, r in edited.iterrows()}
+    groups = merge_grouping(saved, visible_codes, typed)
+    if groups != saved:
+        _adopt(groups)
 
-    c1, c2 = st.columns([1, 3])
-    if c1.button("Adopt grouping", type="primary",
-                 key=f"{key_prefix}_adopt"):
-        st.session_state[sk.UMBRELLAS] = groups
-        st.session_state[sk.UMBRELLA_ON] = bool(groups)
-        st.success(f"{len(groups)} umbrella(s) adopted and shared with "
-                   "every module that presents as-built activities.")
-    if saved and c2.button("Clear grouping", key=f"{key_prefix}_clear"):
-        st.session_state[sk.UMBRELLAS] = {}
-        st.session_state[sk.UMBRELLA_ON] = False
+    if groups and st.button("Clear the whole grouping",
+                            key=f"{key_prefix}_clear"):
+        _adopt({})
+        st.session_state.pop(ed_key, None)
+        st.session_state.pop(sk.UMBRELLA_PROPOSED, None)
         st.rerun()
 
-    # ---- live preview of what the roll-up would measure --------------
+    # ---- live preview of what the roll-up measures -------------------
     if groups:
         res = build_rollup(rows, groups, path_codes)
         prev = [u for u in res.umbrellas if u.measured]
         if prev:
-            st.markdown("**Preview — measured span per umbrella "
+            st.markdown("**Adopted — measured span per umbrella "
                         "(critical-path members only):**")
             st.dataframe(pd.DataFrame([{
                 "Umbrella": u.name,
@@ -151,7 +161,9 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
             st.caption(
                 "'Full group runs on' is how much later the whole work "
                 "package ran than its critical-path portion — shown for "
-                "presentation, never added to the measurement.")
+                "presentation, never added to the measurement. This "
+                "grouping now applies everywhere as-built activities "
+                "are presented.")
         for w in res.warnings:
             st.warning(w)
         for u in res.umbrellas:

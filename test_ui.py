@@ -141,6 +141,44 @@ def main() -> int:
             check("as-built work-package section exception-free",
                   exc() == 0, f"{exc()} exceptions")
 
+            # ---- umbrella grouping: type a name into the grid and
+            # confirm it AUTO-adopts (the old two-button flow shipped
+            # with the measurement gate never switching on).
+            page.get_by_text("Group the path into work packages",
+                             exact=False).first.click()
+            page.wait_for_timeout(3000)
+            check("umbrella editor defaults to critical-path rows",
+                  page.get_by_text("Show all", exact=False).count() > 0)
+            def type_umbrella_cells() -> None:
+                ed = page.locator('.st-key-ab_umb_editor '
+                                  '[data-testid="stDataFrame"]').first
+                ed.scroll_into_view_if_needed()
+                page.wait_for_timeout(1200)
+                box = ed.bounding_box()
+                cx = box["x"] + box["width"] - 80
+                cy = box["y"] + 51
+                for dy in (0, 35):
+                    # select the cell, open the overlay with Enter —
+                    # steadier than a double-click on the canvas grid
+                    page.mouse.click(cx, cy + dy)
+                    page.wait_for_timeout(500)
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(500)
+                    page.keyboard.type("Test Package")
+                    page.keyboard.press("Enter")
+                    page.wait_for_timeout(4000)
+                page.wait_for_timeout(4000)
+
+            type_umbrella_cells()
+            if not page.get_by_text("Adopted — measured span").count():
+                type_umbrella_cells()          # one retry on grid flake
+            check("typing in the grid auto-adopts the grouping",
+                  page.get_by_text("Adopted — measured span").count() > 0)
+            check("grouped gantt toggle appears",
+                  page.get_by_text("Show as work packages").count() > 0)
+            check("umbrella typing exception-free",
+                  exc() == 0, f"{exc()} exceptions")
+
             # APvAB: walk EVERY method step — the step-③ iframe once
             # shipped broken because the default step hid it.
             goto("As-Planned vs As-Built")
@@ -168,6 +206,14 @@ def main() -> int:
                 page.wait_for_timeout(5000)
                 check("umbrella grouping section appears after adoption",
                       page.get_by_text("Group into umbrella activities",
+                                       exact=False).count() > 0)
+                # the grouping typed on the As-Built page must reach the
+                # APvAB measurement (one shared state, gate ON)
+                page.get_by_text("③ Planned-dates comparison",
+                                 exact=True).first.click()
+                page.wait_for_timeout(6000)
+                check("APvAB measures on the shared umbrella grouping",
+                      page.get_by_text("Measuring on",
                                        exact=False).count() > 0)
                 check("umbrella adoption exception-free",
                       exc() == 0, f"{exc()} exceptions")

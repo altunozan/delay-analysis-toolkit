@@ -1805,6 +1805,29 @@ check("N9e grouped tree nests members under their package",
       any(k["name"] == "Package A"
           for k in _n_grp["children"][0].get("children", [])))
 
+# N10. merge_grouping — the guard that lets the editor show a FILTERED
+# view (critical-path only) without silently stripping hidden members.
+from programme import merge_grouping as _mg
+_n_saved = {"Electrical First Fix": ["A1", "A2", "OFF1"],
+            "Blockwork": ["B1"]}
+# editing a CP-only view: OFF1 is hidden and must survive untouched
+_n_m1 = _mg(_n_saved, ["A1", "A2", "B1"],
+            {"A1": "Electrical First Fix", "A2": "", "B1": "Blockwork"})
+check("N10 hidden members survive a filtered edit",
+      "OFF1" in _n_m1["Electrical First Fix"])
+check("N10b blanking a visible code un-groups it",
+      "A2" not in {c for cs in _n_m1.values() for c in cs})
+check("N10c untouched visible assignments are kept",
+      _n_m1["Blockwork"] == ["B1"])
+_n_m2 = _mg(_n_saved, ["A1", "A2", "B1"],
+            {"A1": "Renamed", "A2": "Renamed", "B1": ""})
+check("N10d renaming moves visible codes to the new umbrella",
+      _n_m2["Renamed"] == ["A1", "A2"]
+      and "Blockwork" not in _n_m2
+      and _n_m2["Electrical First Fix"] == ["OFF1"])
+check("N10e blanking every member deletes the umbrella entirely",
+      _mg({"X": ["A1"]}, ["A1"], {"A1": ""}) == {})
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

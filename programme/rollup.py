@@ -322,6 +322,30 @@ def build_rollup(
     return result
 
 
+def merge_grouping(saved: dict[str, list[str]],
+                   visible_codes: list[str],
+                   typed: dict[str, str]) -> dict[str, list[str]]:
+    """Merge a (possibly filtered) editor view into the saved grouping.
+
+    The editor may show only a subset of activities (e.g. critical-path
+    only). Assignments typed against VISIBLE rows are authoritative for
+    those codes — including a blank, which un-groups the code. Codes NOT
+    visible keep whatever assignment they already had, so editing a
+    filtered view can never silently strip hidden members.
+    """
+    visible = set(visible_codes)
+    merged: dict[str, list[str]] = {}
+    for name, codes in saved.items():
+        keep = [c for c in codes if c not in visible]
+        if keep:
+            merged[name] = keep
+    for code in visible_codes:                 # preserve display order
+        name = (typed.get(code) or "").strip()
+        if name:
+            merged.setdefault(name, []).append(code)
+    return {n: cs for n, cs in merged.items() if cs}
+
+
 def umbrella_links(links, groups: dict[str, list[str]]) -> list[dict]:
     """Lift activity-level path links to links BETWEEN work packages.
 

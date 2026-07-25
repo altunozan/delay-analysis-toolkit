@@ -271,6 +271,7 @@ from .progress import (
 from .rollup import (
     ROLLUP_CAVEATS,
     internal_links,
+    merge_grouping,
     umbrella_links,
     Umbrella,
     UmbrellaMember,
@@ -462,6 +463,7 @@ __all__ = [
     # rollup (umbrella activities)
     "ROLLUP_CAVEATS",
     "internal_links",
+    "merge_grouping",
     "umbrella_links",
     "Umbrella",
     "UmbrellaMember",
