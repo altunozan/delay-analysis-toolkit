@@ -118,7 +118,7 @@ from .float_erosion import (
     WindowErosion,
     analyse_float_erosion,
 )
-from .gantt_html import build_gantt_html, group_tree
+from .gantt_html import (build_apab_gantt_html, build_gantt_html, group_tree)
 from .hierarchy import (
     Dimension,
     sequence_dimension_mappings,
@@ -507,6 +507,7 @@ __all__ = [
     "planned_vs_actual",
     "keydate_windows",
     "build_simple_xlsx",
+    "build_apab_gantt_html",
     "build_explain_xlsx",
     "build_float_erosion_xlsx",
     "build_progress_xlsx",

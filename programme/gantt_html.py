@@ -16,8 +16,8 @@ import json
 _TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   :root {
-    --canvas: #ffffff; --panel: #f6f8fb; --ink: #1f2733; --muted: #6b7686;
-    --line: #dfe5ee; --strong: #b8c2d1; --navy: #1f3864;
+    --canvas: #0f1117; --panel: #161b22; --ink: #c9d1d9; --muted: #8b949e;
+    --line: #2d333b; --strong: #444c56; --navy: #7cb7e8;
     --done: #2f9e44; --done-b: #23763375;
     --active: #f2a33c; --active-b: #b9770e75;
     --future: #4c8ede; --future-b: #2f5f9e75;
@@ -29,10 +29,10 @@ _TEMPLATE = """<!DOCTYPE html>
   #toolbar { display: flex; gap: 10px; align-items: center; padding: 8px 12px;
              background: var(--panel); border-bottom: 1px solid var(--line);
              flex-wrap: wrap; position: sticky; top: 0; z-index: 40; }
-  #toolbar input[type=text] { background: #fff; color: var(--ink);
+  #toolbar input[type=text] { background: var(--panel); color: var(--ink);
              border: 1px solid var(--strong); border-radius: 4px;
              padding: 5px 9px; width: 220px; font-size: 12px; }
-  #toolbar button { background: #fff; color: var(--navy);
+  #toolbar button { background: var(--panel); color: var(--navy);
              border: 1px solid var(--strong); border-radius: 4px;
              padding: 5px 12px; cursor: pointer; font-size: 12px;
              font-weight: 600; }
@@ -62,8 +62,8 @@ _TEMPLATE = """<!DOCTYPE html>
              display: flex; align-items: flex-end; padding: 0 0 4px 10px;
              font-size: 11px; font-weight: 700; color: var(--navy); }
   .row { display: flex; width: max-content; min-width: 100%; height: 26px; }
-  .row:nth-child(even) .lane { background-color: #f7f9fc; }
-  .row:hover .lane, .row:hover .label { background-color: #edf3fb; }
+  .row:nth-child(even) .lane { background-color: #131922; }
+  .row:hover .lane, .row:hover .label { background-color: #1c2733; }
   .label { position: sticky; left: 0; z-index: 10; width: var(--treew);
            flex: none; background: var(--canvas); display: flex;
            align-items: center; font-size: 12px; white-space: nowrap;
@@ -76,6 +76,17 @@ _TEMPLATE = """<!DOCTYPE html>
            color: var(--navy); flex: none; font-size: 10px; }
   .cnt { color: var(--muted); font-weight: 400; margin-left: 6px;
          font-size: 10px; }
+  .aid { width: 108px; flex: none; color: var(--muted);
+         overflow: hidden; text-overflow: ellipsis;
+         font-size: 11px; }
+  .anm { flex: 1 1 auto; overflow: hidden;
+         text-overflow: ellipsis; min-width: 0; }
+  .adt { width: 78px; flex: none; color: var(--muted);
+         font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  #corner { flex-direction: column; align-items: stretch;
+            justify-content: flex-end; }
+  .colhdr { display: flex; width: 100%; font-size: 10px;
+            color: var(--muted); font-weight: 400; }
   .lane { position: relative; flex: none;
           border-bottom: 1px solid var(--line);
           background-image: var(--grid); background-size: var(--gridsize);
@@ -116,9 +127,14 @@ _TEMPLATE = """<!DOCTYPE html>
 const TREE = __TREE__;
 const DATA_DATE = __DATA_DATE__;
 const TITLE = __TITLE__;
-const TREEW = 340;
+const TREEW = 600;
 document.documentElement.style.setProperty("--treew", TREEW + "px");
-document.getElementById("corner").textContent = TITLE;
+document.getElementById("corner").innerHTML = esc(TITLE) +
+  '<div class="colhdr"><span class="caret"></span>' +
+  '<span class="aid">Activity ID</span>' +
+  '<span class="anm">Activity name</span>' +
+  '<span class="adt">Start</span>' +
+  '<span class="adt">Finish</span></div>';
 const DAY = 86400000;
 const CATS = __CATS__;
 const FILL = {}, EDGE = {};
@@ -288,7 +304,7 @@ function render() {
                         xe: X(t0) + Math.max((t1 - t0)/DAY*pxPerDay(), 3)};
           for (const tgt of (a.links || [])) LINKS.push([a.lid, tgt]);
         }
-        addRow(`<span class="caret"></span>${esc(a.id)} · ${esc(a.name)}`,
+        addRow(`<span class="caret"></span><span class="aid">${esc(a.id)}</span><span class="anm">${esc(a.name)}</span><span class="adt">${a.start || ""}</span><span class="adt">${a.finish || ""}</span>`,
                depth + 1, false, null, kidz);
       }
     }
@@ -426,3 +442,170 @@ def group_tree(groups: list[dict]) -> dict:
             "count": sum(k["count"] for k in kids),
             "complete": sum(k["complete"] for k in kids),
             "children": kids, "activities": []}
+
+
+def build_apab_gantt_html(
+    rows: list[dict],
+    keydates: dict[str, str] | None = None,
+    overall_delay_days: float | None = None,
+    title: str = "As-Planned vs As-Built",
+    max_rows: int = 250,
+) -> str:
+    """Comparison gantt: as-built bar ABOVE, as-planned bar BELOW, per
+    activity — with data columns, key-date markers (planned vs actual
+    finish) and the per-activity / overall delay measurement.
+
+    ``rows`` come from programme.variance.planned_vs_actual.
+    Dark-themed to match the app; server-rendered static HTML.
+    """
+    from datetime import datetime as _dt
+
+    keydates = keydates or {}
+    use = [r for r in rows
+           if r.get("planned_start") or r.get("actual_start")][:max_rows]
+    dates = [d for r in use for d in (
+        r.get("planned_start"), r.get("planned_finish"),
+        r.get("actual_start"), r.get("actual_finish")) if d]
+    if not use or not dates:
+        return ("<body style='background:#0f1117;color:#8b949e;"
+                "font-family:sans-serif'>No dated activities to draw."
+                "</body>")
+    t0, t1 = min(dates), max(dates)
+    span = max((t1 - t0).days, 1)
+    ppd = max(min(1100.0 / span, 12.0), 1100.0 / span)   # fit ~1100px
+
+    def x(d) -> float:
+        return (d - t0).days * ppd
+
+    def f(d) -> str:
+        return f"{d:%Y-%m-%d}" if d else ""
+
+    # month grid
+    grid = []
+    cur = _dt(t0.year, t0.month, 1)
+    while cur <= t1:
+        grid.append((x(cur), f"{cur:%b %y}"))
+        cur = (_dt(cur.year + 1, 1, 1) if cur.month == 12
+               else _dt(cur.year, cur.month + 1, 1))
+    W = span * ppd + 40
+
+    head = ""
+    if overall_delay_days is not None:
+        head = (f"<div class='banner'>MEASURED DELAY: "
+                f"<b>{overall_delay_days:+.0f} calendar days</b> "
+                "(as-built vs as-planned completion of the section)"
+                "</div>")
+
+    parts = ["""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  body { margin:0; background:#0f1117; color:#c9d1d9;
+         font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif; }
+  .banner { background:#161b22; border-bottom:1px solid #2d333b;
+            padding:8px 14px; font-size:13px; color:#e8eff3;
+            position:sticky; top:0; z-index:20; }
+  .banner b { color:#e27c63; }
+  #wrap { overflow:auto; }
+  table.cmp { border-collapse:collapse; }
+  .lbl { position:sticky; left:0; background:#0f1117; z-index:10;
+         border-right:2px solid #7cb7e8; }
+  .lbl div { display:flex; gap:8px; align-items:center;
+             padding:0 8px; font-size:11.5px; white-space:nowrap; }
+  .aid { width:104px; color:#8b949e; overflow:hidden; flex:none; }
+  .anm { width:230px; overflow:hidden; text-overflow:ellipsis;
+         flex:none; }
+  .adt { width:74px; color:#8b949e; font-size:10.5px; flex:none;
+         font-variant-numeric:tabular-nums; }
+  .var { width:52px; text-align:right; font-weight:600; flex:none;
+         font-variant-numeric:tabular-nums; }
+  .late { color:#e27c63; } .early { color:#5cb78f; }
+  .hdr .lbl div { color:#8b949e; font-size:10px; font-weight:600;
+                  border-bottom:2px solid #7cb7e8; height:26px; }
+  tr.r { height:34px; }
+  tr.r:nth-child(even) td { background:#131922; }
+  tr.kd td { background:#1a2030 !important; }
+  .lane { position:relative; border-bottom:1px solid #2d333b;
+          background-image:repeating-linear-gradient(90deg,
+            #1b2129 0 1px, transparent 1px 100%); }
+  .bar { position:absolute; height:9px; border-radius:2px; }
+  .pl  { top:19px; background:#3d5a80; outline:1px solid #5b7ba3; }
+  .ab  { top:6px; }
+  .dia { position:absolute; width:10px; height:10px; top:11px;
+         transform:rotate(45deg); }
+  .conn { position:absolute; top:15px; border-top:1.5px dashed #8b949e; }
+  .dlab { position:absolute; top:8px; font-size:10px; font-weight:700;
+          white-space:nowrap; }
+  .leg { padding:6px 14px; font-size:11px; color:#8b949e;
+         background:#161b22; border-bottom:1px solid #2d333b; }
+  .sw { display:inline-block; width:14px; height:8px; margin:0 4px;
+        vertical-align:middle; border-radius:2px; }
+  .mon { position:absolute; top:0; bottom:0; border-left:1px solid
+         #232a33; color:#8b949e; font-size:9.5px; padding-left:3px; }
+</style></head><body>""", head, """
+<div class='leg'><span class='sw' style='background:#e27c63'></span>
+as-built (late finish) <span class='sw' style='background:#5cb78f'></span>
+as-built (on/early) <span class='sw' style='background:#3d5a80'></span>
+as-planned <span style='color:#7cb7e8'>&#9670;</span> key date (actual)
+<span style='color:#8b949e'>&#9671;</span> key date (planned) — dashed
+connector = key-date slippage</div>
+<div id='wrap'><table class='cmp'>"""]
+
+    hdr_cells = ("<td class='lbl'><div><span class='aid'>Activity ID"
+                 "</span><span class='anm'>Activity name</span>"
+                 "<span class='adt'>P. start</span>"
+                 "<span class='adt'>P. finish</span>"
+                 "<span class='adt'>A. start</span>"
+                 "<span class='adt'>A. finish</span>"
+                 "<span class='var'>Var d</span></div></td>")
+    mon = "".join(f"<div class='mon' style='left:{mx:.0f}px'>{lbl}</div>"
+                  for mx, lbl in grid)
+    mon_body = "".join(f"<div class='mon' style='left:{mx:.0f}px'></div>"
+                       for mx, _ in grid)
+    parts.append(f"<tr class='hdr'>{hdr_cells}"
+                 f"<td class='lane' style='min-width:{W:.0f}px;"
+                 f"height:26px'>{mon}</td></tr>")
+
+    for r in use:
+        code = r["task_code"]
+        is_kd = code in keydates
+        var = r.get("finish_var_days")
+        var_cls = "late" if (var or 0) > 0 else "early"
+        var_txt = f"{var:+.0f}" if var is not None else ""
+        lbl = (f"<td class='lbl'><div><span class='aid'>{code}</span>"
+               f"<span class='anm'>{r['name'][:60]}</span>"
+               f"<span class='adt'>{f(r.get('planned_start'))}</span>"
+               f"<span class='adt'>{f(r.get('planned_finish'))}</span>"
+               f"<span class='adt'>{f(r.get('actual_start'))}</span>"
+               f"<span class='adt'>{f(r.get('actual_finish'))}</span>"
+               f"<span class='var {var_cls}'>{var_txt}</span></div></td>")
+        kids = [mon_body]
+        ps, pf = r.get("planned_start"), r.get("planned_finish")
+        as_, af = r.get("actual_start"), r.get("actual_finish")
+        if ps and pf:
+            kids.append(f"<div class='bar pl' style='left:{x(ps):.0f}px;"
+                        f"width:{max(x(pf)-x(ps),3):.0f}px' "
+                        f"title='{code} planned {f(ps)} → {f(pf)}'>"
+                        "</div>")
+        if as_:
+            ae = af or as_
+            col = "#e27c63" if (var or 0) > 0 else "#5cb78f"
+            kids.append(f"<div class='bar ab' style='left:{x(as_):.0f}px;"
+                        f"width:{max(x(ae)-x(as_),3):.0f}px;"
+                        f"background:{col}' title='{code} as-built "
+                        f"{f(as_)} → {f(af)}'></div>")
+        if is_kd and pf and af:
+            xa, xp = x(af), x(pf)
+            kids.append(f"<div class='dia' style='left:{xp-5:.0f}px;"
+                        "outline:1.5px solid #8b949e'></div>")
+            kids.append(f"<div class='dia' style='left:{xa-5:.0f}px;"
+                        "background:#7cb7e8'></div>")
+            lo, hi = min(xa, xp), max(xa, xp)
+            if hi - lo > 2:
+                kids.append(f"<div class='conn' style='left:{lo:.0f}px;"
+                            f"width:{hi-lo:.0f}px'></div>")
+            kids.append(f"<div class='dlab {var_cls}' "
+                        f"style='left:{hi+8:.0f}px'>{var_txt}d</div>")
+        parts.append(f"<tr class='r{' kd' if is_kd else ''}'>{lbl}"
+                     f"<td class='lane' style='min-width:{W:.0f}px'>"
+                     + "".join(kids) + "</td></tr>")
+
+    parts.append("</table></div></body></html>")
+    return "".join(parts)

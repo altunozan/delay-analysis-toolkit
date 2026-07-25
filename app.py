@@ -96,6 +96,7 @@ from programme import (
     analyse_sequence,
     available_dimensions,
     build_gantt_html,
+    build_apab_gantt_html,
     build_hierarchy,
     group_tree,
     build_hierarchy_xlsx,
@@ -3437,19 +3438,25 @@ def apab_tab() -> None:
                   f"{sum(fv)/len(fv):+.0f} d" if fv else "—")
         m3.metric("Worst finish variance",
                   f"{max(fv):+.0f} d" if fv else "—")
-        st.dataframe(pd.DataFrame([{
-            "Activity ID": r["task_code"], "Activity": r["name"][:50],
-            "Planned start": (f"{r['planned_start']:%Y-%m-%d}"
-                              if r["planned_start"] else "—"),
-            "Planned finish": (f"{r['planned_finish']:%Y-%m-%d}"
-                               if r["planned_finish"] else "—"),
-            "Actual start": (f"{r['actual_start']:%Y-%m-%d}"
-                             if r["actual_start"] else "—"),
-            "Actual finish": (f"{r['actual_finish']:%Y-%m-%d}"
-                              if r["actual_finish"] else "—"),
-            "Start var (d)": r["start_var_days"],
-            "Finish var (d)": r["finish_var_days"],
-        } for r in rows[:400]]), width="stretch", hide_index=True)
+        st.iframe(
+            build_apab_gantt_html(
+                rows, keydates=st.session_state.get("apab_keydates"),
+                title="As-planned vs as-built — comparison"),
+            height=560, scrolling=True)
+        with st.expander("Comparison table (all columns)"):
+            st.dataframe(pd.DataFrame([{
+                "Activity ID": r["task_code"], "Activity": r["name"][:50],
+                "Planned start": (f"{r['planned_start']:%Y-%m-%d}"
+                                  if r["planned_start"] else "—"),
+                "Planned finish": (f"{r['planned_finish']:%Y-%m-%d}"
+                                   if r["planned_finish"] else "—"),
+                "Actual start": (f"{r['actual_start']:%Y-%m-%d}"
+                                 if r["actual_start"] else "—"),
+                "Actual finish": (f"{r['actual_finish']:%Y-%m-%d}"
+                                  if r["actual_finish"] else "—"),
+                "Start var (d)": r["start_var_days"],
+                "Finish var (d)": r["finish_var_days"],
+            } for r in rows[:400]]), width="stretch", hide_index=True)
         st.session_state["apab_cmp_rows"] = rows
         with st.expander("Breakdown view (by activity code / WBS — the "
                          "grouped comparison tool)"):
@@ -3529,6 +3536,13 @@ def apab_tab() -> None:
                           if r["actual_finish"]), default=None)
         overall = ((actual_fin - planned_fin).days
                    if planned_fin and actual_fin else None)
+        st.iframe(
+            build_apab_gantt_html(
+                rows, keydates=kd,
+                overall_delay_days=float(overall)
+                if overall is not None else None,
+                title="As-built (above) vs as-planned (below)"),
+            height=560, scrolling=True)
         m1, m2, m3 = st.columns(3)
         m1.metric("Planned completion (section)",
                   f"{planned_fin:%d %b %Y}" if planned_fin else "—")
