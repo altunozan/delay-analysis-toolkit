@@ -191,8 +191,8 @@ st.set_page_config(
 )
 
 STATUS_COLORS = {
-    CheckStatus.PASS: "#3F6B4F",
-    CheckStatus.FAIL: "#9B3227",
+    CheckStatus.PASS: "#1a7f37",
+    CheckStatus.FAIL: "#cf222e",
     CheckStatus.NA: "#6e7781",
 }
 STATUS_BG = {
@@ -201,11 +201,10 @@ STATUS_BG = {
     CheckStatus.NA: "#f0f1f3",
 }
 
-# Drawing Sheet inks — see ui_variants/ for the revert kit.
-PLANNED_COLOR = "#14324A"    # drafting ink (as-planned)
-RECORDED_COLOR = "#9B3227"   # revision red (as-recorded)
-SLIP_COLOR = "#9B3227"       # later than planned
-GAIN_COLOR = "#3F6B4F"       # on / ahead of programme
+PLANNED_COLOR = "#4c78a8"
+RECORDED_COLOR = "#e45756"
+SLIP_COLOR = "#cf222e"
+GAIN_COLOR = "#1a7f37"
 
 
 # ====================================================================== #
@@ -2905,7 +2904,7 @@ def progress_tab() -> None:
             color=alt.Color("Series:N", title=None,
                             scale=alt.Scale(
                                 domain=["Planned", "As-recorded"],
-                                range=["#14324A", "#9B3227"]),
+                                range=["#3b76c4", "#cf222e"]),
                             legend=alt.Legend(orient="top")),
             tooltip=[alt.Tooltip("Date:T", format="%b %Y"), "Series",
                      alt.Tooltip("Cum %:Q", format=".1f")],
@@ -2918,7 +2917,7 @@ def progress_tab() -> None:
     if pts:
         layers.append(
             alt.Chart(pd.DataFrame(pts)).mark_point(
-                shape="diamond", size=140, filled=True, color="#B07A24")
+                shape="diamond", size=140, filled=True, color="#e8a33d")
             .encode(x="Date:T", y="Cum %:Q",
                     tooltip=["Revision",
                              alt.Tooltip("Date:T", format="%d %b %Y"),
@@ -3962,8 +3961,8 @@ def windows_tab() -> None:
                         axis=alt.Axis(labelAngle=-20, labelLimit=200)),
                 y=alt.Y("Movement (d):Q"),
                 color=alt.condition("datum['Movement (d)'] > 0",
-                                    alt.value("#9B3227"),
-                                    alt.value("#3F6B4F")),
+                                    alt.value("#cf222e"),
+                                    alt.value("#1a7f37")),
                 tooltip=["Window", "Movement (d)"],
             ).properties(height=260, title="Movement per window"),
             width="stretch",
@@ -4095,7 +4094,7 @@ def comparison_tab() -> None:
                     axis=alt.Axis(labelLimit=280)),
             color=alt.condition(
                 "datum.Category == 'Actual dates changed retrospectively'",
-                alt.value("#9B3227"), alt.value("#14324A")),
+                alt.value("#cf222e"), alt.value("#3b76c4")),
             tooltip=["Category", "Count"],
         ).properties(height=28 * len(chart_df)),
         width="stretch",
@@ -4440,7 +4439,7 @@ def progress_transfer_tab() -> None:
 # Tab 5 — Baseline Planned Critical Path (Module 5)
 # ====================================================================== #
 
-BAND_COLORS = {"critical": "#9B3227", "near-critical": "#B07A24"}
+BAND_COLORS = {"critical": "#cf222e", "near-critical": "#e8a33d"}
 
 
 def critical_path_tab() -> None:
@@ -5154,7 +5153,7 @@ def tia_tab() -> None:
                                and data.project.data_date else None),
                     title="Fragnet preview",
                     categories=[{"key": "fragnet", "label": "fragnet",
-                                 "color": "#B07A24"}]),
+                                 "color": "#e8a33d"}]),
                 height=170 + 26 * len(pacts))
             st.caption("Preview only — sequential FS chain from the data "
                        "date; the impact run applies the real tie-ins "
@@ -5381,11 +5380,11 @@ def tia_tab() -> None:
                     title=f"TIA {event.event_id} — driving paths",
                     categories=[
                         {"key": "pre", "label": "pre-impact path",
-                         "color": "#14324A"},
+                         "color": "#4c8ede"},
                         {"key": "post", "label": "post-impact path",
-                         "color": "#9B3227"},
+                         "color": "#cf222e"},
                         {"key": "fragnet", "label": "fragnet (event)",
-                         "color": "#B07A24"},
+                         "color": "#e8a33d"},
                     ]),
                 height=430)
             st.caption("Arrows = driving logic along each path · the "
@@ -5535,7 +5534,7 @@ def explain_tab() -> None:
     if len(pts) >= 2:
         st.altair_chart(
             alt.Chart(pd.DataFrame(pts)).mark_line(point=True,
-                                                   color="#9B3227")
+                                                   color="#cf222e")
             .encode(
                 x=alt.X("Data date:T", axis=alt.Axis(format="%b %Y")),
                 y=alt.Y("Milestone date:T", scale=alt.Scale(zero=False),
@@ -5658,156 +5657,7 @@ def explain_tab() -> None:
 
 # ====================================================================== #
 
-
-# --------------------------------------------------------------------- #
-# Drawing Sheet identity
-# --------------------------------------------------------------------- #
-# The visual language of an issued-for-construction drawing: drafting
-# paper, a faint blue-line grid, hairline rules, uppercase tracked
-# labels, tabular figures and square corners. Chosen because analysis
-# screenshots go straight into a Word/PDF deliverable, where dark
-# captures read as foreign. Revert kit: ui_variants/01_dark_original/
-_THEME_CSS = """
-<style>
-:root {
-  --dsi:      #14324A;   /* drafting ink            */
-  --dsi-soft: #5B7994;   /* annotation / secondary  */
-  --dsr:      #9B3227;   /* revision red (slip)     */
-  --dsg:      #3F6B4F;   /* gain / on-programme     */
-  --dsline:   #C6D4E0;   /* hairline                */
-  --dsgrid:   #EBF2F7;   /* blue-line grid (faint)  */
-  --dspaper:  #FCFCFA;
-  --dspanel:  #F1F5F9;
-  --dsmono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-}
-
-/* paper with a faint drafting grid */
-[data-testid="stAppViewContainer"], [data-testid="stMain"] {
-  background-color: var(--dspaper);
-  background-image:
-    linear-gradient(var(--dsgrid) 1px, transparent 1px),
-    linear-gradient(90deg, var(--dsgrid) 1px, transparent 1px);
-  background-size: 24px 24px;
-}
-[data-testid="stHeader"] { background: transparent; }
-[data-testid="stMain"] .block-container { padding-top: 2.4rem; }
-
-/* sidebar reads as the drawing's index panel */
-[data-testid="stSidebar"] {
-  background: var(--dspanel);
-  border-right: 1.5px solid var(--dsi);
-}
-[data-testid="stSidebarNav"] a { border-radius: 2px !important; }
-[data-testid="stNavSectionHeader"] {
-  font-family: var(--dsmono) !important;
-  font-size: .6rem !important;
-  letter-spacing: .04em !important;
-  white-space: normal !important;
-  line-height: 1.35 !important;
-  text-transform: uppercase !important;
-  color: var(--dsi-soft) !important;
-  border-bottom: 1px solid var(--dsline);
-  padding-bottom: .3rem !important;
-  margin-top: .9rem !important;
-}
-
-/* titles: uppercase, tracked, ruled under — drawing-sheet headings */
-[data-testid="stMain"] h1 {
-  font-size: 1.5rem !important;
-  font-weight: 700 !important;
-  text-transform: uppercase;
-  letter-spacing: .07em;
-  border-bottom: 2px solid var(--dsi);
-  padding-bottom: .35rem;
-  margin-bottom: .25rem !important;
-}
-[data-testid="stMain"] h2 {
-  font-size: 1.12rem !important; font-weight: 700 !important;
-  text-transform: uppercase; letter-spacing: .05em;
-  border-bottom: 1px solid var(--dsline);
-  padding-bottom: .25rem; margin-top: 1.6rem !important;
-}
-[data-testid="stMain"] h3 {
-  font-size: .95rem !important; font-weight: 700 !important;
-  letter-spacing: .03em;
-}
-
-/* metrics as title-block cells */
-[data-testid="stMetric"] {
-  background: var(--dspaper);
-  border: 1px solid var(--dsi);
-  border-radius: 0;
-  padding: .5rem .7rem;
-}
-[data-testid="stMetricLabel"] p {
-  font-family: var(--dsmono) !important;
-  font-size: .62rem !important;
-  letter-spacing: .12em !important;
-  text-transform: uppercase;
-  color: var(--dsi-soft) !important;
-}
-[data-testid="stMetricValue"] {
-  font-size: 1.5rem !important;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -.02em;
-}
-
-/* square everything — drawings have no rounded corners */
-.stButton > button, .stDownloadButton > button,
-[data-testid="stExpander"], .stTextInput input, .stNumberInput input,
-.stSelectbox [data-baseweb="select"] > div, [data-testid="stDataFrame"],
-[data-testid="stAlert"], .stMultiSelect [data-baseweb="select"] > div {
-  border-radius: 2px !important;
-}
-.stButton > button, .stDownloadButton > button {
-  border: 1px solid var(--dsi) !important;
-  font-family: var(--dsmono);
-  font-size: .78rem;
-  letter-spacing: .05em;
-  text-transform: uppercase;
-}
-.stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-  background: var(--dsi) !important; color: var(--dspaper) !important;
-}
-
-/* expanders as folded drawing notes */
-[data-testid="stExpander"] {
-  border: 1px solid var(--dsline) !important;
-  background: rgba(255,255,255,.66);
-}
-[data-testid="stExpander"] summary { font-size: .85rem; }
-
-/* captions / disclosures in the annotation voice */
-[data-testid="stCaptionContainer"] p {
-  font-size: .76rem !important;
-  color: var(--dsi-soft) !important;
-  line-height: 1.5;
-}
-
-/* tables: hairline, tabular, no zebra */
-[data-testid="stDataFrame"] { border: 1px solid var(--dsline) !important; }
-
-/* alerts as revision notes — a coloured left edge, no fill blob */
-[data-testid="stAlert"] {
-  border-left-width: 3px !important;
-  border-radius: 0 2px 2px 0 !important;
-}
-
-/* tabs / radios as drafting selectors */
-.stRadio [role="radiogroup"] label p { font-size: .85rem; }
-code, .stCode { font-family: var(--dsmono) !important; }
-</style>
-"""
-
-
-def inject_theme() -> None:
-    """Apply the Drawing Sheet stylesheet once per rerun."""
-    st.markdown(_THEME_CSS, unsafe_allow_html=True)
-
-
 def main() -> None:
-    inject_theme()
-
     # ---- access gate: active whenever APP_PASSWORD is set in secrets
     # (Streamlit Cloud -> app settings -> Secrets). Unset = open, for
     # local development. Client XERs are commercially sensitive; the

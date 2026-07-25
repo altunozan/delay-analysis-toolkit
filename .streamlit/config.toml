@@ -1,8 +1,12 @@
+# Drawing Sheet identity — light drafting paper. Deliberate: analysis
+# screenshots drop straight into a Word/PDF deliverable, where dark
+# captures look wrong. Revert kit: ui_variants/01_dark_original/
 [theme]
-primaryColor = "#54A8D8"
-backgroundColor = "#0f1117"
-secondaryBackgroundColor = "#161b22"
-textColor = "#c9d1d9"
+base = "light"
+primaryColor = "#14324A"              # drafting ink blue
+backgroundColor = "#FCFCFA"           # paper
+secondaryBackgroundColor = "#F1F5F9"  # panel / sidebar
+textColor = "#14324A"
 font = "sans serif"
 
 [client]

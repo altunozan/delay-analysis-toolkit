@@ -10,10 +10,10 @@ from __future__ import annotations
 import altair as alt
 import pandas as pd
 
-PLANNED_C = "#3b76c4"
-RECORDED_C = "#cf222e"
-GOOD_C = "#1a7f37"
-ACCENT_C = "#e8a33d"
+PLANNED_C = "#14324A"
+RECORDED_C = "#9B3227"
+GOOD_C = "#3F6B4F"
+ACCENT_C = "#B07A24"
 
 
 def chart_png(chart: alt.Chart, scale: float = 2.0) -> bytes:
@@ -275,11 +275,11 @@ def asbuilt_persistence_chart(res, max_rows: int = 70) -> alt.Chart | None:
 
 # Fixed stage palette: 9 hues in fixed order + neutral for Unclassified.
 STAGE_COLORS = {
-    "Design, Submittals & Approvals": "#3b76c4",
+    "Design, Submittals & Approvals": "#14324A",
     "Procurement & Fabrication": "#8a63d2",
     "Enabling, Access & MEP": "#0e8388",
     "Structure & Screed": "#8d6e63",
-    "Ceilings & Closures": "#e8a33d",
+    "Ceilings & Closures": "#B07A24",
     "Walls, Glazing & Cladding": "#c2185b",
     "Joinery, Doors & Flooring": "#5c9e31",
     "Finishes & Fit-Out": "#f4511e",
@@ -358,7 +358,7 @@ def tia_paths_chart(res) -> alt.Chart | None:
                         axis=alt.Axis(labelLimit=280, labelFontSize=8)),
                 color=alt.Color("Series:N", scale=alt.Scale(
                     domain=["Pre-impact", "Post-impact", "Fragnet"],
-                    range=["#4c8ede", "#cf222e", "#e8a33d"]),
+                    range=["#14324A", "#9B3227", "#B07A24"]),
                     legend=alt.Legend(orient="bottom", title=None)))
             .properties(width=620, height=max(160, 12 * len(order)),
                         title="Driving paths — pre vs post impact"))

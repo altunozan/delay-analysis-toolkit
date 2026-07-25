@@ -16,8 +16,8 @@ import json
 _TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   :root {
-    --canvas: #FCFCFA; --panel: #F1F5F9; --ink: #14324A; --muted: #5B7994;
-    --line: #C6D4E0; --strong: #8FA9BE; --navy: #14324A;
+    --canvas: #0f1117; --panel: #161b22; --ink: #c9d1d9; --muted: #8b949e;
+    --line: #2d333b; --strong: #444c56; --navy: #7cb7e8;
     --done: #2f9e44; --done-b: #23763375;
     --active: #f2a33c; --active-b: #b9770e75;
     --future: #4c8ede; --future-b: #2f5f9e75;
@@ -62,8 +62,8 @@ _TEMPLATE = """<!DOCTYPE html>
              display: flex; align-items: flex-end; padding: 0 0 4px 10px;
              font-size: 11px; font-weight: 700; color: var(--navy); }
   .row { display: flex; width: max-content; min-width: 100%; height: 26px; }
-  .row:nth-child(even) .lane { background-color: #F5F8FB; }
-  .row:hover .lane, .row:hover .label { background-color: #E8F0F7; }
+  .row:nth-child(even) .lane { background-color: #131922; }
+  .row:hover .lane, .row:hover .label { background-color: #1c2733; }
   .label { position: sticky; left: 0; z-index: 10; width: var(--treew);
            flex: none; background: var(--canvas); display: flex;
            align-items: center; font-size: 12px; white-space: nowrap;
@@ -467,7 +467,7 @@ def build_apab_gantt_html(
         r.get("planned_start"), r.get("planned_finish"),
         r.get("actual_start"), r.get("actual_finish")) if d]
     if not use or not dates:
-        return ("<body style='background:#FCFCFA;color:#5B7994;"
+        return ("<body style='background:#0f1117;color:#8b949e;"
                 "font-family:sans-serif'>No dated activities to draw."
                 "</body>")
     t0, t1 = min(dates), max(dates)
@@ -497,78 +497,55 @@ def build_apab_gantt_html(
                 "</div>")
 
     parts = ["""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
-  body { margin:0; background:#FCFCFA; color:#14324A;
-         font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif;
-         background-image:linear-gradient(#E4EDF4 1px,transparent 1px),
-                          linear-gradient(90deg,#E4EDF4 1px,transparent 1px);
-         background-size:22px 22px; }
-  .banner { background:#FCFCFA; border-bottom:2px solid #14324A;
-            padding:7px 14px; font-size:12px; color:#14324A;
-            position:sticky; top:0; z-index:20; font-weight:600;
-            text-transform:uppercase; letter-spacing:.07em; }
-  .banner b { color:#9B3227; font-size:14px; }
+  body { margin:0; background:#0f1117; color:#c9d1d9;
+         font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif; }
+  .banner { background:#161b22; border-bottom:1px solid #2d333b;
+            padding:8px 14px; font-size:13px; color:#e8eff3;
+            position:sticky; top:0; z-index:20; }
+  .banner b { color:#e27c63; }
   #wrap { overflow:auto; }
   table.cmp { border-collapse:collapse; }
-  .lbl { position:sticky; left:0; background:#FCFCFA; z-index:10;
-         border-right:1.5px solid #14324A; }
+  .lbl { position:sticky; left:0; background:#0f1117; z-index:10;
+         border-right:2px solid #7cb7e8; }
   .lbl div { display:flex; gap:8px; align-items:center;
              padding:0 8px; font-size:11.5px; white-space:nowrap; }
-  .aid { width:104px; color:#5B7994; overflow:hidden; flex:none;
-         font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:10.5px; }
-  .anm { width:230px; overflow:hidden; text-overflow:ellipsis; flex:none; }
-  .adt { width:74px; color:#5B7994; font-size:10.5px; flex:none;
-         font-family:ui-monospace,"SF Mono",Menlo,monospace;
+  .aid { width:104px; color:#8b949e; overflow:hidden; flex:none; }
+  .anm { width:230px; overflow:hidden; text-overflow:ellipsis;
+         flex:none; }
+  .adt { width:74px; color:#8b949e; font-size:10.5px; flex:none;
          font-variant-numeric:tabular-nums; }
-  .var { width:52px; text-align:right; font-weight:700; flex:none;
-         font-family:ui-monospace,"SF Mono",Menlo,monospace;
+  .var { width:52px; text-align:right; font-weight:600; flex:none;
          font-variant-numeric:tabular-nums; }
-  .late { color:#9B3227; } .early { color:#3F6B4F; }
-  .hdr .lbl div { color:#5B7994; font-size:9.5px; font-weight:600;
-                  border-bottom:2px solid #14324A; height:26px;
-                  text-transform:uppercase; letter-spacing:.09em;
-                  font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  .late { color:#e27c63; } .early { color:#5cb78f; }
+  .hdr .lbl div { color:#8b949e; font-size:10px; font-weight:600;
+                  border-bottom:2px solid #7cb7e8; height:26px; }
   tr.r { height:34px; }
-  tr.r:nth-child(even) td { background:rgba(20,50,74,.028); }
-  tr.kd td { background:rgba(155,50,39,.055) !important; }
-  .lane { position:relative; border-bottom:1px solid #DDE7EF;
+  tr.r:nth-child(even) td { background:#131922; }
+  tr.kd td { background:#1a2030 !important; }
+  .lane { position:relative; border-bottom:1px solid #2d333b;
           background-image:repeating-linear-gradient(90deg,
-            #EDF3F8 0 1px, transparent 1px 100%); }
-  .bar { position:absolute; }
-  .pl  { top:12px; height:0; border-top:1.5px solid #14324A; }
-  .pl::before, .pl::after { content:""; position:absolute; top:-4px;
-                            width:1.5px; height:9px; background:#14324A; }
-  .pl::before { left:0; } .pl::after { right:0; }
-  .ab  { top:19px; height:7px; border:.5px solid #9B3227; }
+            #1b2129 0 1px, transparent 1px 100%); }
+  .bar { position:absolute; height:9px; border-radius:2px; }
+  .pl  { top:19px; background:#3d5a80; outline:1px solid #5b7ba3; }
+  .ab  { top:6px; }
   .dia { position:absolute; width:10px; height:10px; top:11px;
          transform:rotate(45deg); }
-  .conn { position:absolute; top:15px; border-top:1.5px dashed #5B7994; }
-  .dlab { position:absolute; top:5px; font-size:9.5px; font-weight:700;
-          white-space:nowrap;
-          font-family:ui-monospace,"SF Mono",Menlo,monospace; }
-  .leg { padding:5px 14px; font-size:10px; color:#5B7994;
-         background:#F1F5F9; border-bottom:1px solid #C6D4E0;
-         text-transform:uppercase; letter-spacing:.08em;
-         font-family:ui-monospace,"SF Mono",Menlo,monospace; }
-  .sw { display:inline-block; width:14px; height:7px; margin:0 4px;
-        vertical-align:middle; }
-  .mon { position:absolute; top:0; bottom:0; border-left:1px solid #D3E0EA;
-         color:#5B7994; font-size:9px; padding-left:3px;
-         font-family:ui-monospace,"SF Mono",Menlo,monospace; }
-  .tblock { display:flex; border-top:2px solid #14324A; background:#FCFCFA;
-            font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:9px;
-            flex-wrap:wrap; }
-  .tblock div { border-right:1px solid #14324A; padding:4px 9px; }
-  .tblock div:last-child { border-right:0; }
-  .tblock span { display:block; color:#5B7994; letter-spacing:.11em;
-                 font-size:7.5px; text-transform:uppercase; }
-  .tblock b { font-size:10px; letter-spacing:.02em; }
+  .conn { position:absolute; top:15px; border-top:1.5px dashed #8b949e; }
+  .dlab { position:absolute; top:8px; font-size:10px; font-weight:700;
+          white-space:nowrap; }
+  .leg { padding:6px 14px; font-size:11px; color:#8b949e;
+         background:#161b22; border-bottom:1px solid #2d333b; }
+  .sw { display:inline-block; width:14px; height:8px; margin:0 4px;
+        vertical-align:middle; border-radius:2px; }
+  .mon { position:absolute; top:0; bottom:0; border-left:1px solid
+         #232a33; color:#8b949e; font-size:9.5px; padding-left:3px; }
 </style></head><body>""", head, """
-<div class='leg'>
-<span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late
-<span class='sw' style='background:repeating-linear-gradient(45deg,#3F6B4F 0 3px,#8FB39B 3px 6px);border:.5px solid #3F6B4F'></span>as-built on time
-<span class='sw' style='height:0;border-top:1.5px solid #14324A'></span>as-planned
-<span style='color:#14324A'>&#9670;</span> key date actual
-<span style='color:#5B7994'>&#9671;</span> planned</div>
+<div class='leg'><span class='sw' style='background:#e27c63'></span>
+as-built (late finish) <span class='sw' style='background:#5cb78f'></span>
+as-built (on/early) <span class='sw' style='background:#3d5a80'></span>
+as-planned <span style='color:#7cb7e8'>&#9670;</span> key date (actual)
+<span style='color:#8b949e'>&#9671;</span> key date (planned) — dashed
+connector = key-date slippage</div>
 <div id='wrap'><table class='cmp'>"""]
 
     hdr_cells = ("<td class='lbl'><div><span class='aid'>Activity ID"
@@ -609,10 +586,7 @@ def build_apab_gantt_html(
                         "</div>")
         if as_:
             ae = af or as_
-            col = ("repeating-linear-gradient(45deg,#9B3227 0 3px,"
-                   "#C9857C 3px 6px)" if (var or 0) > 0 else
-                   "repeating-linear-gradient(45deg,#3F6B4F 0 3px,"
-                   "#8FB39B 3px 6px)")
+            col = "#e27c63" if (var or 0) > 0 else "#5cb78f"
             kids.append(f"<div class='bar ab' style='left:{x(as_):.0f}px;"
                         f"width:{max(x(ae)-x(as_),3):.0f}px;"
                         f"background:{col}' title='{code} as-built "
@@ -620,9 +594,9 @@ def build_apab_gantt_html(
         if is_kd and pf and af:
             xa, xp = x(af), x(pf)
             kids.append(f"<div class='dia' style='left:{xp-5:.0f}px;"
-                        "outline:1.5px solid #5B7994'></div>")
+                        "outline:1.5px solid #8b949e'></div>")
             kids.append(f"<div class='dia' style='left:{xa-5:.0f}px;"
-                        "background:#14324A'></div>")
+                        "background:#7cb7e8'></div>")
             lo, hi = min(xa, xp), max(xa, xp)
             if hi - lo > 2:
                 kids.append(f"<div class='conn' style='left:{lo:.0f}px;"
@@ -633,14 +607,5 @@ def build_apab_gantt_html(
                      f"<td class='lane' style='min-width:{W:.0f}px'>"
                      + "".join(kids) + "</td></tr>")
 
-    parts.append("</table></div>")
-    _late = sum(1 for r in use if (r.get("finish_var_days") or 0) > 0)
-    parts.append(
-        "<div class='tblock'>"
-        f"<div><span>Analysis</span><b>{title}</b></div>"
-        f"<div><span>Activities</span><b>{len(use)}</b></div>"
-        f"<div><span>Later than planned</span><b>{_late}</b></div>"
-        f"<div><span>Key dates</span><b>{len(keydates)}</b></div>"
-        "<div><span>Basis</span><b>Calendar days, as recorded</b></div>"
-        "</div></body></html>")
+    parts.append("</table></div></body></html>")
     return "".join(parts)

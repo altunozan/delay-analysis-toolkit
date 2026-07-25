@@ -94,12 +94,14 @@ def main() -> int:
             check("status strip shows empty state",
                   page.get_by_text("No programmes loaded").count() > 0)
             # all three sidebar group headers present (expanded nav)
+            # inner_text() returns text AS RENDERED — the Drawing Sheet
+            # theme uppercases nav section headers, so compare casefolded.
             navtext = page.locator(
-                '[data-testid="stSidebarNav"]').inner_text()
+                '[data-testid="stSidebarNav"]').inner_text().lower()
             for grp in ("Forensic Programme Analysis", "Retrospective",
                         "Prospective"):
-                check(f"sidebar group '{grp}' present", grp in navtext,
-                      "not in nav; still collapsed?")
+                check(f"sidebar group '{grp}' present",
+                      grp.lower() in navtext, "not in nav; still collapsed?")
             check("no 'View more' collapse (all pages visible)",
                   "View" not in navtext or "more" not in navtext.lower())
 
