@@ -1598,6 +1598,79 @@ check("L5b missing anchor falls back with disclosure",
           for w in _cab2(_j_u2, "U", set(),
                          anchor_code="NOPE-1").warnings))
 
+
+# ===================================================================== #
+# Layer M — LOCAL field-corpus regression (client programmes on this
+# machine; never committed). Runs only when the corpus folder exists —
+# CI and other machines skip it silently. Answers the review's "one
+# project's data validates everything" with four real project families.
+# ===================================================================== #
+import os as _os
+_FIELD = _os.path.expanduser("~/Desktop/Programmes")
+if _os.path.isdir(_FIELD):
+    print("\n--- Layer M: field corpus (local only) ---")
+    import glob as _glob
+    from programme import analyse_windows as _aw3
+
+    _m_files = sorted(_glob.glob(_FIELD + "/*/*.xer"))
+    _m_ok, _m_val, _m_bad = 0, 0, []
+    _m_parsed = {}
+    for _f in _m_files:
+        try:
+            _m_parsed[_f] = parse_xer(_f)
+            _m_ok += 1
+        except ValueError:
+            _m_val += 1
+        except Exception as _exc:            # noqa: BLE001
+            _m_bad.append(f"{_f.split('/')[-1]}: "
+                          f"{type(_exc).__name__}")
+    check("M1 every field file parses or raises controlled ValueError",
+          not _m_bad and _m_ok >= 15, str(_m_bad))
+    check("M1b the structure-only NCC export is REFUSED (zero tasks)",
+          _m_val >= 1)
+
+    def _m_series(sub):
+        out = [(f.split("/")[-1], d) for f, d in _m_parsed.items()
+               if f"/{sub}/" in f]
+        out.sort(key=lambda p: p[1].project.data_date)
+        return out
+
+    _ncc = _m_series("NCC")
+    if len(_ncc) >= 3:
+        _m_w = _aw3(_ncc)
+        _m_id_ok = all(
+            abs(w.performance_days + w.replanning_days
+                - w.engine_window_days) < 0.15
+            for w in _m_w.windows if w.engine_window_days is not None)
+        check("M2 NCC monthly series: bifurcation identity holds in "
+              "every window", _m_id_ok and len(_m_w.windows) >= 6)
+        check("M2b duplicate data-date revision pair warned",
+              any("does not have a later data date" in w
+                  for w in _m_w.warnings))
+
+    _ish = _m_series("Ishtar")
+    if _ish:
+        _m_fl = out_of_sequence_flags(_ish[-1][1])
+        check("M3 Ishtar reversed-order as-built stays review-class "
+              "(never auto-fitted)",
+              len(_m_fl) > 0
+              and all(f.rec_link_type == "review" for f in _m_fl))
+
+    _sp_files = [f for f in _m_parsed if "/SPML/" in f]
+    if _sp_files:
+        import time as _time
+        _sp = _m_parsed[_sp_files[0]]
+        _t0 = _time.time()
+        run_all_checks(_sp, DCMAConfig())
+        out_of_sequence_flags(_sp)
+        from programme import collapse_asbuilt as _cab3
+        _m_cab = _cab3(_sp, "SPML", set())
+        _dt = _time.time() - _t0
+        check("M4 17k-task file: DCMA + OOS + collapse under 30s",
+              _dt < 30, f"{_dt:.1f}s")
+        check("M4b heavy-OOS file: collapse validation gap warned",
+              any("validation gap" in w for w in _m_cab.warnings))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

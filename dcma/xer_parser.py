@@ -108,6 +108,16 @@ def parse_xer(path_or_text: str | bytes, config: DCMAConfig | None = None) -> Xe
         # Unknown markers (rare) are ignored.
 
     _build_models(data, config)
+    if not data.tasks:
+        # Real-world specimen: a 27MB export carrying 25 copies of the
+        # project's structural tables and no TASK table at all. A file
+        # with zero activities cannot feed ANY module — fail loudly
+        # instead of returning a silently empty programme.
+        raise ValueError(
+            "The file parsed but contains no activities (no TASK rows). "
+            "It may be a structure-only export, an interrupted export, "
+            "or a concatenation of project-structure blocks — re-export "
+            "from P6 with activities included.")
     return data
 
 
