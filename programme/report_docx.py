@@ -1,4 +1,4 @@
-"""Module 11 — Report Assembler.
+"""Report Assembler.
 
 Assembles the per-module narratives and key findings into one Word document:
 title page, one chapter per included module, a single deduplicated

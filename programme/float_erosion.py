@@ -1,4 +1,4 @@
-"""Module 9 — Float Erosion Tracker.
+"""Float Erosion Tracker.
 
 Tracks total float across programme revisions: the float profile of each
 revision (how much of the incomplete work is critical, near-critical, or

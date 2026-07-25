@@ -1,4 +1,4 @@
-"""Module 14 — Hierarchy Rebuild (configurable re-grouping overlay).
+"""Hierarchy Rebuild (configurable re-grouping overlay).
 
 Reorganises a programme by disregarding its stored WBS arrangement and
 grouping activities under a user-defined hierarchy built from any ordered

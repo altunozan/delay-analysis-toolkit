@@ -1,4 +1,4 @@
-"""Module 3 — Milestone Shift Tracker.
+"""Milestone Shift Tracker.
 
 Tracks how the forecast (or actual) date of key milestones drifts across a set
 of programme revisions. The forensic view is: x-axis = data date of each

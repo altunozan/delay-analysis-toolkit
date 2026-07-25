@@ -1,4 +1,4 @@
-"""Module 6b — Comparison Impact & Materiality Screening.
+"""Comparison Impact & Materiality Screening.
 
 Elevates the descriptive revision diff (Module 6) from "what changed" to
 "which changes deserve attention". Three layers, all deterministic:

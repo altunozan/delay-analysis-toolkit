@@ -1,4 +1,4 @@
-"""Module 13 — Sequence Coding (propose-confirm work front × stage).
+"""Sequence Coding (propose-confirm work front × stage).
 
 Where activity codes are incomplete and the WBS unhelpful, an analyst
 recodes the programme to expose the construction sequence: a work-front

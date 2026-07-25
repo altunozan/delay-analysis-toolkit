@@ -1,4 +1,4 @@
-"""Module 8 — Progress S-curve (planned vs recorded).
+"""Progress S-curve (planned vs recorded).
 
 Builds the planned cumulative progress profile from the baseline and the
 recorded profile from an update's actualised dates and physical percent

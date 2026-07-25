@@ -1,4 +1,4 @@
-"""Module 12 — As-Built Critical Path (contemporaneous reconstruction).
+"""As-Built Critical Path (contemporaneous reconstruction).
 
 Two deterministic, mutually reinforcing views of what actually drove the
 works, both read from the project's own contemporaneous programmes:

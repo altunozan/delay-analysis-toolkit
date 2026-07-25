@@ -1,4 +1,4 @@
-"""Module 0 — Intake & Data Inventory.
+"""Intake & Data Inventory.
 
 Catalogues the set of programme revisions supplied for analysis and, crucially,
 what is *missing*. Every downstream programme module depends on this: the

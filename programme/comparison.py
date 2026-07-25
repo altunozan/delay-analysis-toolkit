@@ -1,4 +1,4 @@
-"""Module 6 — Revision Comparison / Change Log.
+"""Revision Comparison / Change Log.
 
 Diffs two programme revisions (a "Claim Digger" equivalent): added and
 deleted activities, renamed activities, original-duration changes, logic

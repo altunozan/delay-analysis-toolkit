@@ -1,4 +1,4 @@
-"""Module 20 — Impacted As-Planned (baseline + event fragnets).
+"""Impacted As-Planned (baseline + event fragnets).
 
 Distinct from the update-based prospective TIA: the analyst-confirmed
 event fragnets are inserted into the ORIGINAL BASELINE (no progress) in

@@ -1,0 +1,46 @@
+name: CI
+
+# Every push and PR: compile everything, then run the deterministic
+# engine suite. Python 3.14 matches Streamlit Cloud's runtime — the
+# altair-6 incident (Cloud jumped majors and the app failed to boot)
+# is exactly the class of break this matrix catches before users do.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  engine:
+    name: compile + test_qa (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.14"]   # local dev / Streamlit Cloud
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Byte-compile every module (catches syntax/f-string breaks)
+        run: python -m compileall -q app.py dcma programme
+      - name: Engine QA suite
+        run: python test_qa.py
+
+  ui:
+    name: Playwright UI harness (py3.14)
+    runs-on: ubuntu-latest
+    # Non-blocking until proven stable in CI; the engine job is the gate.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install -r requirements.txt playwright
+      - run: playwright install --with-deps chromium
+      - run: python test_ui.py

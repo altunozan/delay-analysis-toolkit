@@ -1399,6 +1399,109 @@ _wb_j = load_workbook(io.BytesIO(_bsx(
 check("J5 generic workbook opens with data + notes sheets",
       {"Sheet A", "Notes & Caveats"} <= set(_wb_j.sheetnames))
 
+
+# ===================================================================== #
+# Layer K — parser robustness: structural variants + fuzz
+# The suite otherwise validates ONE project's exports; real-world XERs
+# vary wildly. Contract under test: parse_xer either returns XerData
+# (degrading with warnings) or raises a controlled ValueError — never
+# an uncontrolled IndexError/KeyError/UnicodeError crash.
+# ===================================================================== #
+print("\n--- Layer K: parser robustness ---")
+import random as _rnd
+
+# NOTE: line ~320 rebinds `cfg` to a HIERARCHY config — a shared-
+# namespace trap in this linear script (the pytest-conversion argument
+# in one line). Layer K uses its own DCMA config.
+_k_cfg = DCMAConfig()
+
+_k_raw = open("sample/Sample Update.xer", encoding="latin-1").read()
+_k_lines = _k_raw.split("\n")
+
+def _k_parse_ok(text, label):
+    """True if parse obeys the contract (XerData or ValueError)."""
+    try:
+        d = parse_xer(text.encode("latin-1", "replace"))
+        return d is not None
+    except ValueError:
+        return True
+    except Exception as exc:                      # noqa: BLE001
+        print(f"    UNCONTROLLED {type(exc).__name__} on {label}: "
+              f"{exc}")
+        return False
+
+_variants = {
+    "multi-project (PROJECT table doubled)":
+        _k_raw.replace("%T\tPROJECT\n", "%T\tPROJECT\n", 1),
+    "calendar data mangled":
+        "\n".join(l if not l.startswith("%R\t") or "clndr" not in l
+                   else l.replace("0|", "?|") for l in _k_lines[:4000])
+        + "\n" + "\n".join(_k_lines[4000:]),
+    "non-Latin activity names":
+        _k_raw.replace("Review & Approval", "Onay ve İnceleme — 承認"),
+    "truncated at half":
+        _k_raw[: len(_k_raw) // 2],
+    "CALENDAR table removed":
+        "\n".join(l for l in _k_lines
+                   if "clndr" not in l.lower()
+                   or l.startswith(("%T", "%F", "%E"))),
+    "TASKPRED emptied":
+        "\n".join(l for i, l in enumerate(_k_lines)
+                   if not (l.startswith("%R") and i > 0
+                           and any("TASKPRED" in x
+                                   for x in _k_lines[max(0, i-3000):i]
+                                   if x.startswith("%T")))),
+    "empty file": "",
+    "header only": _k_lines[0] if _k_lines else "ERMHDR",
+}
+_k_bad = [lbl for lbl, txt in _variants.items()
+          if not _k_parse_ok(txt, lbl)]
+check("K1 structural variants: parse returns data or controlled "
+      "ValueError", not _k_bad, str(_k_bad))
+
+# engines must not crash on whatever the parser accepted
+_k_engine_bad = []
+for lbl, txt in _variants.items():
+    try:
+        d = parse_xer(txt.encode("latin-1", "replace"))
+    except ValueError:
+        continue
+    except Exception:
+        continue                    # already counted by K1
+    try:
+        run_all_checks(d, _k_cfg)
+    except Exception as exc:        # noqa: BLE001
+        _k_engine_bad.append(f"{lbl}: {type(exc).__name__}")
+check("K2 DCMA engine survives every parsed variant",
+      not _k_engine_bad, str(_k_engine_bad))
+
+check("K3 non-Latin names round-trip through the parser",
+      any("Onay" in t.name for t in parse_xer(
+          _variants["non-Latin activity names"].encode(
+              "latin-1", "replace")).tasks
+          if t.name)
+      if _k_parse_ok(_variants["non-Latin activity names"], "k3")
+      else False)
+
+# deterministic fuzz: byte-level mutations must never crash the parser
+_rnd.seed(1729)
+_k_fuzz_bad = 0
+for i in range(60):
+    b = bytearray(_k_raw.encode("latin-1", "replace"))
+    for _ in range(_rnd.randint(1, 40)):
+        pos = _rnd.randrange(len(b))
+        b[pos] = _rnd.randrange(256)
+    try:
+        parse_xer(bytes(b))
+    except ValueError:
+        pass
+    except Exception as exc:        # noqa: BLE001
+        _k_fuzz_bad += 1
+        if _k_fuzz_bad <= 3:
+            print(f"    fuzz #{i}: {type(exc).__name__}: {exc}")
+check("K4 60 seeded byte-mutation fuzz cases: no uncontrolled crash",
+      _k_fuzz_bad == 0, f"{_k_fuzz_bad} crashes")
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

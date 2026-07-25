@@ -1,4 +1,4 @@
-"""Module 21 — Collapsed As-Built (but-for) analysis.
+"""Collapsed As-Built (but-for) analysis.
 
 Only requires the as-built programme. The as-built model is UNSTATUSED
 (actual durations kept, actual dates released), rescheduled to validate

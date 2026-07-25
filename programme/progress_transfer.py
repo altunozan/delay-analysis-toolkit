@@ -1,4 +1,4 @@
-"""Module 17 — Progress Transfer.
+"""Progress Transfer.
 
 Statuses one programme's network (the *network donor* — typically the
 baseline or an earlier trusted update) with another programme's recorded
@@ -51,13 +51,13 @@ from dcma.config import DCMAConfig
 from dcma.xer_parser import XerData
 
 from .oos import OOS_CAVEATS, out_of_sequence_flags
-from .tia import (
-    _START_FLOOR_CSTR,
-    _REL_TO_SHORT,
-    _build_network,
-    _calendar_masks,
-    _forward_pass,
-    _parse_xer_date,
+from .cpm import (
+    REL_TO_SHORT,
+    START_FLOOR_CSTR,
+    build_network,
+    calendar_masks,
+    forward_pass,
+    parse_xer_date,
 )
 
 STANDING_CAVEATS = [
@@ -149,10 +149,10 @@ def _network_with_progress(
     """Build the transferred CPM network.
 
     Nodes/logic/durations/calendars come from ``net``; actual progress
-    comes from ``prog``. Mirrors ``tia._build_network`` so the transferred
+    comes from ``prog``. Mirrors ``tia.build_network`` so the transferred
     and reference runs share one method.
     """
-    masks = _calendar_masks(net)
+    masks = calendar_masks(net)
     warnings: list[str] = []
     prog_by_code = {t.task_code: t for t in prog.tasks
                     if not t.is_loe_or_wbs}
@@ -186,7 +186,7 @@ def _network_with_progress(
         code_of[t.task_id] = code
 
     # Start constraints from the NETWORK donor as early-start floors —
-    # identical treatment to tia._build_network.
+    # identical treatment to tia.build_network.
     floored = 0
     for row in net.raw_tables.get("TASK", []):
         code = (row.get("task_code") or "").strip()
@@ -195,8 +195,8 @@ def _network_with_progress(
         for tkey, dkey in (("cstr_type", "cstr_date"),
                            ("cstr_type2", "cstr_date2")):
             ctype = (row.get(tkey) or "").strip()
-            if ctype in _START_FLOOR_CSTR:
-                cdate = _parse_xer_date(row.get(dkey) or "")
+            if ctype in START_FLOOR_CSTR:
+                cdate = parse_xer_date(row.get(dkey) or "")
                 if cdate is not None:
                     started[code] = max(started.get(code, cdate), cdate)
                     floored += 1
@@ -217,7 +217,7 @@ def _network_with_progress(
             continue
         hpd = net.hours_per_day(pred_task, config)
         lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
-        preds[s].append((p, _REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
+        preds[s].append((p, REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
 
     stats_msg: list[str] = []
     if stats["unmatched"]:
@@ -295,7 +295,7 @@ def run_progress_transfer(
             "complete in the progress file.")
         return result
 
-    ES_t, EF_t, w_t, drv_t = _forward_pass(
+    ES_t, EF_t, w_t, drv_t = forward_pass(
         dict(nodes_t), {k: list(v) for k, v in preds_t.items()},
         dd, started_t)
 
@@ -308,14 +308,14 @@ def run_progress_transfer(
                    if p in keep]
                for c in keep}
     started_i = {c: d for c, d in started_t.items() if c in keep}
-    ES_i, EF_i, w_i, drv_i = _forward_pass(
+    ES_i, EF_i, w_i, drv_i = forward_pass(
         dict(nodes_i), {k: list(v) for k, v in preds_i.items()},
         dd, started_i)
 
     # --- reference run: the progress donor scheduled by the same method --
-    inc_r, nodes_r, preds_r, started_r, _masks_r, w_r = _build_network(
+    inc_r, nodes_r, preds_r, started_r, _masks_r, w_r = build_network(
         progress, config, dd)
-    ES_r, EF_r, w_r2, drv_r = _forward_pass(
+    ES_r, EF_r, w_r2, drv_r = forward_pass(
         dict(nodes_r), {k: list(v) for k, v in preds_r.items()},
         dd, started_r)
     result.warnings.extend(sorted(set(w_t + w_i + w_r + w_r2)))

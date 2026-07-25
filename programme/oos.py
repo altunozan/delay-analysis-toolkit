@@ -1,4 +1,4 @@
-"""Module 18 — Out-of-Sequence Screening & As-Built Logic Repair.
+"""Out-of-Sequence Screening & As-Built Logic Repair.
 
 Standalone OOS module (the screening engine formerly embedded in the
 comparison-impact module lives here now):

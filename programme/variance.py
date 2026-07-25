@@ -1,4 +1,4 @@
-"""Module 4 — Preliminary As-Planned vs As-Recorded.
+"""Preliminary As-Planned vs As-Recorded.
 
 A *screening-level* view of where slippage clusters. The analyst picks an
 activity-code dimension (area, work type, phase, ...); the engine re-breaks the

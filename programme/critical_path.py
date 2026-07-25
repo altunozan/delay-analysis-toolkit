@@ -1,4 +1,4 @@
-"""Module 5 — Baseline Planned Critical Path.
+"""Baseline Planned Critical Path.
 
 Extracts the planned critical path from a single programme (typically the
 baseline): the set of activities at or below a total-float tolerance, the

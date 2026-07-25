@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import hashlib
+import hmac
 import io
 import os
 from datetime import datetime
@@ -24,6 +25,8 @@ from datetime import datetime
 import altair as alt
 import pandas as pd
 import streamlit as st
+
+import state as sk
 
 from dcma import (DCMAConfig, annotate_path_position, build_dcma_trace,
                   parse_xer, run_all_checks)
@@ -210,7 +213,7 @@ GAIN_COLOR = "#1a7f37"
 
 def get_parsed_files() -> list[tuple[str, object]]:
     """Parsed XER pool from the intake tab (cached in session state)."""
-    return st.session_state.get("xer_pool", [])
+    return st.session_state.get(sk.XER_POOL, [])
 
 
 # ---------------------------------------------------------------------- #
@@ -224,7 +227,7 @@ def get_parsed_files() -> list[tuple[str, object]]:
 
 def _fkey(name: str) -> str:
     """Cache key for an uploaded file: its intake SHA-256 (name fallback)."""
-    return st.session_state.get("xer_hashes", {}).get(name, name)
+    return st.session_state.get(sk.XER_HASHES, {}).get(name, name)
 
 
 def _cfgkey(cfg) -> tuple:
@@ -289,6 +292,37 @@ def cached_float_path(key: str, label: str, tol: float, near: float, _data):
                                  near_critical_days=near)
 
 
+def ai_credentials_panel(page: str) -> None:
+    """THE one AI-credentials component. Widgets are page-local (widget-
+    backed state dies when its page is not rendered); values are copied
+    into the plain shared keys so the registration survives navigation
+    and every module reuses it."""
+    a1, a2 = st.columns(2)
+    pkey = f"aic_prov_{page}"
+    if pkey not in st.session_state:
+        st.session_state[pkey] = st.session_state.get(
+            sk.AI_PROVIDER, next(iter(PROVIDERS)))
+    prov = a1.selectbox("AI provider", options=list(PROVIDERS.keys()),
+                        format_func=lambda p: PROVIDERS[p]["label"],
+                        key=pkey)
+    st.session_state[sk.AI_PROVIDER] = prov
+    pinfo = PROVIDERS[prov]
+    st.session_state[sk.AI_MODEL] = model_selector(
+        a2, pinfo, f"aic_model_{page}_{prov}")
+    env = os.environ.get(pinfo["env_var"], "")
+    if prov == "gemini" and not env:
+        env = os.environ.get("GOOGLE_API_KEY", "")
+    wkey = f"aic_key_{page}"
+    if wkey not in st.session_state:
+        st.session_state[wkey] = st.session_state.get(sk.AI_KEY) or env
+    st.text_input(f"{pinfo['label']} API key", type="password", key=wkey,
+                  help="Held in this session only; never stored.")
+    st.session_state[sk.AI_KEY] = st.session_state[wkey]
+    if not st.session_state.get(sk.AI_KEY):
+        st.caption("You can proceed without a key — AI assistance will "
+                   "be disabled.")
+
+
 def basis_panel(module: str, data, engine_lines: list[str]) -> None:
     """Scheduling-basis disclosure: what OUR engine did (method, tolerance,
     terminal, statusing rule) plus the settings the FILE's own forecast was
@@ -296,7 +330,7 @@ def basis_panel(module: str, data, engine_lines: list[str]) -> None:
     Report Assembler prints every module's basis in the Basis of Analysis —
     the first thing an opposing expert attacks."""
     file_lines = sched_options_summary(data) if data is not None else []
-    st.session_state.setdefault("analysis_basis", {})[module] = (
+    st.session_state.setdefault(sk.ANALYSIS_BASIS, {})[module] = (
         engine_lines + [f"P6 scheduling options (file): {ln}"
                         for ln in file_lines])
     with st.expander("Scheduling basis (disclosed in the report)"):
@@ -312,7 +346,7 @@ def basis_panel(module: str, data, engine_lines: list[str]) -> None:
 
 def status_strip() -> None:
     """One-line persistent state banner: what is loaded, on every page."""
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     files = get_parsed_files()
     if not files or inv is None:
         st.caption("📁 No programmes loaded — start at "
@@ -366,11 +400,15 @@ def ai_narrative_panel(
                  "reproduce all caveats) are fixed and applied regardless.",
         )
         pcol1, pcol2 = st.columns(2)
+        _pk = f"{state_key}_provider"
+        if _pk not in st.session_state and st.session_state.get(
+                sk.AI_PROVIDER):
+            st.session_state[_pk] = st.session_state[sk.AI_PROVIDER]
         provider = pcol1.selectbox(
             "AI provider",
             options=list(PROVIDERS.keys()),
             format_func=lambda p: PROVIDERS[p]["label"],
-            key=f"{state_key}_provider",
+            key=_pk,
         )
         pinfo = PROVIDERS[provider]
         model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
@@ -380,7 +418,7 @@ def ai_narrative_panel(
         api_key = st.text_input(
             f"{pinfo['label']} API key",
             type="password",
-            value=env_key,
+            value=st.session_state.get(sk.AI_KEY) or env_key,
             help=f"Get a key at {pinfo['key_hint']}. Used only for this "
                  "request; never stored.",
             key=f"{state_key}_key",
@@ -462,7 +500,7 @@ def intake_tab() -> None:
         sources = [(u.name, u, u.size) for u in uploads or []]
 
     signature = tuple(sorted((name, size) for name, _, size in sources))
-    if signature != st.session_state.get("xer_pool_sig"):
+    if signature != st.session_state.get(sk.XER_POOL_SIG):
         files = []
         hashes: dict[str, str] = {}
         for name, src, _ in sources:
@@ -473,7 +511,7 @@ def intake_tab() -> None:
                 else:
                     raw = src.getvalue()
                 hashes[name] = hashlib.sha256(raw).hexdigest()
-                st.session_state.setdefault("xer_raw", {})[name] = raw
+                st.session_state.setdefault(sk.XER_RAW, {})[name] = raw
                 data = parse_xer(raw, DCMAConfig())
             except Exception as exc:  # noqa: BLE001 - surface per-file errors
                 st.warning(f"Skipped '{name}': {exc}")
@@ -482,9 +520,9 @@ def intake_tab() -> None:
                 st.warning(f"Skipped '{name}': no TASK table found.")
                 continue
             files.append((name, data))
-        st.session_state["xer_pool"] = files
-        st.session_state["xer_hashes"] = hashes
-        st.session_state["xer_pool_sig"] = signature
+        st.session_state[sk.XER_POOL] = files
+        st.session_state[sk.XER_HASHES] = hashes
+        st.session_state[sk.XER_POOL_SIG] = signature
         # New data invalidates cached narratives.
         for key in list(st.session_state):
             if key.startswith("nar_"):
@@ -507,7 +545,7 @@ def intake_tab() -> None:
                      else baseline_choice)
 
     inv = build_inventory(files, baseline_file=baseline_file)
-    st.session_state["inventory"] = inv
+    st.session_state[sk.INVENTORY] = inv
 
     st.subheader("Data Inventory")
     inv_df = pd.DataFrame([
@@ -537,7 +575,7 @@ def intake_tab() -> None:
         "nar_inventory",
         lambda tmpl: build_inventory_prompt(inv, tmpl),
         "data_inventory",
-        DEFAULT_TEMPLATES["inventory"],
+        DEFAULT_TEMPLATES[sk.INVENTORY],
     )
     st.download_button(
         "⬇️ Download inventory (Excel)",
@@ -549,7 +587,17 @@ def intake_tab() -> None:
     # ------------------------------------------------------------------ #
     # Project library — local chain-of-custody register
     # ------------------------------------------------------------------ #
+    _on_cloud = os.path.exists("/mount/src")
     with st.expander("📚 Project library — local chain-of-custody register"):
+        if _on_cloud:
+            st.warning(
+                "Cloud deployment: this host's filesystem is EPHEMERAL — "
+                "anything registered here evaporates on the next "
+                "redeploy, so a register kept here is NOT a chain-of-"
+                "custody record you could put to a tribunal. Run the "
+                "toolkit locally (or on a host with durable storage) "
+                "for a register that actually persists; the SHA-256 "
+                "hashes above remain valid either way.")
         st.caption(
             "An append-only local register: each file's SHA-256, size and "
             "registration time. Identical content is never duplicated, so "
@@ -565,7 +613,7 @@ def intake_tab() -> None:
                                     key="lib_project")
         if st.button("Register uploaded files in the library",
                      disabled=not lib_project.strip()):
-            raw_pool = st.session_state.get("xer_raw", {})
+            raw_pool = st.session_state.get(sk.XER_RAW, {})
             try:
                 store = ProjectStore()
                 added, dups = 0, 0
@@ -937,7 +985,7 @@ def milestone_tab() -> None:
         "X-axis = revision data date; a rising line = slippage."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -1115,7 +1163,7 @@ def variance_tab() -> None:
         "group. Preliminary and indicative only."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -1344,7 +1392,7 @@ def hierarchy_tab() -> None:
         "codes are changed."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -1496,7 +1544,7 @@ def sequence_tab() -> None:
         "mapping is disclosed with the report."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -1867,7 +1915,7 @@ def asbuilt_tab() -> None:
         "by window, plus the criticality persistence index."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** tab "
                 "first — the reconstruction reads criticality from each "
@@ -2073,7 +2121,7 @@ def report_tab() -> None:
         "settings)."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -2514,7 +2562,7 @@ def report_tab() -> None:
     include_charts = st.toggle("Embed module charts in the report",
                                value=True, key="rep_charts")
 
-    hashes = st.session_state.get("xer_hashes", {})
+    hashes = st.session_state.get(sk.XER_HASHES, {})
     basis = BasisOfAnalysis(
         files=[SourceFile(
             file_name=r.file_name,
@@ -2527,7 +2575,7 @@ def report_tab() -> None:
         settings=[s for c in selected for s in c["settings"]]
         + [f"{m} — {s}"
            for m, lines in sorted(
-               st.session_state.get("analysis_basis", {}).items())
+               st.session_state.get(sk.ANALYSIS_BASIS, {}).items())
            for s in lines],
     )
 
@@ -2575,7 +2623,7 @@ def resources_tab() -> None:
         "— planned deployment as scheduled, not actual expenditure."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -2653,7 +2701,7 @@ def float_erosion_tab() -> None:
         "window."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** tab "
                 "first.")
@@ -2764,7 +2812,7 @@ def progress_tab() -> None:
         "the curves."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -2886,7 +2934,7 @@ def oos_tab() -> None:
         "confirmed fits applied. The source file is never modified."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -2958,7 +3006,7 @@ def oos_tab() -> None:
         r.apply = bool(apply_sel) and not r.blocked
     n_sel = sum(1 for r in plan if r.apply)
 
-    raw = st.session_state.get("xer_raw", {}).get(chosen)
+    raw = st.session_state.get(sk.XER_RAW, {}).get(chosen)
     report = None
     if raw is None:
         st.warning("Raw file text unavailable for this file — reload it "
@@ -3031,7 +3079,7 @@ def oos_tab() -> None:
 def _register_records(*, require_fragnet: bool = False) -> list:
     """(DelayEvent, fragnet) pairs from the shared TIA event register."""
     recs = []
-    for rec in st.session_state.get("tia_register", {}).values():
+    for rec in st.session_state.get(sk.EVENT_REGISTER, {}).values():
         parsed = event_from_dict(rec)
         if parsed and (parsed[1] or not require_fragnet):
             recs.append(parsed)
@@ -3047,7 +3095,7 @@ def concurrency_tab() -> None:
         "test is the analyst's."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in **Data Intake** "
                 "first — the screening works per analysis window.")
@@ -3122,7 +3170,7 @@ def impacted_asplanned_tab() -> None:
         "where the contract prescribes it, and disclose its limits."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in **Data Intake** first.")
         return
@@ -3144,7 +3192,7 @@ def impacted_asplanned_tab() -> None:
         "activity fragnet between its tie-in activities in the "
         "baseline. (Optionally import richer fragnets already saved to "
         "the shared register — never required.)")
-    iap_rows = st.session_state.get("iap_events", [{
+    iap_rows = st.session_state.get(sk.IAP_EVENTS, [{
         "Event ID": "EVT-01", "Title": "", "Date (YYYY-MM-DD)": "",
         "Responsibility (asserted)": "Employer",
         "Duration (working days)": 10.0,
@@ -3154,11 +3202,11 @@ def impacted_asplanned_tab() -> None:
     edited = st.data_editor(
         pd.DataFrame(iap_rows), width="stretch", hide_index=True,
         num_rows="dynamic", key="iap_ed")
-    st.session_state["iap_events"] = edited.to_dict("records")
+    st.session_state[sk.IAP_EVENTS] = edited.to_dict("records")
 
     recs = []
     problems = []
-    for r in st.session_state["iap_events"]:
+    for r in st.session_state[sk.IAP_EVENTS]:
         eid = str(r.get("Event ID") or "").strip()
         if not eid:
             continue
@@ -3210,18 +3258,18 @@ def impacted_asplanned_tab() -> None:
     cA, cB = st.columns([2, 1])
     if cA.button(f"Run impacted as-planned ({len(recs)} event(s), "
                  "date order)", type="primary", key="iap_go"):
-        st.session_state["iap_res"] = run_impacted_asplanned(
+        st.session_state[sk.IAP_RES] = run_impacted_asplanned(
             data, chosen, recs)
     if cB.button("💾 Save events to the shared register",
                  key="iap_save_reg",
                  help="Makes them available to the concurrency "
                       "sub-module and other methods."):
         for e, f in recs:
-            st.session_state.setdefault("tia_register", {})[
+            st.session_state.setdefault(sk.EVENT_REGISTER, {})[
                 e.event_id] = event_to_dict(e, f, None)
         st.success(f"{len(recs)} event(s) saved.")
-        st.session_state["iap_label"] = chosen
-    iap = st.session_state.get("iap_res")
+        st.session_state[sk.IAP_LABEL] = chosen
+    iap = st.session_state.get(sk.IAP_RES)
     if not iap:
         return
 
@@ -3262,7 +3310,7 @@ def impacted_asplanned_tab() -> None:
             st.write("•", iap["caveat"])
     st.download_button(
         "⬇️ Download impacted as-planned report (Excel)",
-        data=build_iap_xlsx(st.session_state.get("iap_label", chosen),
+        data=build_iap_xlsx(st.session_state.get(sk.IAP_LABEL, chosen),
                             iap),
         file_name="impacted_asplanned_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument."
@@ -3307,7 +3355,7 @@ def apab_tab() -> None:
         "steps freely — each records what you chose."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes (baseline + as-built "
                 "update) in **Data Intake** first.")
@@ -3371,7 +3419,7 @@ def apab_tab() -> None:
             with st.expander("Cross-check: where do the two independent "
                              "reconstructions agree?"):
                 stitch = cached_stitch(
-                    okey, st.session_state.get("apab_stitch_freq", 0.5),
+                    okey, st.session_state.get(sk.APAB_STITCH_FREQ, 0.5),
                     ordered)
                 tri = triangulate(stitch, tr)
                 both = getattr(tri, "agreed_codes", None) or [
@@ -3384,7 +3432,7 @@ def apab_tab() -> None:
                 "Persistence threshold (fraction of revisions an "
                 "activity must have been on the forecast path)",
                 0.2, 1.0, 0.5, 0.05, key="apab_freq")
-            st.session_state["apab_stitch_freq"] = core_freq
+            st.session_state[sk.APAB_STITCH_FREQ] = core_freq
             stitch = cached_stitch(okey, core_freq, ordered)
             for w in stitch.warnings:
                 st.warning(w)
@@ -3403,15 +3451,15 @@ def apab_tab() -> None:
                 hide_index=True)
         if st.button("Use this as the as-built critical path →",
                      type="primary", key="apab_adopt"):
-            st.session_state["apab_path"] = path
-            st.session_state["apab_path_basis"] = basis
+            st.session_state[sk.APAB_PATH] = path
+            st.session_state[sk.APAB_PATH_BASIS] = basis
             st.success(f"Adopted: {len(path)} activities. Steps ③-⑤ "
                        "now use this path.")
 
     # ---------------- ③ planned-dates comparison ----------------------- #
     elif step.startswith("③"):
         st.subheader("③ As-built section vs PLANNED dates")
-        path = st.session_state.get("apab_path")
+        path = st.session_state.get(sk.APAB_PATH)
         scope = st.radio(
             "Comparison scope",
             ["As-built critical path (adopted in step ②)",
@@ -3437,7 +3485,7 @@ def apab_tab() -> None:
                   f"{max(fv):+.0f} d" if fv else "—")
         st.iframe(
             build_apab_gantt_html(
-                rows, keydates=st.session_state.get("apab_keydates"),
+                rows, keydates=st.session_state.get(sk.APAB_KEYDATES),
                 title="As-planned vs as-built — comparison"),
             height=560)
         with st.expander("Comparison table (all columns)"):
@@ -3454,7 +3502,7 @@ def apab_tab() -> None:
                 "Start var (d)": r["start_var_days"],
                 "Finish var (d)": r["finish_var_days"],
             } for r in rows[:400]]), width="stretch", hide_index=True)
-        st.session_state["apab_cmp_rows"] = rows
+        st.session_state[sk.APAB_CMP_ROWS] = rows
         with st.expander("Breakdown view (by activity code / WBS — the "
                          "grouped comparison tool)"):
             variance_tab()
@@ -3462,11 +3510,11 @@ def apab_tab() -> None:
     # ---------------- ④ key dates from the as-built CP ----------------- #
     elif step.startswith("④"):
         st.subheader("④ Define the key dates")
-        path = st.session_state.get("apab_path")
+        path = st.session_state.get(sk.APAB_PATH)
         if not path:
             st.info("Adopt an as-built critical path in step ② first.")
             return
-        saved = st.session_state.get("apab_keydates", {})
+        saved = st.session_state.get(sk.APAB_KEYDATES, {})
         kd_df = pd.DataFrame([{
             "Key date": c in saved,
             "Activity ID": c, "Activity": n[:60],
@@ -3482,17 +3530,17 @@ def apab_tab() -> None:
                 kd[r["Activity ID"]] = str(
                     r["Why it is key (contractual / logic "
                       "significance)"] or "")
-        st.session_state["apab_keydates"] = kd
+        st.session_state[sk.APAB_KEYDATES] = kd
         st.success(f"{len(kd)} key date(s) defined."
                    if kd else "Tick the activities that carry key dates.")
 
     # ---------------- ⑤ windows from key dates + measurement ----------- #
     else:
         st.subheader("⑤ Analysis windows & delay measurement")
-        rows = st.session_state.get("apab_cmp_rows") or planned_vs_actual(
+        rows = st.session_state.get(sk.APAB_CMP_ROWS) or planned_vs_actual(
             baseline, latest,
-            {c for c, _ in st.session_state.get("apab_path", [])} or None)
-        kd = st.session_state.get("apab_keydates", {})
+            {c for c, _ in st.session_state.get(sk.APAB_PATH, [])} or None)
+        kd = st.session_state.get(sk.APAB_KEYDATES, {})
         by_code = {r["task_code"]: r for r in rows}
         kd_rows = []
         for c, why in kd.items():
@@ -3574,7 +3622,7 @@ def apab_tab() -> None:
                  "Key-date windows": kwin or [{}]},
                 notes=["Method: as-planned vs as-built, stepped. "
                        "As-built path basis: "
-                       + st.session_state.get("apab_path_basis",
+                       + st.session_state.get(sk.APAB_PATH_BASIS,
                                               "not adopted"),
                        "Variances in calendar days; positive = later "
                        "than planned. 'As-recorded' caveat applies: "
@@ -3596,7 +3644,7 @@ def collapsed_asbuilt_tab() -> None:
         "difference is the delay attributable to the extracted events."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload the as-built programme in **Data Intake** first.")
         return
@@ -3615,23 +3663,25 @@ def collapsed_asbuilt_tab() -> None:
         st.caption("Group by name / WBS / activity codes — AI proposes, "
                    "the analyst decides. These usually sit on the "
                    "longest path.")
-        ai_key = st.session_state.get("tia_key", "")
+        ai_key = st.session_state.get(sk.AI_KEY, "")
         c1, c2 = st.columns([1, 1])
         with c1:
-            st.markdown("**AI-assisted grouping**"
-                        + ("" if ai_key else
-                           " — register your AI in the Time Impact "
-                           "Analysis page (step ①) to enable"))
+            st.markdown("**AI-assisted grouping**")
+            if not ai_key:
+                with st.expander("Register your AI (shared across the "
+                                 "whole app)"):
+                    ai_credentials_panel("cab")
+                ai_key = st.session_state.get(sk.AI_KEY, "")
             if st.button("Propose event groups from activity names",
                          disabled=not ai_key, key="cab_ai_go"):
                 try:
                     text = "".join(stream_narrative(
-                        st.session_state.get("tia_provider", "anthropic"),
+                        st.session_state.get(sk.AI_PROVIDER, "anthropic"),
                         ai_key, build_grouping_prompt(data),
-                        st.session_state.get("tia_model", ""),
+                        st.session_state.get(sk.AI_MODEL, ""),
                         system=GROUPING_SYSTEM_PROMPT))
                     groups, dropped = parse_grouping(text, data)
-                    st.session_state["cab_groups"] = groups
+                    st.session_state[sk.CAB_GROUPS] = groups
                     if dropped:
                         st.warning(f"{dropped} proposed code(s) were "
                                    "not verbatim in the file and were "
@@ -3649,12 +3699,12 @@ def collapsed_asbuilt_tab() -> None:
                 st.write(f"**{len(hits)}** started activities match.")
                 if st.button("Add matches as a group", key="cab_kw_add",
                              disabled=not hits):
-                    gs = st.session_state.setdefault("cab_groups", [])
+                    gs = st.session_state.setdefault(sk.CAB_GROUPS, [])
                     gs.append({"label": f"Keyword: {kw}",
                                "codes": hits,
                                "rationale": "deterministic keyword "
                                             "match"})
-        for g in st.session_state.get("cab_groups", []):
+        for g in st.session_state.get(sk.CAB_GROUPS, []):
             with st.expander(f"{g['label']} — {len(g['codes'])} "
                              "activities"):
                 st.write(g.get("rationale", ""))
@@ -3663,7 +3713,7 @@ def collapsed_asbuilt_tab() -> None:
 
     elif step.startswith("②"):
         st.subheader("② Confirm the extraction set (analyst decision)")
-        groups = st.session_state.get("cab_groups", [])
+        groups = st.session_state.get(sk.CAB_GROUPS, [])
         pre = [c for g in groups for c in g["codes"]]
         started = {t.task_code: t.name for t in data.tasks
                    if not t.is_loe_or_wbs and t.act_start is not None}
@@ -3673,20 +3723,20 @@ def collapsed_asbuilt_tab() -> None:
             default=[c for c in dict.fromkeys(pre) if c in started],
             format_func=lambda c: f"{c} — {started[c][:60]}",
             key="cab_pick")
-        st.session_state["cab_extract"] = picked
+        st.session_state[sk.CAB_EXTRACT] = picked
         st.write(f"**{len(picked)}** activities in the extraction set.")
 
     else:
         st.subheader("③ Collapse and measure")
-        picked = set(st.session_state.get("cab_extract", []))
+        picked = set(st.session_state.get(sk.CAB_EXTRACT, []))
         if not picked:
             st.info("Confirm an extraction set in step ② first.")
             return
         if st.button(f"Collapse ({len(picked)} activities extracted)",
                      type="primary", key="cab_go"):
-            st.session_state["cab_res"] = collapse_asbuilt(
+            st.session_state[sk.CAB_RES] = collapse_asbuilt(
                 data, chosen, picked)
-        res = st.session_state.get("cab_res")
+        res = st.session_state.get(sk.CAB_RES)
         if not res:
             return
         m1, m2, m3, m4 = st.columns(4)
@@ -3775,7 +3825,7 @@ def windows_tab() -> None:
         "As-Built, whose boundaries are the analyst's key dates."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** tab "
                 "first.")
@@ -3912,7 +3962,7 @@ def comparison_tab() -> None:
         "actualised dates."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** tab "
                 "first.")
@@ -4179,7 +4229,7 @@ def progress_transfer_tab() -> None:
         "re-sequencing tries to hide."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** tab "
                 "first.")
@@ -4319,7 +4369,7 @@ def critical_path_tab() -> None:
         "near-critical band behind it."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload programmes in the **Data Intake** tab first.")
         return
@@ -4366,12 +4416,12 @@ def critical_path_tab() -> None:
         show_near = cc3.toggle("Show near-critical", value=False)
         if st.checkbox(
             "Treat this as the CONTRACTUAL completion milestone",
-            value=(st.session_state.get("contract_completion_ms")
+            value=(st.session_state.get(sk.CONTRACT_MS)
                    == end_code),
             help="Recorded in the Basis of Analysis and offered as the "
                  "default trace terminal across the toolkit.",
         ):
-            st.session_state["contract_completion_ms"] = end_code
+            st.session_state[sk.CONTRACT_MS] = end_code
         cp = cached_longest_path(_fkey(chosen), chosen, end_code, near, data)
         basis_panel("Baseline Critical Path", data, [
             "Criticality definition: INDEPENDENT longest-path trace "
@@ -4379,7 +4429,7 @@ def critical_path_tab() -> None:
             "the file's stored total float",
             f"Trace terminal: {end_code}"
             + (" (contractual completion milestone)"
-               if st.session_state.get("contract_completion_ms")
+               if st.session_state.get(sk.CONTRACT_MS)
                == end_code else ""),
             f"Near-critical band: stored total float ≤ {near:.0f} "
             "working days",
@@ -4553,7 +4603,7 @@ _TIA_STEPS = ["① Update & AI", "② Event", "③ Fragnet",
 
 def tia_tab() -> None:
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None:
         st.info("Upload the current accepted update (one XER is enough "
                 "for a prospective TIA) in the **Data Intake** tab. Two "
@@ -4564,7 +4614,7 @@ def tia_tab() -> None:
     # Streamlit drops widget-backed state once its widget is not
     # rendered; each step renders only its own widgets, so every
     # cross-step key must be re-pinned each run.
-    _persist = ("tia_key", "tia_provider", "tia_prog", "tia_ev_id",
+    _persist = (sk.AI_KEY, sk.AI_PROVIDER, "tia_prog", "tia_ev_id",
                 "tia_ev_title", "tia_ev_desc", "tia_ev_date",
                 "tia_ev_resp", "tia_ev_evid", "tia_frag_mode",
                 "tia_entry", "tia_exit", "tia_target_ms", "tia_variant",
@@ -4597,9 +4647,9 @@ def tia_tab() -> None:
         chosen = names[-1]
     data = dict(files)[chosen]
     event = _tia_event_from_state()
-    ai_key = st.session_state.get("tia_key", "")
-    ai_provider = st.session_state.get("tia_provider", "anthropic")
-    ai_model = st.session_state.get("tia_model") or None
+    ai_key = st.session_state.get(sk.AI_KEY, "")
+    ai_provider = st.session_state.get(sk.AI_PROVIDER, "anthropic")
+    ai_model = st.session_state.get(sk.AI_MODEL) or None
 
     # ---- ① update + AI registration + health gateway --------------------
     if step == _TIA_STEPS[0]:
@@ -4634,30 +4684,14 @@ def tia_tab() -> None:
         st.markdown("**Register your AI once** — every later step "
                     "(event extraction, fragnet recommendation, "
                     "narrative) reuses it.")
-        a1, a2 = st.columns(2)
-        a1.selectbox("AI provider", options=list(PROVIDERS.keys()),
-                     format_func=lambda p: PROVIDERS[p]["label"],
-                     key="tia_provider")
-        pinfo = PROVIDERS[st.session_state["tia_provider"]]
-        st.session_state["tia_model"] = model_selector(
-            a2, pinfo, f"tia_shared_{st.session_state['tia_provider']}")
-        env = os.environ.get(pinfo["env_var"], "")
-        if st.session_state["tia_provider"] == "gemini" and not env:
-            env = os.environ.get("GOOGLE_API_KEY", "")
-        st.session_state.setdefault("tia_key", env)
-        st.text_input(f"{pinfo['label']} API key", type="password",
-                      key="tia_key",
-                      help="Held in this session only; never stored.")
-        if not st.session_state.get("tia_key"):
-            st.caption("You can proceed without a key — AI assistance "
-                       "will be disabled.")
+        ai_credentials_panel("tia")
         _nav(0)
         return
 
     # ---- ② event ---------------------------------------------------------
     if step == _TIA_STEPS[1]:
         st.subheader("② Register the event")
-        reg = st.session_state.setdefault("tia_register", {})
+        reg = st.session_state.setdefault(sk.EVENT_REGISTER, {})
         with st.expander(f"📇 Event register ({len(reg)} saved)"):
             for rid, rec in list(reg.items()):
                 rc1, rc2, rc3 = st.columns([4, 1, 1])
@@ -5137,7 +5171,7 @@ def tia_tab() -> None:
                 "analysed_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "source_file": chosen,
                 "source_sha256": st.session_state.get(
-                    "xer_hashes", {}).get(chosen, "not recorded"),
+                    sk.XER_HASHES, {}).get(chosen, "not recorded"),
                 "data_date": (f"{res.data_date:%Y-%m-%d}"
                               if res.data_date else "—"),
                 "event_id": event.event_id,
@@ -5276,7 +5310,7 @@ def tia_tab() -> None:
             "disclosed per run",
             "Statusing: retained logic; remaining durations as stored",
         ])
-    reg7 = st.session_state.get("tia_register", {})
+    reg7 = st.session_state.get(sk.EVENT_REGISTER, {})
     with st.expander(f"Σ Cumulative impact across the register "
                      f"({len(reg7)} event(s))", expanded=False):
         recs = []
@@ -5321,10 +5355,10 @@ def tia_tab() -> None:
         "tia", DEFAULT_TEMPLATES["tia"])
     sc1, sc2 = st.columns(2)
     if sc1.button("💾 Save event + fragnet to register", key="tia_save"):
-        st.session_state.setdefault("tia_register", {})[
+        st.session_state.setdefault(sk.EVENT_REGISTER, {})[
             event.event_id] = event_to_dict(event, fragnet, res)
         st.success(f"Saved '{event.event_id}'.")
-    raw = st.session_state.get("xer_raw", {}).get(chosen)
+    raw = st.session_state.get(sk.XER_RAW, {}).get(chosen)
     if raw is not None:
         try:
             impacted = build_impacted_xer(
@@ -5358,7 +5392,7 @@ def explain_tab() -> None:
         "per window (inferred candidate drivers, flagged where uncertain)."
     )
     files = get_parsed_files()
-    inv = st.session_state.get("inventory")
+    inv = st.session_state.get(sk.INVENTORY)
     if not files or inv is None or len(files) < 2:
         st.info("Upload at least two programmes in the **Data Intake** "
                 "tab first.")
@@ -5514,6 +5548,25 @@ def explain_tab() -> None:
 # ====================================================================== #
 
 def main() -> None:
+    # ---- access gate: active whenever APP_PASSWORD is set in secrets
+    # (Streamlit Cloud -> app settings -> Secrets). Unset = open, for
+    # local development. Client XERs are commercially sensitive; the
+    # public URL must not serve them unauthenticated.
+    try:
+        _pw = st.secrets.get("APP_PASSWORD", "")
+    except Exception:                       # no secrets.toml locally
+        _pw = ""
+    if _pw and not st.session_state.get(sk.AUTH_OK):
+        st.title("Forensic Delay-Analysis Toolkit")
+        entered = st.text_input("Access password", type="password",
+                                key="gate_pw")
+        if entered and hmac.compare_digest(entered, _pw):
+            st.session_state[sk.AUTH_OK] = True
+            st.rerun()
+        elif entered:
+            st.error("Wrong password.")
+        st.stop()
+
     # Grouped sidebar navigation: the FORENSIC PROGRAMME ANALYSIS tools
     # (inspect / validate / screen / structure the schedule) are kept
     # separate from the recognised delay-analysis METHODS, which are split

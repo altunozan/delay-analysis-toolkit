@@ -1,0 +1,24 @@
+[project]
+name = "delay-analysis-toolkit"
+version = "0.1.0"
+description = "Forensic delay-analysis toolkit for Primavera P6 (.xer)"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 79
+target-version = "py311"
+extend-exclude = ["deckforge", "graphify-out"]
+
+[tool.ruff.lint]
+# House style: readable, explicit engine code. Start with the
+# high-signal rules; expand once the baseline is clean.
+select = ["E", "F", "W", "B"]
+ignore = [
+    "E501",   # long lines in prompts/caveats are deliberate prose
+    "B023",   # closures in Streamlit callbacks are idiomatic here
+]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+check_untyped_defs = true

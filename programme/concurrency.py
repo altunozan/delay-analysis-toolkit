@@ -1,4 +1,4 @@
-"""Module 19 — Concurrent-Delay Screening.
+"""Concurrent-Delay Screening.
 
 The most-litigated issue in delay disputes. This module SCREENS each
 analysis window for time-overlap between Employer-asserted and

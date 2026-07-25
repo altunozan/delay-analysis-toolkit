@@ -1,4 +1,4 @@
-"""Module 7 — Windows / Period Movement Analysis.
+"""Windows / Period Movement Analysis.
 
 For each window between consecutive data dates: how much the scheduled
 completion moved, and how the driving (longest) path changed — which

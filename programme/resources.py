@@ -1,4 +1,4 @@
-"""Module 10 — Planned Resource Histograms.
+"""Planned Resource Histograms.
 
 Builds monthly planned resource-loading histograms from a programme's
 resource assignments (RSRC / TASKRSRC): each assignment's target quantity is
