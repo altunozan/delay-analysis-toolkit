@@ -253,6 +253,7 @@ from .variance import (
     combine_mappings,
     compute_variance,
     compute_variance_by_mapping,
+    keydate_windows,
     planned_vs_actual,
 )
 from .notice import (
@@ -504,6 +505,7 @@ __all__ = [
     "collapse_asbuilt",
     "parse_grouping",
     "planned_vs_actual",
+    "keydate_windows",
     "build_simple_xlsx",
     "build_explain_xlsx",
     "build_float_erosion_xlsx",

@@ -1376,6 +1376,23 @@ check("J4 grouping parse keeps verbatim codes, drops fabricated ones",
 check("J4b grouping prompt is code<TAB>name lines",
       "\t" in _bgp(_gu).split("\n")[1])
 
+from programme.variance import keydate_windows as _kw
+_j_all = _pva(_gb, _gu)
+_j_win = _kw(_j_all, ["A1870", "A1910", "B28-TsLC-SDS110"])
+check("J6 key-date windows: consecutive pairs in as-built order",
+      len(_j_win) == 2 and _j_win[0]["from_code"] == "A1870")
+_w0 = _j_win[0]
+check("J6b window delay identity: actual - planned interval",
+      abs(_w0["window_delay_days"]
+          - (_w0["actual_interval_days"]
+             - _w0["planned_interval_days"])) < 0.05)
+check("J6c cumulative is a running sum",
+      abs(_j_win[1]["cumulative_delay_days"]
+          - (_j_win[0]["window_delay_days"]
+             + _j_win[1]["window_delay_days"])) < 0.05)
+check("J6d fewer than two usable key dates -> no windows",
+      _kw(_j_all, ["A1870"]) == [] and _kw(_j_all, ["NOPE"]) == [])
+
 from programme import build_simple_xlsx as _bsx
 _wb_j = load_workbook(io.BytesIO(_bsx(
     "T", {"Sheet A": [{"X": 1, "Y": "a"}]}, notes=["note"])))

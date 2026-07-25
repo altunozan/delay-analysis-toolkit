@@ -250,3 +250,39 @@ def planned_vs_actual(
     rows.sort(key=lambda r: (r["actual_start"] or datetime.max,
                              r["task_code"]))
     return rows
+
+
+def keydate_windows(rows: list[dict],
+                    key_codes: list[str]) -> list[dict]:
+    """Analysis windows bounded by the analyst's KEY DATES.
+
+    ``rows`` come from planned_vs_actual; ``key_codes`` are the analyst's
+    key-date activities. Key dates are ordered by actual finish; each
+    consecutive pair bounds one window. Window delay = actual interval
+    minus planned interval (calendar days, positive = the works took
+    longer than planned through that window).
+    """
+    by_code = {r["task_code"]: r for r in rows}
+    keys = [by_code[c] for c in key_codes if c in by_code]
+    keys = [k for k in keys if k["actual_finish"] and k["planned_finish"]]
+    keys.sort(key=lambda r: r["actual_finish"])
+    out: list[dict] = []
+    cum = 0.0
+    for a, b in zip(keys, keys[1:]):
+        planned = _delta_days(a["planned_finish"], b["planned_finish"])
+        actual = _delta_days(a["actual_finish"], b["actual_finish"])
+        delay = (round(actual - planned, 1)
+                 if planned is not None and actual is not None else None)
+        if delay is not None:
+            cum = round(cum + delay, 1)
+        out.append({
+            "from_code": a["task_code"], "to_code": b["task_code"],
+            "from_name": a["name"], "to_name": b["name"],
+            "planned_interval_days": (round(planned, 1)
+                                      if planned is not None else None),
+            "actual_interval_days": (round(actual, 1)
+                                     if actual is not None else None),
+            "window_delay_days": delay,
+            "cumulative_delay_days": cum if delay is not None else None,
+        })
+    return out

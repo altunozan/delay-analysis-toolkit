@@ -30,12 +30,11 @@ TOOLS = [
     "Revision Comparison", "Out-of-Sequence Repair", "Float Erosion",
     "Progress S-Curve", "Resource Loading", "Sequence Coding",
     "Hierarchy Rebuild", "Milestone Shift Tracker", "Progress Transfer",
-    "Report Assembler",
+    "As-Built Critical Path", "Report Assembler",
 ]
 RETRO = [
     "As-Planned vs As-Built", "Windows Analysis",
-    "As-Built Critical Path", "Impacted As-Planned",
-    "Collapsed As-Built",
+    "Impacted As-Planned", "Collapsed As-Built",
 ]
 PROSPECTIVE = ["Time Impact Analysis"]
 ALL_PAGES = TOOLS + RETRO + PROSPECTIVE

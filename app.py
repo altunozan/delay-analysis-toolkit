@@ -153,6 +153,7 @@ from programme import (
     run_impacted_asplanned,
     build_iap_xlsx,
     planned_vs_actual,
+    keydate_windows,
     collapse_asbuilt,
     build_grouping_prompt,
     parse_grouping,
@@ -3322,39 +3323,23 @@ def apab_tab() -> None:
 
     step = st.radio(
         "Method step",
-        ["① Reconstruct sequence", "② As-built critical path",
+        ["① Structure the works", "② As-built critical path",
          "③ Planned-dates comparison", "④ Key dates",
-         "⑤ Delay measurement"],
+         "⑤ Windows & delay"],
         horizontal=True, key="apab_step")
 
-    # ---------------- ① reconstruct the as-built sequence -------------- #
+    # ---------------- ① structure the works (hierarchy rebuild) -------- #
     if step.startswith("①"):
-        st.subheader("① Reconstruct the real sequence of the works")
-        core_freq = st.slider(
-            "Persistence threshold (fraction of revisions an activity "
-            "must have been on the forecast path)", 0.2, 1.0, 0.5, 0.05,
-            key="apab_freq")
-        stitch = cached_stitch(okey, core_freq, ordered)
-        for w in stitch.warnings:
-            st.warning(w)
-        st.dataframe(pd.DataFrame([{
-            "Window": f"W{w.index}: {w.from_label} → {w.to_label}",
-            "Driving activities": len(w.activities),
-            "Coverage %": (f"{w.coverage_pct:.0f}"
-                           if w.coverage_pct is not None else "—"),
-        } for w in stitch.windows]), width="stretch", hide_index=True)
-        seq = stitch.stitched
-        st.markdown(f"**Reconstructed sequence — {len(seq)} activities "
-                    "in actual-start order:**")
-        st.dataframe(pd.DataFrame([{
-            "Activity ID": a.task_code, "Activity": a.name,
-            "Actual start": (f"{a.act_start:%Y-%m-%d}"
-                             if a.act_start else "—"),
-            "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
-                              if a.act_finish else "—"),
-            "On forecast path of": a.forecast_by,
-        } for a in seq[:400]]), width="stretch", hide_index=True)
-        st.session_state["apab_stitch_freq"] = core_freq
+        st.subheader("① Structure the works — rebuild the hierarchy")
+        st.caption(
+            "Before any comparison, organise the as-built programme "
+            "into the sections the works were actually delivered in "
+            "(any mix of WBS levels and activity codes) and review the "
+            "real sequence section by section. This structure carries "
+            "no analytical assumption — it is a read-only lens, and the "
+            "same breakdown is used for the grouped comparison in "
+            "step ③.")
+        hierarchy_tab()
 
     # ---------------- ② define the as-built critical path -------------- #
     elif step.startswith("②"):
@@ -3397,12 +3382,27 @@ def apab_tab() -> None:
                 st.write(f"**{len(both)}** activities identified by "
                          "BOTH methods (method-invariant findings).")
         else:
-            stitch = cached_stitch(
-                okey, st.session_state.get("apab_stitch_freq", 0.5),
-                ordered)
+            core_freq = st.slider(
+                "Persistence threshold (fraction of revisions an "
+                "activity must have been on the forecast path)",
+                0.2, 1.0, 0.5, 0.05, key="apab_freq")
+            st.session_state["apab_stitch_freq"] = core_freq
+            stitch = cached_stitch(okey, core_freq, ordered)
+            for w in stitch.warnings:
+                st.warning(w)
             path = [(a.task_code, a.name) for a in stitch.stitched]
             st.write(f"Reconstructed-sequence basis: **{len(path)}** "
-                     "activities (step ① settings).")
+                     "activities, stitched from the contemporaneous "
+                     "forecast paths:")
+            st.dataframe(pd.DataFrame([{
+                "Activity ID": a.task_code, "Activity": a.name,
+                "Actual start": (f"{a.act_start:%Y-%m-%d}"
+                                 if a.act_start else "—"),
+                "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
+                                  if a.act_finish else "—"),
+                "On forecast path of": a.forecast_by,
+            } for a in stitch.stitched[:400]]), width="stretch",
+                hide_index=True)
         if st.button("Use this as the as-built critical path →",
                      type="primary", key="apab_adopt"):
             st.session_state["apab_path"] = path
@@ -3482,9 +3482,9 @@ def apab_tab() -> None:
         st.success(f"{len(kd)} key date(s) defined."
                    if kd else "Tick the activities that carry key dates.")
 
-    # ---------------- ⑤ measure the delay ------------------------------ #
+    # ---------------- ⑤ windows from key dates + measurement ----------- #
     else:
-        st.subheader("⑤ Measure the delay")
+        st.subheader("⑤ Analysis windows & delay measurement")
         rows = st.session_state.get("apab_cmp_rows") or planned_vs_actual(
             baseline, latest,
             {c for c, _ in st.session_state.get("apab_path", [])} or None)
@@ -3499,6 +3499,30 @@ def apab_tab() -> None:
                     "Planned finish": r["planned_finish"],
                     "Actual finish": r["actual_finish"],
                     "Delay (d)": r["finish_var_days"], "Why key": why})
+
+        # windows are bounded by the analyst's key dates (step ④) —
+        # distinct from the standalone Windows Analysis tool, whose
+        # windows are bounded by revision data dates.
+        kwin = keydate_windows(rows, list(kd)) if len(kd) >= 2 else []
+        if kwin:
+            st.markdown("**Analysis windows — bounded by your key "
+                        "dates, in as-built order:**")
+            st.dataframe(pd.DataFrame([{
+                "Window": f"W{i}: {w['from_code']} → {w['to_code']}",
+                "Planned interval (d)": w["planned_interval_days"],
+                "Actual interval (d)": w["actual_interval_days"],
+                "Window delay (d)": w["window_delay_days"],
+                "Cumulative (d)": w["cumulative_delay_days"],
+            } for i, w in enumerate(kwin, start=1)]),
+                width="stretch", hide_index=True)
+            st.caption(
+                "Window delay = actual interval minus planned interval "
+                "between consecutive key dates (calendar days); "
+                "positive = the works through that window took longer "
+                "than planned.")
+        elif kd:
+            st.info("Define at least TWO key dates in step ④ to bound "
+                    "analysis windows between them.")
         planned_fin = max((r["planned_finish"] for r in rows
                            if r["planned_finish"]), default=None)
         actual_fin = max((r["actual_finish"] for r in rows
@@ -3535,7 +3559,8 @@ def apab_tab() -> None:
                 "As-Planned vs As-Built",
                 {"Comparison": [{k: v for k, v in r.items()}
                                 for r in rows],
-                 "Key dates": kd_rows or [{}]},
+                 "Key dates": kd_rows or [{}],
+                 "Key-date windows": kwin or [{}]},
                 notes=["Method: as-planned vs as-built, stepped. "
                        "As-built path basis: "
                        + st.session_state.get("apab_path_basis",
@@ -3730,8 +3755,13 @@ def collapsed_asbuilt_tab() -> None:
 
 def windows_tab() -> None:
     st.caption(
-        "Movement per window between consecutive data dates: how much "
-        "completion moved, and how the driving path changed in each period."
+        "TIME-SLICE windows analysis: the project timeline is cut into "
+        "windows bounded by the REVISION DATA DATES (each submitted "
+        "update opens a new slice), and completion movement plus the "
+        "driving-path change is measured inside each slice — the "
+        "contemporaneous record tells you WHEN the delay arose. This "
+        "is distinct from the key-date windows inside As-Planned vs "
+        "As-Built, whose boundaries are the analyst's key dates."
     )
     files = get_parsed_files()
     inv = st.session_state.get("inventory")
@@ -5514,6 +5544,9 @@ def main() -> None:
             st.Page(progress_transfer_tab, title="Progress Transfer",
                     icon=":material/sync_alt:",
                     url_path="progress-transfer"),
+            st.Page(asbuilt_tab, title="As-Built Critical Path",
+                    icon=":material/timeline:",
+                    url_path="as-built-critical-path"),
             st.Page(report_tab, title="Report Assembler",
                     icon=":material/description:",
                     url_path="report-assembler"),
@@ -5525,9 +5558,6 @@ def main() -> None:
             st.Page(windows_tab, title="Windows Analysis",
                     icon=":material/grid_view:",
                     url_path="windows-analysis"),
-            st.Page(asbuilt_tab, title="As-Built Critical Path",
-                    icon=":material/timeline:",
-                    url_path="as-built-critical-path"),
             st.Page(impacted_asplanned_tab, title="Impacted As-Planned",
                     icon=":material/event_upcoming:",
                     url_path="impacted-as-planned"),
