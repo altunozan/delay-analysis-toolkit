@@ -295,11 +295,60 @@ def cached_float_path(key: str, label: str, tol: float, near: float, _data):
                                  near_critical_days=near)
 
 
+def managed_ai_key() -> str:
+    """The deployment's own NVIDIA key, if one is configured.
+
+    Resolution: Streamlit secrets, then environment. It is NEVER written
+    into the repository and NEVER rendered — callers only ever learn
+    whether one exists, not what it is. Absent = the app simply asks the
+    analyst for their own key, exactly as before.
+    """
+    try:
+        v = st.secrets.get("NVIDIA_API_KEY", "")
+    except Exception:                      # no secrets.toml present
+        v = ""
+    return (v or os.environ.get("NVIDIA_API_KEY", "")).strip()
+
+
 def ai_credentials_panel(page: str) -> None:
-    """THE one AI-credentials component. Widgets are page-local (widget-
-    backed state dies when its page is not rendered); values are copied
-    into the plain shared keys so the registration survives navigation
-    and every module reuses it."""
+    """THE one AI-credentials component.
+
+    Default path: the managed NVIDIA key runs everything with no setup and
+    is never displayed. The analyst may instead supply their own key for
+    Anthropic / OpenAI / Gemini / NVIDIA, which takes precedence for the
+    rest of the session. Widgets are page-local (widget-backed state dies
+    when its page is not rendered); values are copied into the plain
+    shared keys so the choice survives navigation.
+    """
+    managed = managed_ai_key()
+    own_key = f"aic_own_{page}"
+
+    if managed and not st.session_state.get(own_key):
+        # ---- managed default: no key input rendered at all ----------
+        st.session_state[sk.AI_PROVIDER] = "nvidia"
+        st.session_state[sk.AI_KEY] = managed
+        st.session_state[sk.AI_MANAGED] = True
+        pinfo = PROVIDERS["nvidia"]
+        c1, c2 = st.columns([1, 1])
+        c1.success("AI enabled — managed NVIDIA endpoint. No key needed.")
+        st.session_state[sk.AI_MODEL] = model_selector(
+            c2, pinfo, f"aic_model_{page}_nvidia")
+        st.caption(
+            "Narratives run on a managed NVIDIA endpoint provided with "
+            "this deployment; the credential is held server-side and is "
+            "not shown or exported. Prompts carry the figures and "
+            "activity names of the programmes you load — if the matter "
+            "forbids third-party processing, switch to your own key or "
+            "a self-hosted endpoint below.")
+        if st.button("Use my own API key instead", key=f"aic_sw_{page}"):
+            st.session_state[own_key] = True
+            st.rerun()
+        return
+
+    # ---- analyst-supplied credentials ------------------------------
+    if managed:
+        st.caption("Using your own key. The managed NVIDIA endpoint "
+                   "remains available.")
     a1, a2 = st.columns(2)
     pkey = f"aic_prov_{page}"
     if pkey not in st.session_state:
@@ -309,6 +358,7 @@ def ai_credentials_panel(page: str) -> None:
                         format_func=lambda p: PROVIDERS[p]["label"],
                         key=pkey)
     st.session_state[sk.AI_PROVIDER] = prov
+    st.session_state[sk.AI_MANAGED] = False
     pinfo = PROVIDERS[prov]
     st.session_state[sk.AI_MODEL] = model_selector(
         a2, pinfo, f"aic_model_{page}_{prov}")
@@ -324,6 +374,11 @@ def ai_credentials_panel(page: str) -> None:
     if not st.session_state.get(sk.AI_KEY):
         st.caption("You can proceed without a key — AI assistance will "
                    "be disabled.")
+    if managed and st.button("Back to the managed endpoint",
+                             key=f"aic_bk_{page}"):
+        st.session_state[own_key] = False
+        st.session_state.pop(wkey, None)
+        st.rerun()
 
 
 def basis_panel(module: str, data, engine_lines: list[str]) -> None:
@@ -402,30 +457,44 @@ def ai_narrative_panel(
                  "The objectivity rules (only supplied figures, no blame, "
                  "reproduce all caveats) are fixed and applied regardless.",
         )
-        pcol1, pcol2 = st.columns(2)
-        _pk = f"{state_key}_provider"
-        if _pk not in st.session_state and st.session_state.get(
-                sk.AI_PROVIDER):
-            st.session_state[_pk] = st.session_state[sk.AI_PROVIDER]
-        provider = pcol1.selectbox(
-            "AI provider",
-            options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"],
-            key=_pk,
-        )
-        pinfo = PROVIDERS[provider]
-        model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
-        env_key = os.environ.get(pinfo["env_var"], "")
-        if provider == "gemini" and not env_key:
-            env_key = os.environ.get("GOOGLE_API_KEY", "")
-        api_key = st.text_input(
-            f"{pinfo['label']} API key",
-            type="password",
-            value=st.session_state.get(sk.AI_KEY) or env_key,
-            help=f"Get a key at {pinfo['key_hint']}. Used only for this "
-                 "request; never stored.",
-            key=f"{state_key}_key",
-        )
+        _managed = managed_ai_key()
+        _use_managed = (st.session_state.get(sk.AI_MANAGED, bool(_managed))
+                        and bool(_managed))
+        if _use_managed:
+            # Managed default: the credential is never rendered. Only the
+            # model is offered, so the analyst can trade speed for depth.
+            pcol1, pcol2 = st.columns([1, 1])
+            pcol1.caption("Managed NVIDIA endpoint — no key required. "
+                          "Change this in step ① of Time Impact Analysis.")
+            provider = "nvidia"
+            pinfo = PROVIDERS[provider]
+            model = model_selector(pcol2, pinfo, f"{state_key}_nvidia")
+            api_key = _managed
+        else:
+            pcol1, pcol2 = st.columns(2)
+            _pk = f"{state_key}_provider"
+            if _pk not in st.session_state and st.session_state.get(
+                    sk.AI_PROVIDER):
+                st.session_state[_pk] = st.session_state[sk.AI_PROVIDER]
+            provider = pcol1.selectbox(
+                "AI provider",
+                options=list(PROVIDERS.keys()),
+                format_func=lambda p: PROVIDERS[p]["label"],
+                key=_pk,
+            )
+            pinfo = PROVIDERS[provider]
+            model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
+            env_key = os.environ.get(pinfo["env_var"], "")
+            if provider == "gemini" and not env_key:
+                env_key = os.environ.get("GOOGLE_API_KEY", "")
+            api_key = st.text_input(
+                f"{pinfo['label']} API key",
+                type="password",
+                value=st.session_state.get(sk.AI_KEY) or env_key,
+                help=f"Get a key at {pinfo['key_hint']}. Used only for "
+                     "this request; never stored.",
+                key=f"{state_key}_key",
+            )
 
         if st.button("Generate narrative", type="primary",
                      disabled=not api_key, key=f"{state_key}_go"):

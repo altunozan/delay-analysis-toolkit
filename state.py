@@ -26,7 +26,9 @@ INVENTORY = "inventory"          # ProgrammeInventory (roles + data dates)
 # --- shared AI credentials (registered once, used by all modules) -------
 AI_KEY = "tia_key"               # historical names kept for session
 AI_PROVIDER = "tia_provider"     # continuity; treat as the ONE canonical
-AI_MODEL = "tia_model"           # credential set for the whole app
+AI_MODEL = "tia_model"
+AI_MANAGED = "ai_managed"  # True = using the deployment's own
+#                            NVIDIA key (never displayed)           # credential set for the whole app
 
 # --- shared analysis records --------------------------------------------
 EVENT_REGISTER = "tia_register"  # dict[event_id, event_to_dict(...)] —

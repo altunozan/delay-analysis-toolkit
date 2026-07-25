@@ -20,6 +20,23 @@ from .xer_parser import XerData
 
 # Provider registry: display name, default model, env var for the key.
 PROVIDERS: dict[str, dict] = {
+    # NVIDIA first: it is the DEFAULT provider. Its endpoint speaks the
+    # OpenAI protocol, so it reuses that streamer with a base_url. When a
+    # managed key is configured (st.secrets / env) the app uses it
+    # silently and never renders it — see app.ai_credentials_panel.
+    "nvidia": {
+        "label": "NVIDIA (managed — no key needed)",
+        "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        "models": ["nvidia/llama-3.3-nemotron-super-49b-v1.5",
+                   "openai/gpt-oss-120b",
+                   "nvidia/llama-3.1-nemotron-70b-instruct",
+                   "qwen/qwen3-next-80b-a3b-instruct",
+                   "deepseek-ai/deepseek-v4-flash"],
+        "env_var": "NVIDIA_API_KEY",
+        "key_hint": "build.nvidia.com/settings/api-keys",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "managed": True,
+    },
     "anthropic": {
         "label": "Anthropic (Claude)",
         "default_model": "claude-opus-4-8",
@@ -244,13 +261,18 @@ def _stream_anthropic(api_key: str, model: str, prompt: str,
 
 
 def _stream_openai(api_key: str, model: str, prompt: str,
-                   system: str | None = None) -> Iterator[str]:
+                   system: str | None = None,
+                   base_url: str | None = None) -> Iterator[str]:
     try:
         import openai
     except ImportError:
         raise NarrativeError("OpenAI SDK not installed. Run: pip install openai")
 
-    client = openai.OpenAI(api_key=api_key)
+    # base_url lets any OpenAI-protocol endpoint reuse this path — NVIDIA's
+    # hosted catalogue today, a self-hosted NIM container tomorrow, with no
+    # other change. Generous timeout: hosted models can cold-start slowly.
+    client = (openai.OpenAI(api_key=api_key, base_url=base_url, timeout=120.0)
+              if base_url else openai.OpenAI(api_key=api_key))
     try:
         stream = client.chat.completions.create(
             model=model,
@@ -264,7 +286,7 @@ def _stream_openai(api_key: str, model: str, prompt: str,
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
     except openai.AuthenticationError:
-        raise NarrativeError("Invalid OpenAI API key. Check the key and try again.")
+        raise NarrativeError("The API key was rejected by the endpoint. Check the key (or the managed-key configuration) and try again.")
     except openai.RateLimitError:
         raise NarrativeError("Rate limited by OpenAI. Wait a moment and retry.")
     except openai.NotFoundError:
@@ -317,7 +339,15 @@ def _stream_gemini(api_key: str, model: str, prompt: str,
         raise NarrativeError(f"Gemini API error ({code}): {getattr(exc, 'message', exc)}")
 
 
+def _stream_nvidia(api_key: str, model: str, prompt: str,
+                   system: str | None = None) -> Iterator[str]:
+    """NVIDIA API catalogue — OpenAI-protocol, so delegate with base_url."""
+    return _stream_openai(api_key, model, prompt, system,
+                          base_url=PROVIDERS["nvidia"]["base_url"])
+
+
 _BACKENDS = {
+    "nvidia": _stream_nvidia,
     "anthropic": _stream_anthropic,
     "openai": _stream_openai,
     "gemini": _stream_gemini,
