@@ -3442,7 +3442,7 @@ def apab_tab() -> None:
             build_apab_gantt_html(
                 rows, keydates=st.session_state.get("apab_keydates"),
                 title="As-planned vs as-built — comparison"),
-            height=560, scrolling=True)
+            height=560)
         with st.expander("Comparison table (all columns)"):
             st.dataframe(pd.DataFrame([{
                 "Activity ID": r["task_code"], "Activity": r["name"][:50],
@@ -3542,7 +3542,7 @@ def apab_tab() -> None:
                 overall_delay_days=float(overall)
                 if overall is not None else None,
                 title="As-built (above) vs as-planned (below)"),
-            height=560, scrolling=True)
+            height=560)
         m1, m2, m3 = st.columns(3)
         m1.metric("Planned completion (section)",
                   f"{planned_fin:%d %b %Y}" if planned_fin else "—")

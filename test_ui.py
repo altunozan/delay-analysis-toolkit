@@ -125,6 +125,19 @@ def main() -> int:
             check("OOS repair plan renders",
                   page.get_by_text("As-built repair plan").count() > 0)
 
+            # APvAB: walk EVERY method step — the step-③ iframe once
+            # shipped broken because the default step hid it.
+            goto("As-Planned vs As-Built")
+            for lbl in ("② As-built critical path",
+                        "③ Planned-dates comparison", "④ Key dates",
+                        "⑤ Windows & delay"):
+                page.get_by_text(lbl, exact=True).first.click()
+                page.wait_for_timeout(5000)
+                check(f"APvAB step '{lbl[0]}' exception-free",
+                      exc() == 0, f"{exc()} exceptions")
+            check("APvAB comparison gantt iframe renders",
+                  page.locator("iframe").count() > 0)
+
             # TIA stepper gating (Prospective group)
             goto("Time Impact Analysis")
             page.wait_for_timeout(3000)
