@@ -1742,6 +1742,30 @@ check("N6b malformed model output yields no groups, not an exception",
 check("N6c prompt carries the CP flag for every listed activity",
       "\tCP\t" in _bup(_n_rows, _n_path, limit=200))
 
+# N7. Workbook must survive an IN-PROGRESS row. openpyxl rejects a None
+# fill, so a conditional fill with an `else None` branch raises only
+# when a chain actually contains an in-progress activity — which is
+# exactly what a hybrid path produces. Shipped once; pinned now.
+from programme import (analyse_asbuilt_path as _aap2,
+                       build_asbuilt_xlsx as _bax, triangulate as _tri2)
+import io as _n_io
+import openpyxl as _n_xl
+_n_stitch = _aap2([("B", B), ("U", U)], end_task_code="KD15")
+check("N7 hybrid chain contains an in-progress activity (the trigger)",
+      _n_tr.in_progress_count > 0)
+_n_book = _bax(_n_stitch, "narrative", trace=_n_tr,
+               tri=_tri2(_n_stitch, _n_tr), roll=_n_res)
+_n_wb = _n_xl.load_workbook(_n_io.BytesIO(_n_book))
+check("N7b as-built workbook builds with a hybrid chain + roll-up",
+      {"Traced Chain", "Work Packages", "Work Package Members"}
+      <= set(_n_wb.sheetnames))
+check("N7c work-package sheet names the driving member",
+      _n_wb["Work Packages"].cell(row=4, column=6).value
+      == _n_u.driving_member)
+check("N7d workbook without a roll-up omits the package sheets",
+      "Work Packages" not in _n_xl.load_workbook(_n_io.BytesIO(
+          _bax(_n_stitch, None, trace=_n_tr))).sheetnames)
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

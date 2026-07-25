@@ -127,6 +127,15 @@ def main() -> int:
             check("OOS repair plan renders",
                   page.get_by_text("As-built repair plan").count() > 0)
 
+            goto("As-Built Critical Path")
+            page.wait_for_timeout(4000)
+            check("as-built page uses the shared CP picker",
+                  page.get_by_text("Max hand-off gap").count() > 0)
+            check("as-built page offers the work-package view",
+                  page.get_by_text("Work-package view").count() > 0)
+            check("as-built work-package section exception-free",
+                  exc() == 0, f"{exc()} exceptions")
+
             # APvAB: walk EVERY method step — the step-③ iframe once
             # shipped broken because the default step hid it.
             goto("As-Planned vs As-Built")

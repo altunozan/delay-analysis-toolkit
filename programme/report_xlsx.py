@@ -594,8 +594,9 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
 # Module 12 — As-built critical path
 # --------------------------------------------------------------------------- #
 def build_asbuilt_xlsx(res, narrative: str | None = None,
-                       trace=None, tri=None) -> bytes:
-    """res: AsBuiltPathResult; trace: ActualTraceResult; tri: Triangulation"""
+                       trace=None, tri=None, roll=None) -> bytes:
+    """res: AsBuiltPathResult; trace: ActualTraceResult; tri:
+    Triangulation; roll: RollupResult (umbrella work packages)"""
     wb = Workbook()
     ws = wb.active
     ws.title = "Stitched Path"
@@ -668,9 +669,12 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
             for col, v in enumerate(vals, start=1):
                 c = s3b.cell(row=i + 3, column=col, value=v)
                 c.border = THIN_BORDER
-                if col == 2:
-                    c.fill = (GAIN_FILL if v == "as-built"
-                              else SLIP_FILL if v == "forecast" else None)
+                # openpyxl rejects a None fill — leave in-progress rows
+                # unfilled rather than assigning one.
+                if col == 2 and v == "as-built":
+                    c.fill = GAIN_FILL
+                elif col == 2 and v == "forecast":
+                    c.fill = SLIP_FILL
         _autofit(s3b, {1: 5, 2: 13, 3: 20, 4: 48, 5: 13, 6: 13})
         s3b.freeze_panes = "A4"
 
@@ -719,7 +723,55 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
         extra += list(trace.warnings) + list(trace.caveats)
     if tri is not None:
         extra += list(tri.warnings) + list(tri.caveats)
-    _notes_sheet(wb, res.warnings + res.caveats + extra,
+    # Work packages: the measured span of each umbrella, then every
+    # member beneath it with the driver marked.
+    if roll is not None and roll.umbrellas:
+        s6 = wb.create_sheet("Work Packages")
+        s6["A1"] = ("Umbrella dates are measured from CRITICAL-PATH "
+                    "members only — grouping is presentation and does "
+                    "not move the measured delay.")
+        s6["A1"].font = Font(bold=True)
+        _header_row(s6, 3, ["Work package", "Members", "On CP",
+                            "Measured start", "Measured finish",
+                            "Driving member", "Full group runs on (d)",
+                            "Measured?"])
+        for i, u in enumerate(roll.umbrellas, start=4):
+            vals = [u.name, u.member_count, u.on_path_count,
+                    _fmt(u.actual_start), _fmt(u.actual_finish),
+                    u.driving_member or "", u.presentation_only_days,
+                    "yes" if u.measured else "PRESENTATION ONLY"]
+            for col, v in enumerate(vals, start=1):
+                c = s6.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 8:
+                    c.fill = GAIN_FILL if u.measured else SLIP_FILL
+        _autofit(s6, {1: 34, 2: 9, 3: 7, 4: 15, 5: 15, 6: 20, 7: 20,
+                      8: 18})
+        s6.freeze_panes = "A4"
+
+        members = roll.member_rows()
+        if members:
+            s7 = wb.create_sheet("Work Package Members")
+            _header_row(s7, 1, ["Work package", "Activity ID", "Activity",
+                                "On critical path", "Actual start",
+                                "Actual finish", "Drives finish"])
+            for i, m in enumerate(members, start=2):
+                vals = [m["umbrella"], m["task_code"], m["name"],
+                        m["on_critical_path"], _fmt(m["actual_start"]),
+                        _fmt(m["actual_finish"]),
+                        m["drives_umbrella_finish"]]
+                for col, v in enumerate(vals, start=1):
+                    c = s7.cell(row=i, column=col, value=v)
+                    c.border = THIN_BORDER
+                    if col == 4:
+                        c.fill = (GAIN_FILL if v == "yes" else SLIP_FILL)
+            _autofit(s7, {1: 30, 2: 20, 3: 44, 4: 17, 5: 13, 6: 13,
+                          7: 13})
+            s7.freeze_panes = "A2"
+
+    _notes_sheet(wb, res.warnings + res.caveats + extra
+                 + (list(roll.caveats) + list(roll.warnings)
+                    if roll is not None else []),
                  "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 

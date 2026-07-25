@@ -8,11 +8,12 @@ import streamlit as st
 import state as sk
 from programme import (
     analyse_asbuilt_path, build_asbuilt_prompt, build_asbuilt_xlsx,
-    report_charts,
+    build_rollup, planned_vs_actual, report_charts,
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._asbuilt_cp import cross_check, trace_basis
 from views._shared import ai_narrative_panel, get_parsed_files
+from views._umbrella import umbrella_editor
 
 
 def asbuilt_tab() -> None:
@@ -143,8 +144,73 @@ def asbuilt_tab() -> None:
                 st.dataframe(pd.DataFrame(rows), width="stretch",
                              hide_index=True)
 
+    # ---- work-package view -------------------------------------------
+    # The same grouping the APvAB method uses (one definition, shared via
+    # sk.UMBRELLAS). Fed from the SAME row source as APvAB so a work
+    # package spans identically on both pages.
+    st.divider()
+    st.subheader("Work-package view")
+    st.caption(
+        "A twenty-row as-built path of containment, trunking and sleeves "
+        "reads worse than one bar called Electrical First Fix. Grouping "
+        "is presentation only: an umbrella's measured dates come from "
+        "its members on the as-built critical path alone.")
+    roll = None
+    with st.expander("Group the as-built path into umbrella activities",
+                     expanded=bool(st.session_state.get(sk.UMBRELLAS))):
+        opts = ["Traced chain", "Stitched contemporaneous path"]
+        if tri is not None and tri.both:
+            opts.append("Both methods agreed")
+        pick = st.radio(
+            "Which reconstruction is the as-built critical path here?",
+            opts, key="ab_umb_basis", horizontal=True,
+            help="Only members on THIS path set an umbrella's measured "
+                 "dates — the choice is disclosed with the result.")
+        if pick.startswith("Traced") and trace is not None:
+            path_codes = set(trace.codes)
+        elif pick.startswith("Stitched"):
+            path_codes = {a.task_code for a in res.stitched}
+        else:
+            path_codes = set(tri.both) if tri is not None else set()
+        st.caption(f"Critical-path basis for the roll-up: **{pick}** "
+                   f"({len(path_codes)} activities).")
+
+        base_rev = (pool[inv.baseline.file_name] if inv.baseline
+                    else ordered[0][1])
+        umb_rows = planned_vs_actual(base_rev, ordered[-1][1], None)
+        groups = umbrella_editor(umb_rows, path_codes, key_prefix="ab_umb")
+        if groups:
+            roll = build_rollup(umb_rows, groups, path_codes)
+
+    if roll is not None:
+        # The as-built path itself, presented as work packages: measured
+        # umbrellas plus any path activity left ungrouped, in order.
+        pres = [r for r in roll.measurement_rows()
+                if r.get("is_umbrella") or r["task_code"] in path_codes]
+        if pres:
+            st.markdown("**As-built critical path as work packages** — "
+                        "in as-built order:")
+            st.dataframe(pd.DataFrame([{
+                "": "▣" if r.get("is_umbrella") else "",
+                "ID": r["task_code"],
+                "Work package / activity": r["name"][:56],
+                "Members": r.get("member_count", 1),
+                "On CP": r.get("on_path_count", 1),
+                "Start": (f"{r['actual_start']:%Y-%m-%d}"
+                          if r["actual_start"] else "—"),
+                "Finish": (f"{r['actual_finish']:%Y-%m-%d}"
+                           if r["actual_finish"] else "—"),
+                "Driving member": r.get("driving_member") or "",
+            } for r in pres]), width="stretch", hide_index=True,
+                height=320)
+            st.caption(
+                "▣ = umbrella. 'Driving member' is the activity whose "
+                "recorded finish sets that package's finish, so every "
+                "grouped bar traces back to a real activity.")
+
     with st.expander("Standing caveats (always apply)"):
-        for c in res.caveats + (trace.caveats if trace else []):
+        for c in (res.caveats + (trace.caveats if trace else [])
+                  + (roll.caveats if roll is not None else [])):
             st.write("•", c)
 
     narrative = ai_narrative_panel(
@@ -156,7 +222,8 @@ def asbuilt_tab() -> None:
     )
     st.download_button(
         "⬇️ Download as-built path report (Excel)",
-        data=build_asbuilt_xlsx(res, narrative, trace=trace, tri=tri),
+        data=build_asbuilt_xlsx(res, narrative, trace=trace, tri=tri,
+                                roll=roll),
         file_name="asbuilt_critical_path_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
