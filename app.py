@@ -5766,12 +5766,46 @@ _THEME_CSS = """
 [data-testid="stHeader"] { background: transparent; }
 [data-testid="stMain"] .block-container { padding-top: 2.4rem; }
 
-/* sidebar reads as the drawing's index panel */
+/* Sidebar is the drawing's INDEX PANEL — same sheet, same paper, same
+   grid, delineated by a rule rather than a change of material. A drawing
+   is one sheet; a differently-toned slab bolted to the edge reads as a
+   different document. */
 [data-testid="stSidebar"] {
-  background: var(--dspanel);
+  background-color: var(--dspaper) !important;
+  background-image:
+    linear-gradient(var(--dsgrid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--dsgrid) 1px, transparent 1px) !important;
+  background-size: 24px 24px !important;
   border-right: 1.5px solid var(--dsi);
 }
-[data-testid="stSidebarNav"] a { border-radius: 2px !important; }
+/* children must be TRANSPARENT or they paint over the parent's grid */
+[data-testid="stSidebar"] > div,
+[data-testid="stSidebarContent"],
+[data-testid="stSidebarUserContent"],
+[data-testid="stSidebarNav"] { background: transparent !important; }
+/* the collapse control sits on paper too */
+[data-testid="stSidebarCollapseButton"] button,
+[data-testid="stSidebarHeader"] { background: transparent !important; }
+/* nav items: selection marked by an ink rule + wash, not a grey pill */
+[data-testid="stSidebarNav"] a {
+  border-radius: 0 !important;
+  border-left: 2px solid transparent !important;
+  background: transparent !important;
+  transition: background .15s, border-color .15s;
+}
+[data-testid="stSidebarNav"] a:hover {
+  background: rgba(20, 50, 74, .05) !important;
+  border-left-color: var(--dsline) !important;
+}
+[data-testid="stSidebarNav"] a[aria-current],
+[data-testid="stSidebarNav"] li[aria-current] > a {
+  background: rgba(20, 50, 74, .085) !important;
+  border-left-color: var(--dsi) !important;
+}
+[data-testid="stSidebarNav"] a[aria-current] span,
+[data-testid="stSidebarNav"] li[aria-current] > a span {
+  font-weight: 650 !important;
+}
 [data-testid="stNavSectionHeader"] {
   font-family: var(--dsmono) !important;
   font-size: .6rem !important;
