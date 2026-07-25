@@ -1378,3 +1378,36 @@ def build_iap_xlsx(label: str, iap: dict,
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def build_simple_xlsx(title: str, sheets: dict[str, list[dict]],
+                      notes: list[str] | None = None) -> bytes:
+    """Generic workbook: one sheet per {name: rows-of-dicts} + notes.
+    Used by the stepped methods (As-Planned vs As-Built, Collapsed
+    As-Built) whose tables are analyst-shaped."""
+    wb = Workbook()
+    first = True
+    for name, rows in sheets.items():
+        ws = wb.active if first else wb.create_sheet()
+        ws.title = name[:31]
+        first = False
+        if not rows:
+            ws["A1"] = "(empty)"
+            continue
+        headers = list(rows[0].keys())
+        _header_row(ws, 1, headers)
+        for i, row in enumerate(rows, start=2):
+            for col, h in enumerate(headers, start=1):
+                v = row.get(h)
+                if isinstance(v, datetime):
+                    v = f"{v:%Y-%m-%d}"
+                c = ws.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+        _autofit(ws, {i + 1: min(max(len(str(h)) + 4, 12), 46)
+                      for i, h in enumerate(headers)})
+        ws.freeze_panes = "A2"
+    if notes:
+        _notes_sheet(wb, notes, "Notes & Caveats")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()

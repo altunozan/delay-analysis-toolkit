@@ -29,13 +29,13 @@ TOOLS = [
     "Data Intake & Inventory", "DCMA 14-Point", "Baseline Critical Path",
     "Revision Comparison", "Out-of-Sequence Repair", "Float Erosion",
     "Progress S-Curve", "Resource Loading", "Sequence Coding",
-    "Hierarchy Rebuild", "Report Assembler",
+    "Hierarchy Rebuild", "Milestone Shift Tracker", "Progress Transfer",
+    "Report Assembler",
 ]
 RETRO = [
-    "As-Planned vs As-Recorded", "Milestone Shift Tracker",
-    "Windows Analysis", "As-Built Critical Path", "Progress Transfer",
-    "Impacted As-Planned", "Concurrency Screening",
-    "Explain This Delay",
+    "As-Planned vs As-Built", "Windows Analysis",
+    "As-Built Critical Path", "Impacted As-Planned",
+    "Collapsed As-Built",
 ]
 PROSPECTIVE = ["Time Impact Analysis"]
 ALL_PAGES = TOOLS + RETRO + PROSPECTIVE

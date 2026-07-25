@@ -212,3 +212,41 @@ def _bucket(data: XerData, codes: dict[str, str]) -> dict[str, list[Task]]:
         value = codes.get(t.task_id, UNCODED)
         groups.setdefault(value, []).append(t)
     return groups
+
+
+def planned_vs_actual(
+    baseline: "XerData",
+    latest: "XerData",
+    codes: set[str] | None = None,
+) -> list[dict]:
+    """Per-activity planned (baseline) vs actual (latest) date comparison.
+
+    Feeds the As-Planned vs As-Built stepped method: ``codes`` limits the
+    comparison to the as-built section under review (e.g. the as-built
+    critical path); None compares every matched activity. Variances are
+    in calendar days, positive = later than planned.
+    """
+    base_by = {t.task_code: t for t in baseline.tasks
+               if not t.is_loe_or_wbs}
+    rows: list[dict] = []
+    for t in latest.tasks:
+        if t.is_loe_or_wbs:
+            continue
+        if codes is not None and t.task_code not in codes:
+            continue
+        b = base_by.get(t.task_code)
+        ps, pf = _planned_dates(b) if b is not None else (None, None)
+        rows.append({
+            "task_code": t.task_code,
+            "name": t.name,
+            "planned_start": ps,
+            "planned_finish": pf,
+            "actual_start": t.act_start,
+            "actual_finish": t.act_finish,
+            "start_var_days": _delta_days(ps, t.act_start),
+            "finish_var_days": _delta_days(pf, t.act_finish),
+            "in_baseline": b is not None,
+        })
+    rows.sort(key=lambda r: (r["actual_start"] or datetime.max,
+                             r["task_code"]))
+    return rows

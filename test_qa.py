@@ -1329,6 +1329,59 @@ _wb_e = load_workbook(io.BytesIO(_bex(_exp, confirmed=[{
 check("I10c explain workbook gains the Confirmed Drivers sheet",
       "Confirmed Drivers" in _wb_e.sheetnames)
 
+
+# ===================================================================== #
+# Layer J — APvAB stepped method + Collapsed As-Built
+# ===================================================================== #
+print("\n--- Layer J: APvAB + Collapsed As-Built ---")
+from programme.variance import planned_vs_actual as _pva
+from programme.collapsed_asbuilt import (collapse_asbuilt as _cab,
+                                         build_grouping_prompt as _bgp,
+                                         parse_grouping as _pg)
+
+_j_rows = _pva(_gb, _gu, {"A1870", "KD15"})
+check("J1 planned_vs_actual: scoped rows + manual variance recount",
+      len(_j_rows) == 2 and _j_rows[0]["task_code"] == "A1870"
+      and abs(_j_rows[0]["finish_var_days"] - 46.8) < 0.2,
+      str(_j_rows[0].get("finish_var_days")))
+check("J1b unscoped compares every matched real activity",
+      len(_pva(_gb, _gu)) == sum(
+          1 for t in _gu.tasks if not t.is_loe_or_wbs))
+
+# collapse on the OOS-repaired file (the intended pipeline)
+_j_u2 = parse_xer(_hout)
+_j_res0 = _cab(_j_u2, "Upd", set())
+check("J2 empty extraction is a no-op: collapsed == model, delta 0",
+      _j_res0.delta_days == 0.0
+      and _j_res0.collapsed_completion == _j_res0.model_completion)
+check("J2b calibration disclosed and gap warning fires when large",
+      _j_res0.calibration_days is not None
+      and (abs(_j_res0.calibration_days) <= 30
+           or any("validation gap" in w for w in _j_res0.warnings)))
+_j_last = _j_res0.critical_chain[-1].task_code
+_j_res1 = _cab(_j_u2, "Upd", {_j_last})
+check("J3 extracting a controlling-chain activity collapses completion",
+      _j_res1.delta_days is not None and _j_res1.delta_days > 0,
+      f"delta={_j_res1.delta_days}")
+check("J3b delta identity: model - collapsed == delta",
+      abs((_j_res1.model_completion - _j_res1.collapsed_completion
+           ).total_seconds() / 86400.0 - _j_res1.delta_days) < 0.1)
+check("J3c unknown extraction codes ignored + disclosed",
+      any("ignored" in w for w in _cab(_j_u2, "U", {"NOPE-1"}).warnings))
+
+_j_g, _j_d = _pg('{"groups":[{"label":"L","codes":["A1870","FAKE"],'
+                 '"rationale":"r"}]}', _gu)
+check("J4 grouping parse keeps verbatim codes, drops fabricated ones",
+      len(_j_g) == 1 and _j_g[0]["codes"] == ["A1870"] and _j_d == 1)
+check("J4b grouping prompt is code<TAB>name lines",
+      "\t" in _bgp(_gu).split("\n")[1])
+
+from programme import build_simple_xlsx as _bsx
+_wb_j = load_workbook(io.BytesIO(_bsx(
+    "T", {"Sheet A": [{"X": 1, "Y": "a"}]}, notes=["note"])))
+check("J5 generic workbook opens with data + notes sheets",
+      {"Sheet A", "Notes & Caveats"} <= set(_wb_j.sheetnames))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

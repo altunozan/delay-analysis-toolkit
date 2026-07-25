@@ -49,6 +49,7 @@ from programme import (
     build_impacted_xer,
     FRAGNET_SYSTEM_PROMPT,
     FragnetActivity,
+    FragnetLink,
     activity_code_types,
     FRAGNET_VARIANTS,
     LOGIC_SYSTEM_PROMPT,
@@ -151,6 +152,12 @@ from programme import (
     build_concurrency_xlsx,
     run_impacted_asplanned,
     build_iap_xlsx,
+    planned_vs_actual,
+    collapse_asbuilt,
+    build_grouping_prompt,
+    parse_grouping,
+    GROUPING_SYSTEM_PROMPT,
+    build_simple_xlsx,
     build_inventory,
     combine_mappings,
     end_activity_candidates,
@@ -964,64 +971,66 @@ def milestone_tab() -> None:
 
     by_slip = sorted(tracked, key=lambda s: abs(s.total_shift_days), reverse=True)
 
-    view = st.radio(
-        "View",
-        ["Top slipping milestones", "Single milestone"],
-        horizontal=True,
-        key="ms_view",
+    labels = {
+        s.key: f"{s.key} — {s.name[:60]}  ({s.total_shift_days:+.0f}d"
+               f"{', achieved' if s.is_achieved else ''})"
+        for s in by_slip
+    }
+    picked = st.multiselect(
+        "Milestones to plot (worst slippage first)",
+        options=[s.key for s in by_slip],
+        default=[s.key for s in by_slip[:min(5, len(by_slip))]],
+        format_func=lambda k: labels[k],
+        key="ms_multi",
     )
-    if view == "Top slipping milestones":
-        top_n = st.slider("How many milestones", 3, min(25, len(by_slip)),
-                          min(10, len(by_slip)))
-        selected = by_slip[:top_n]
-    else:
-        labels = {
-            s.key: f"{s.key} — {s.name}  ({s.total_shift_days:+.0f}d"
-                   f"{', achieved' if s.is_achieved else ''})"
-            for s in by_slip
-        }
-        pick = st.selectbox(
-            "Milestone",
-            options=[s.key for s in by_slip],
-            format_func=lambda k: labels[k],
-            key="ms_pick",
-        )
-        selected = [s for s in by_slip if s.key == pick]
+    selected = [s for s in by_slip if s.key in set(picked)]
+    if not selected:
+        st.info("Pick at least one milestone above.")
+        return
 
     rows = []
     for s in selected:
         for p in s.points:
             if p.value_date is None:
                 continue
+            delay = ((p.value_date - s.first_value).days
+                     if s.first_value else None)
             rows.append({
                 "Milestone": f"{s.key} · {s.name[:45]}",
                 "Data date": p.data_date,
                 "Milestone date": p.value_date,
                 "Status": "Actual" if p.is_actual else "Forecast",
-                "Shift (days)": round(s.total_shift_days, 1),
+                "Delay (days)": delay,
             })
     chart_df = pd.DataFrame(rows)
 
-    line = (
+    # Left axis (y1): forecast/actual completion date per data date.
+    x_axis = alt.X("Data date:T", title="Data date",
+                   axis=alt.Axis(format="%b %Y", labelAngle=-30,
+                                 grid=True, titleFontSize=13,
+                                 labelFontSize=11))
+    date_line = (
         alt.Chart(chart_df)
         .mark_line(strokeWidth=2.5, interpolate="monotone")
         .encode(
-            x=alt.X("Data date:T", title="Revision data date",
-                    axis=alt.Axis(format="%b %Y", labelAngle=-30, grid=True)),
-            y=alt.Y("Milestone date:T", title="Forecast / actual milestone date",
+            x=x_axis,
+            y=alt.Y("Milestone date:T",
+                    title="Completion date (forecast / actual)",
                     scale=alt.Scale(zero=False),
-                    axis=alt.Axis(format="%b %Y", grid=True)),
+                    axis=alt.Axis(format="%b %Y", grid=True,
+                                  orient="left", titleFontSize=13,
+                                  labelFontSize=11)),
             color=alt.Color("Milestone:N",
                             legend=alt.Legend(orient="bottom", columns=2,
                                               labelLimit=380, title=None)),
         )
     )
-    points = (
+    date_pts = (
         alt.Chart(chart_df)
         .mark_point(size=110, filled=True)
         .encode(
-            x="Data date:T",
-            y="Milestone date:T",
+            x=x_axis,
+            y=alt.Y("Milestone date:T", scale=alt.Scale(zero=False)),
             color=alt.Color("Milestone:N", legend=None),
             shape=alt.Shape(
                 "Status:N",
@@ -1034,16 +1043,39 @@ def milestone_tab() -> None:
                 alt.Tooltip("Data date:T", format="%d %b %Y"),
                 alt.Tooltip("Milestone date:T", format="%d %b %Y"),
                 alt.Tooltip("Status:N"),
-                alt.Tooltip("Shift (days):Q", format="+.0f"),
+                alt.Tooltip("Delay (days):Q", format="+.0f",
+                            title="Delay vs first forecast (d)"),
             ],
         )
     )
+    # Right axis (y2): delay vs first forecast, in days.
+    delay_line = (
+        alt.Chart(chart_df)
+        .mark_line(strokeWidth=1.6, strokeDash=[6, 3], opacity=0.75)
+        .encode(
+            x=x_axis,
+            y=alt.Y("Delay (days):Q",
+                    title="Delay vs first forecast (days)",
+                    axis=alt.Axis(orient="right", grid=False,
+                                  titleFontSize=13, labelFontSize=11,
+                                  titleColor="#cf222e",
+                                  labelColor="#cf222e")),
+            color=alt.Color("Milestone:N", legend=None),
+        )
+    )
     st.altair_chart(
-        (line + points).properties(height=420).interactive(),
+        alt.layer(date_line + date_pts, delay_line)
+        .resolve_scale(y="independent")
+        .properties(height=440, padding={"left": 28, "right": 12,
+                                         "top": 8, "bottom": 4})
+        .interactive(),
         width="stretch",
     )
-    st.caption("◆ = achieved (actual date) · ● = forecast. Positive shift = "
-               "milestone moved later.")
+    st.caption(
+        "Solid lines (left axis): forecast/actual completion date. "
+        "Dashed lines (right axis, red): delay against the first "
+        "forecast, in days. ◆ = achieved (actual) · ● = forecast."
+    )
 
     st.subheader("Shift summary")
     summary = pd.DataFrame([
@@ -3024,10 +3056,10 @@ def concurrency_tab() -> None:
     recs = _register_records()
     if not recs:
         st.info(
-            "No delay events in the register yet. Capture events (with "
-            "asserted responsibility) in **Time Impact Analysis** step "
-            "② and save them to the register — this screening reads "
-            "the same register.")
+            "No delay events in the shared register yet. Save events "
+            "from **Impacted As-Planned** step ① or **Time Impact "
+            "Analysis** — this screening reads whatever the analyses "
+            "have registered.")
         return
 
     pool = dict(files)
@@ -3095,14 +3127,6 @@ def impacted_asplanned_tab() -> None:
     if not files or inv is None:
         st.info("Upload programmes in **Data Intake** first.")
         return
-    recs = _register_records(require_fragnet=True)
-    if not recs:
-        st.info(
-            "No events with fragnets in the register yet. Build and "
-            "save them in **Time Impact Analysis** (steps ②-⑤) — this "
-            "method re-uses the same confirmed fragnets against the "
-            "baseline.")
-        return
 
     names = [r.file_name for r in inv.revisions]
     base_idx = (names.index(inv.baseline.file_name)
@@ -3111,11 +3135,92 @@ def impacted_asplanned_tab() -> None:
                           help="Defaults to the flagged contract "
                                "baseline.")
     data = dict(files)[chosen]
+    base_codes = sorted(t.task_code for t in data.tasks
+                        if not t.is_loe_or_wbs)
 
-    if st.button(f"Run impacted as-planned ({len(recs)} event(s), "
+    # ---- ① events captured HERE (standalone — no TIA required) -------- #
+    st.subheader("① Delay events for this method")
+    st.caption(
+        "Define the events directly here: each becomes a single-"
+        "activity fragnet between its tie-in activities in the "
+        "baseline. (Optionally import richer fragnets already saved to "
+        "the shared register — never required.)")
+    iap_rows = st.session_state.get("iap_events", [{
+        "Event ID": "EVT-01", "Title": "", "Date (YYYY-MM-DD)": "",
+        "Responsibility (asserted)": "Employer",
+        "Duration (working days)": 10.0,
+        "Tie-in predecessor (activity ID)": "",
+        "Tie-in successor (activity ID)": "",
+    }])
+    edited = st.data_editor(
+        pd.DataFrame(iap_rows), width="stretch", hide_index=True,
+        num_rows="dynamic", key="iap_ed")
+    st.session_state["iap_events"] = edited.to_dict("records")
+
+    recs = []
+    problems = []
+    for r in st.session_state["iap_events"]:
+        eid = str(r.get("Event ID") or "").strip()
+        if not eid:
+            continue
+        try:
+            dt = datetime.strptime(
+                str(r.get("Date (YYYY-MM-DD)") or "").strip(),
+                "%Y-%m-%d")
+        except ValueError:
+            problems.append(f"{eid}: date must be YYYY-MM-DD")
+            continue
+        pred = str(r.get("Tie-in predecessor (activity ID)")
+                   or "").strip()
+        succ = str(r.get("Tie-in successor (activity ID)") or "").strip()
+        for c in (pred, succ):
+            if c and c not in base_codes:
+                problems.append(f"{eid}: tie-in '{c}' is not in the "
+                                "baseline")
+        if not pred and not succ:
+            problems.append(f"{eid}: needs at least one tie-in "
+                            "activity ID")
+            continue
+        ev = DelayEvent(eid, str(r.get("Title") or eid),
+                        date_raised=dt,
+                        responsibility_asserted=str(
+                            r.get("Responsibility (asserted)") or ""))
+        frag = [FragnetActivity(
+            f"{eid}-F1", str(r.get("Title") or eid),
+            float(r.get("Duration (working days)") or 1.0),
+            predecessors=[FragnetLink(pred)] if pred else [],
+            successors=[FragnetLink(succ)] if succ else [])]
+        recs.append((ev, frag))
+    for p in problems:
+        st.warning(p)
+
+    reg = _register_records(require_fragnet=True)
+    use_reg = False
+    if reg:
+        use_reg = st.toggle(
+            f"Also include the {len(reg)} event(s) with confirmed "
+            "fragnets from the shared register", key="iap_use_reg")
+    if use_reg:
+        have = {e.event_id for e, _ in recs}
+        recs += [(e, f) for e, f in reg if e.event_id not in have]
+
+    st.subheader("② Insert into the baseline and measure")
+    if not recs:
+        st.info("Define at least one valid event above.")
+        return
+    cA, cB = st.columns([2, 1])
+    if cA.button(f"Run impacted as-planned ({len(recs)} event(s), "
                  "date order)", type="primary", key="iap_go"):
         st.session_state["iap_res"] = run_impacted_asplanned(
             data, chosen, recs)
+    if cB.button("💾 Save events to the shared register",
+                 key="iap_save_reg",
+                 help="Makes them available to the concurrency "
+                      "sub-module and other methods."):
+        for e, f in recs:
+            st.session_state.setdefault("tia_register", {})[
+                e.event_id] = event_to_dict(e, f, None)
+        st.success(f"{len(recs)} event(s) saved.")
         st.session_state["iap_label"] = chosen
     iap = st.session_state.get("iap_res")
     if not iap:
@@ -3165,6 +3270,462 @@ def impacted_asplanned_tab() -> None:
              "spreadsheetml.sheet",
         key="iap_dl",
     )
+    analysis_submodules("iap")
+
+
+def analysis_submodules(page_key: str) -> None:
+    """Concurrency screening + Explain-this-delay as sub-modules of an
+    analysis method page (they are lenses on an analysis, not standalone
+    methods). Toggle-gated so they cost nothing until opened."""
+    st.divider()
+    st.markdown("##### Analysis sub-modules")
+    with st.expander("⚖️ Concurrency screening (per-window "
+                     "Employer/Contractor overlap)"):
+        if st.toggle("Run concurrency screening",
+                     key=f"sub_conc_{page_key}"):
+            concurrency_tab()
+    with st.expander("🔎 Explain this delay (why did a milestone move?)"):
+        if st.toggle("Run explain", key=f"sub_expl_{page_key}"):
+            explain_tab()
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def cached_stitch(key: tuple, core_freq: float, _ordered):
+    return analyse_asbuilt_path(_ordered, core_min_frequency=core_freq)
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def cached_trace(key: tuple, end_code, _ordered):
+    return extract_actual_trace(_ordered, end_task_code=end_code)
+
+
+def apab_tab() -> None:
+    st.caption(
+        "The classic retrospective method, run as explicit steps: "
+        "reconstruct what actually happened, define the as-built "
+        "critical path, compare the as-built section against the "
+        "planned dates, fix key dates, measure the delay. Jump between "
+        "steps freely — each records what you chose."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload at least two programmes (baseline + as-built "
+                "update) in **Data Intake** first.")
+        return
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    baseline = (pool[inv.baseline.file_name]
+                if inv.baseline else ordered[0][1])
+    latest_label, latest = ordered[-1]
+    okey = tuple(_fkey(n) for n, _ in ordered)
+
+    step = st.radio(
+        "Method step",
+        ["① Reconstruct sequence", "② As-built critical path",
+         "③ Planned-dates comparison", "④ Key dates",
+         "⑤ Delay measurement"],
+        horizontal=True, key="apab_step")
+
+    # ---------------- ① reconstruct the as-built sequence -------------- #
+    if step.startswith("①"):
+        st.subheader("① Reconstruct the real sequence of the works")
+        core_freq = st.slider(
+            "Persistence threshold (fraction of revisions an activity "
+            "must have been on the forecast path)", 0.2, 1.0, 0.5, 0.05,
+            key="apab_freq")
+        stitch = cached_stitch(okey, core_freq, ordered)
+        for w in stitch.warnings:
+            st.warning(w)
+        st.dataframe(pd.DataFrame([{
+            "Window": f"W{w.index}: {w.from_label} → {w.to_label}",
+            "Driving activities": len(w.activities),
+            "Coverage %": (f"{w.coverage_pct:.0f}"
+                           if w.coverage_pct is not None else "—"),
+        } for w in stitch.windows]), width="stretch", hide_index=True)
+        seq = stitch.stitched
+        st.markdown(f"**Reconstructed sequence — {len(seq)} activities "
+                    "in actual-start order:**")
+        st.dataframe(pd.DataFrame([{
+            "Activity ID": a.task_code, "Activity": a.name,
+            "Actual start": (f"{a.act_start:%Y-%m-%d}"
+                             if a.act_start else "—"),
+            "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
+                              if a.act_finish else "—"),
+            "On forecast path of": a.forecast_by,
+        } for a in seq[:400]]), width="stretch", hide_index=True)
+        st.session_state["apab_stitch_freq"] = core_freq
+
+    # ---------------- ② define the as-built critical path -------------- #
+    elif step.startswith("②"):
+        st.subheader("② Define the as-built critical path")
+        basis = st.radio(
+            "Basis — the analyst's definitional choice, recorded in the "
+            "measurement",
+            ["Activity-level (backward trace through actual dates)",
+             "Reconstructed sequence (stitched contemporaneous paths)"],
+            key="apab_basis_pick")
+        if basis.startswith("Activity"):
+            cands = trace_end_candidates(ordered)
+            labels = {c: f"{c} — {n}" + (f" (AF {d:%Y-%m-%d})" if d
+                                         else "")
+                      for c, n, d in cands}
+            end = st.selectbox("Trace backward from", list(labels),
+                               format_func=lambda k: labels[k],
+                               key="apab_end")
+            tr = cached_trace(okey, end, ordered)
+            for w in tr.warnings:
+                st.warning(w)
+            path = [(a.task_code, a.name) for a in tr.activities]
+            st.dataframe(pd.DataFrame([{
+                "Activity ID": a.task_code, "Activity": a.name,
+                "Actual start": (f"{a.act_start:%Y-%m-%d}"
+                                 if a.act_start else "—"),
+                "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
+                                  if a.act_finish else "—"),
+            } for a in tr.activities]), width="stretch",
+                hide_index=True)
+            with st.expander("Cross-check: where do the two independent "
+                             "reconstructions agree?"):
+                stitch = cached_stitch(
+                    okey, st.session_state.get("apab_stitch_freq", 0.5),
+                    ordered)
+                tri = triangulate(stitch, tr)
+                both = getattr(tri, "agreed_codes", None) or [
+                    c for c in tr.codes
+                    if c in {a.task_code for a in stitch.stitched}]
+                st.write(f"**{len(both)}** activities identified by "
+                         "BOTH methods (method-invariant findings).")
+        else:
+            stitch = cached_stitch(
+                okey, st.session_state.get("apab_stitch_freq", 0.5),
+                ordered)
+            path = [(a.task_code, a.name) for a in stitch.stitched]
+            st.write(f"Reconstructed-sequence basis: **{len(path)}** "
+                     "activities (step ① settings).")
+        if st.button("Use this as the as-built critical path →",
+                     type="primary", key="apab_adopt"):
+            st.session_state["apab_path"] = path
+            st.session_state["apab_path_basis"] = basis
+            st.success(f"Adopted: {len(path)} activities. Steps ③-⑤ "
+                       "now use this path.")
+
+    # ---------------- ③ planned-dates comparison ----------------------- #
+    elif step.startswith("③"):
+        st.subheader("③ As-built section vs PLANNED dates")
+        path = st.session_state.get("apab_path")
+        scope = st.radio(
+            "Comparison scope",
+            ["As-built critical path (adopted in step ②)",
+             "All matched activities"],
+            key="apab_scope",
+            help="The comparison need not be the critical path — choose "
+                 "the as-built section you want compared on planned "
+                 "dates.")
+        codes = ({c for c, _ in path} if path and scope.startswith("As")
+                 else None)
+        if scope.startswith("As") and not path:
+            st.info("No path adopted yet — showing all matched "
+                    "activities. Adopt a path in step ②.")
+        rows = planned_vs_actual(baseline, latest, codes)
+        matched = [r for r in rows if r["in_baseline"]]
+        fv = [r["finish_var_days"] for r in matched
+              if r["finish_var_days"] is not None]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Activities compared", len(rows))
+        m2.metric("Mean finish variance",
+                  f"{sum(fv)/len(fv):+.0f} d" if fv else "—")
+        m3.metric("Worst finish variance",
+                  f"{max(fv):+.0f} d" if fv else "—")
+        st.dataframe(pd.DataFrame([{
+            "Activity ID": r["task_code"], "Activity": r["name"][:50],
+            "Planned start": (f"{r['planned_start']:%Y-%m-%d}"
+                              if r["planned_start"] else "—"),
+            "Planned finish": (f"{r['planned_finish']:%Y-%m-%d}"
+                               if r["planned_finish"] else "—"),
+            "Actual start": (f"{r['actual_start']:%Y-%m-%d}"
+                             if r["actual_start"] else "—"),
+            "Actual finish": (f"{r['actual_finish']:%Y-%m-%d}"
+                              if r["actual_finish"] else "—"),
+            "Start var (d)": r["start_var_days"],
+            "Finish var (d)": r["finish_var_days"],
+        } for r in rows[:400]]), width="stretch", hide_index=True)
+        st.session_state["apab_cmp_rows"] = rows
+        with st.expander("Breakdown view (by activity code / WBS — the "
+                         "grouped comparison tool)"):
+            variance_tab()
+
+    # ---------------- ④ key dates from the as-built CP ----------------- #
+    elif step.startswith("④"):
+        st.subheader("④ Define the key dates")
+        path = st.session_state.get("apab_path")
+        if not path:
+            st.info("Adopt an as-built critical path in step ② first.")
+            return
+        saved = st.session_state.get("apab_keydates", {})
+        kd_df = pd.DataFrame([{
+            "Key date": c in saved,
+            "Activity ID": c, "Activity": n[:60],
+            "Why it is key (contractual / logic significance)":
+                saved.get(c, ""),
+        } for c, n in path])
+        edited = st.data_editor(
+            kd_df, width="stretch", hide_index=True,
+            disabled=["Activity ID", "Activity"], key="apab_kd_ed")
+        kd = {}
+        for _, r in edited.iterrows():
+            if bool(r["Key date"]):
+                kd[r["Activity ID"]] = str(
+                    r["Why it is key (contractual / logic "
+                      "significance)"] or "")
+        st.session_state["apab_keydates"] = kd
+        st.success(f"{len(kd)} key date(s) defined."
+                   if kd else "Tick the activities that carry key dates.")
+
+    # ---------------- ⑤ measure the delay ------------------------------ #
+    else:
+        st.subheader("⑤ Measure the delay")
+        rows = st.session_state.get("apab_cmp_rows") or planned_vs_actual(
+            baseline, latest,
+            {c for c, _ in st.session_state.get("apab_path", [])} or None)
+        kd = st.session_state.get("apab_keydates", {})
+        by_code = {r["task_code"]: r for r in rows}
+        kd_rows = []
+        for c, why in kd.items():
+            r = by_code.get(c)
+            if r:
+                kd_rows.append({
+                    "Key date": c, "Activity": r["name"][:50],
+                    "Planned finish": r["planned_finish"],
+                    "Actual finish": r["actual_finish"],
+                    "Delay (d)": r["finish_var_days"], "Why key": why})
+        planned_fin = max((r["planned_finish"] for r in rows
+                           if r["planned_finish"]), default=None)
+        actual_fin = max((r["actual_finish"] for r in rows
+                          if r["actual_finish"]), default=None)
+        overall = ((actual_fin - planned_fin).days
+                   if planned_fin and actual_fin else None)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Planned completion (section)",
+                  f"{planned_fin:%d %b %Y}" if planned_fin else "—")
+        m2.metric("Actual completion (section)",
+                  f"{actual_fin:%d %b %Y}" if actual_fin else "—")
+        m3.metric("MEASURED DELAY", f"{overall:+d} d"
+                  if overall is not None else "—")
+        if kd_rows:
+            st.markdown("**Key-date delays:**")
+            st.dataframe(pd.DataFrame([{
+                **{k: (f"{v:%Y-%m-%d}" if isinstance(v, datetime)
+                       else v) for k, v in r.items()}}
+                for r in kd_rows]), width="stretch", hide_index=True)
+        else:
+            st.caption("No key dates defined (step ④) — measuring on "
+                       "the section's completion only.")
+        basis_panel("As-Planned vs As-Built", latest, [
+            f"As-built critical path basis: "
+            f"{st.session_state.get('apab_path_basis', 'not adopted')}",
+            "Planned dates from the flagged contract baseline; actual "
+            "dates from the latest revision as recorded; variances in "
+            "calendar days",
+            f"{len(kd)} analyst-defined key date(s)",
+        ])
+        st.download_button(
+            "⬇️ Download as-planned vs as-built workbook (Excel)",
+            data=build_simple_xlsx(
+                "As-Planned vs As-Built",
+                {"Comparison": [{k: v for k, v in r.items()}
+                                for r in rows],
+                 "Key dates": kd_rows or [{}]},
+                notes=["Method: as-planned vs as-built, stepped. "
+                       "As-built path basis: "
+                       + st.session_state.get("apab_path_basis",
+                                              "not adopted"),
+                       "Variances in calendar days; positive = later "
+                       "than planned. 'As-recorded' caveat applies: "
+                       "actual dates are as recorded in the file, not "
+                       "independently verified."]),
+            file_name="as_planned_vs_as_built.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            key="apab_dl")
+
+    analysis_submodules("apab")
+
+
+def collapsed_asbuilt_tab() -> None:
+    st.caption(
+        "Collapsed as-built (but-for): only the as-built programme is "
+        "needed. Identify the event activities, remove them from the "
+        "sequence, and see where the programme collapses to — the "
+        "difference is the delay attributable to the extracted events."
+    )
+    files = get_parsed_files()
+    inv = st.session_state.get("inventory")
+    if not files or inv is None:
+        st.info("Upload the as-built programme in **Data Intake** first.")
+        return
+    names = [r.file_name for r in inv.revisions]
+    chosen = st.selectbox("As-built programme", names,
+                          index=len(names) - 1, key="cab_file")
+    data = dict(files)[chosen]
+
+    step = st.radio("Method step",
+                    ["① Identify candidate events",
+                     "② Confirm extraction set", "③ Collapse & measure"],
+                    horizontal=True, key="cab_step")
+
+    if step.startswith("①"):
+        st.subheader("① Identify candidate event activities")
+        st.caption("Group by name / WBS / activity codes — AI proposes, "
+                   "the analyst decides. These usually sit on the "
+                   "longest path.")
+        ai_key = st.session_state.get("tia_key", "")
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            st.markdown("**AI-assisted grouping**"
+                        + ("" if ai_key else
+                           " — register your AI in the Time Impact "
+                           "Analysis page (step ①) to enable"))
+            if st.button("Propose event groups from activity names",
+                         disabled=not ai_key, key="cab_ai_go"):
+                try:
+                    text = "".join(stream_narrative(
+                        st.session_state.get("tia_provider", "anthropic"),
+                        ai_key, build_grouping_prompt(data),
+                        st.session_state.get("tia_model", ""),
+                        system=GROUPING_SYSTEM_PROMPT))
+                    groups, dropped = parse_grouping(text, data)
+                    st.session_state["cab_groups"] = groups
+                    if dropped:
+                        st.warning(f"{dropped} proposed code(s) were "
+                                   "not verbatim in the file and were "
+                                   "dropped.")
+                except NarrativeError as exc:
+                    st.error(exc.message)
+        with c2:
+            st.markdown("**Deterministic fallback** — keyword filter")
+            kw = st.text_input("Name contains", key="cab_kw",
+                               placeholder="e.g. Review & Approval")
+            if kw.strip():
+                hits = [t.task_code for t in data.tasks
+                        if not t.is_loe_or_wbs and t.act_start
+                        and kw.lower() in t.name.lower()]
+                st.write(f"**{len(hits)}** started activities match.")
+                if st.button("Add matches as a group", key="cab_kw_add",
+                             disabled=not hits):
+                    gs = st.session_state.setdefault("cab_groups", [])
+                    gs.append({"label": f"Keyword: {kw}",
+                               "codes": hits,
+                               "rationale": "deterministic keyword "
+                                            "match"})
+        for g in st.session_state.get("cab_groups", []):
+            with st.expander(f"{g['label']} — {len(g['codes'])} "
+                             "activities"):
+                st.write(g.get("rationale", ""))
+                st.code(", ".join(g["codes"][:40])
+                        + (" …" if len(g["codes"]) > 40 else ""))
+
+    elif step.startswith("②"):
+        st.subheader("② Confirm the extraction set (analyst decision)")
+        groups = st.session_state.get("cab_groups", [])
+        pre = [c for g in groups for c in g["codes"]]
+        started = {t.task_code: t.name for t in data.tasks
+                   if not t.is_loe_or_wbs and t.act_start is not None}
+        picked = st.multiselect(
+            "Activities to EXTRACT (remove from the sequence)",
+            options=sorted(started),
+            default=[c for c in dict.fromkeys(pre) if c in started],
+            format_func=lambda c: f"{c} — {started[c][:60]}",
+            key="cab_pick")
+        st.session_state["cab_extract"] = picked
+        st.write(f"**{len(picked)}** activities in the extraction set.")
+
+    else:
+        st.subheader("③ Collapse and measure")
+        picked = set(st.session_state.get("cab_extract", []))
+        if not picked:
+            st.info("Confirm an extraction set in step ② first.")
+            return
+        if st.button(f"Collapse ({len(picked)} activities extracted)",
+                     type="primary", key="cab_go"):
+            st.session_state["cab_res"] = collapse_asbuilt(
+                data, chosen, picked)
+        res = st.session_state.get("cab_res")
+        if not res:
+            return
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("As-built completion (recorded)",
+                  f"{res.asbuilt_completion:%d %b %Y}"
+                  if res.asbuilt_completion else "—")
+        m2.metric("Unstatused model", f"{res.model_completion:%d %b %Y}"
+                  if res.model_completion else "—",
+                  help="Validation run BEFORE extraction — see the "
+                       "calibration below.")
+        m3.metric("Collapsed completion",
+                  f"{res.collapsed_completion:%d %b %Y}"
+                  if res.collapsed_completion else "—")
+        m4.metric("DELAY ATTRIBUTABLE", f"{res.delta_days:+.1f} d"
+                  if res.delta_days is not None else "—")
+        st.caption(f"Model validation: unstatused model vs recorded "
+                   f"as-built completion = "
+                   f"{res.calibration_days:+.1f} calendar days "
+                   f"({res.n_modelled} activities modelled, "
+                   f"{res.n_excluded_unstarted} unstarted excluded).")
+        for w in res.warnings:
+            st.warning(w)
+        if res.critical_chain:
+            with st.expander("Collapsed model's controlling chain "
+                             "(realism review)"):
+                st.dataframe(pd.DataFrame([{
+                    "Activity ID": a.task_code, "Activity": a.name[:50],
+                    "Duration (d)": a.duration_days,
+                    "Start": f"{a.start:%Y-%m-%d}" if a.start else "—",
+                    "Finish": f"{a.finish:%Y-%m-%d}" if a.finish else "—",
+                    "Extracted": "YES" if a.removed else "",
+                } for a in res.critical_chain]), width="stretch",
+                    hide_index=True)
+        basis_panel("Collapsed As-Built", data, [
+            "Method: collapsed as-built (but-for) — unstatused model on "
+            "actual durations and the file's logic; extraction by "
+            "zero-duration; delta between the two model runs",
+            f"Extraction set: {len(res.removed_codes)} activities, "
+            "analyst-confirmed",
+            f"Model calibration vs recorded completion: "
+            f"{res.calibration_days:+.1f} calendar days (disclosed)",
+        ])
+        with st.expander("Method caveats (always apply)"):
+            for c in res.caveats:
+                st.write("•", c)
+        st.download_button(
+            "⬇️ Download collapsed as-built workbook (Excel)",
+            data=build_simple_xlsx(
+                "Collapsed As-Built",
+                {"Summary": [{
+                    "Measure": k, "Value": v} for k, v in [
+                    ("As-built completion (recorded)",
+                     res.asbuilt_completion),
+                    ("Unstatused model completion",
+                     res.model_completion),
+                    ("Collapsed completion", res.collapsed_completion),
+                    ("Delay attributable (d)", res.delta_days),
+                    ("Model calibration (d)", res.calibration_days),
+                    ("Activities modelled", res.n_modelled),
+                    ("Extracted", len(res.removed_codes))]],
+                 "Extraction set": [{"Activity ID": c}
+                                    for c in res.removed_codes],
+                 "Controlling chain": [{
+                     "Activity ID": a.task_code, "Activity": a.name,
+                     "Duration (d)": a.duration_days,
+                     "Start": a.start, "Finish": a.finish,
+                     "Extracted": "YES" if a.removed else ""}
+                     for a in res.critical_chain]},
+                notes=res.warnings + res.caveats),
+            file_name="collapsed_asbuilt.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            key="cab_dl")
+
+    analysis_submodules("cab")
 
 
 def windows_tab() -> None:
@@ -3296,6 +3857,7 @@ def windows_tab() -> None:
         file_name="windows_analysis_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    analysis_submodules("windows")
 
 
 # ====================================================================== #
@@ -4741,6 +5303,7 @@ def tia_tab() -> None:
         file_name=f"tia_{event.event_id}.xlsx",
         mime="application/vnd.openxmlformats-officedocument."
              "spreadsheetml.sheet")
+    analysis_submodules("tia")
 
 
 # ====================================================================== #
@@ -4946,34 +5509,31 @@ def main() -> None:
             st.Page(hierarchy_tab, title="Hierarchy Rebuild",
                     icon=":material/account_tree:",
                     url_path="hierarchy-rebuild"),
+            st.Page(milestone_tab, title="Milestone Shift Tracker",
+                    icon=":material/flag:", url_path="milestone-shift"),
+            st.Page(progress_transfer_tab, title="Progress Transfer",
+                    icon=":material/sync_alt:",
+                    url_path="progress-transfer"),
             st.Page(report_tab, title="Report Assembler",
                     icon=":material/description:",
                     url_path="report-assembler"),
         ],
         "\U0001f52c Retrospective \u2014 what happened": [
-            st.Page(variance_tab, title="As-Planned vs As-Recorded",
+            st.Page(apab_tab, title="As-Planned vs As-Built",
                     icon=":material/bar_chart:",
-                    url_path="as-planned-vs-as-recorded"),
-            st.Page(milestone_tab, title="Milestone Shift Tracker",
-                    icon=":material/flag:", url_path="milestone-shift"),
+                    url_path="as-planned-vs-as-built"),
             st.Page(windows_tab, title="Windows Analysis",
                     icon=":material/grid_view:",
                     url_path="windows-analysis"),
             st.Page(asbuilt_tab, title="As-Built Critical Path",
                     icon=":material/timeline:",
                     url_path="as-built-critical-path"),
-            st.Page(progress_transfer_tab, title="Progress Transfer",
-                    icon=":material/sync_alt:",
-                    url_path="progress-transfer"),
             st.Page(impacted_asplanned_tab, title="Impacted As-Planned",
                     icon=":material/event_upcoming:",
                     url_path="impacted-as-planned"),
-            st.Page(concurrency_tab, title="Concurrency Screening",
-                    icon=":material/balance:",
-                    url_path="concurrency-screening"),
-            st.Page(explain_tab, title="Explain This Delay",
-                    icon=":material/search:",
-                    url_path="explain-this-delay"),
+            st.Page(collapsed_asbuilt_tab, title="Collapsed As-Built",
+                    icon=":material/compress:",
+                    url_path="collapsed-as-built"),
         ],
         "\u26a1 Prospective \u2014 forecast impact": [
             st.Page(tia_tab, title="Time Impact Analysis",

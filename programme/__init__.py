@@ -64,6 +64,14 @@ from .concurrency import (
     classify_responsibility,
     screen_concurrency,
 )
+from .collapsed_asbuilt import (
+    CAB_CAVEATS,
+    CollapseResult,
+    GROUPING_SYSTEM_PROMPT,
+    build_grouping_prompt,
+    collapse_asbuilt,
+    parse_grouping,
+)
 from .impacted_asplanned import IAP_CAVEATS, run_impacted_asplanned
 from .oos import (
     OOS_CAVEATS,
@@ -162,6 +170,7 @@ from .report_xlsx import (
     build_oos_xlsx,
     build_concurrency_xlsx,
     build_iap_xlsx,
+    build_simple_xlsx,
     build_critical_path_xlsx,
     build_explain_xlsx,
     build_float_erosion_xlsx,
@@ -244,6 +253,7 @@ from .variance import (
     combine_mappings,
     compute_variance,
     compute_variance_by_mapping,
+    planned_vs_actual,
 )
 from .notice import (
     CLAUSE_SYSTEM_PROMPT,
@@ -487,6 +497,14 @@ __all__ = [
     "screen_concurrency",
     "IAP_CAVEATS",
     "run_impacted_asplanned",
+    "CAB_CAVEATS",
+    "CollapseResult",
+    "GROUPING_SYSTEM_PROMPT",
+    "build_grouping_prompt",
+    "collapse_asbuilt",
+    "parse_grouping",
+    "planned_vs_actual",
+    "build_simple_xlsx",
     "build_explain_xlsx",
     "build_float_erosion_xlsx",
     "build_progress_xlsx",
