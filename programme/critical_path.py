@@ -36,6 +36,11 @@ LONGEST_PATH_CAVEATS = [
     "Relationship lags are converted at the activity calendar and treated "
     "as elapsed days for comparison, which is an approximation where large "
     "lags meet non-standard calendars.",
+    "The trace follows the FULL driving DAG: every predecessor within "
+    "the branch tolerance of the tightest is followed, so parallel "
+    "driving chains all appear as path members; branch points are "
+    "reported. A wider tolerance surfaces near-parallel drivers; the "
+    "tolerance used is disclosed with the run.",
     "Links flagged with a gap indicate points where even the tightest "
     "predecessor does not drive the activity's dates — a constraint, "
     "calendar non-work period, or the data date is controlling there.",
@@ -83,6 +88,7 @@ class CriticalPathResult:
     end_choice: str | None = None    # trace terminal (longest-path method)
     activities: list[PathActivity] = field(default_factory=list)  # ES order
     links: list[PathLink] = field(default_factory=list)
+    branch_tolerance_hours: float = 1.0   # driving-DAG width followed
     chain_segments: int = 0          # connected components among critical acts
     is_continuous: bool = False
     start_activity: str | None = None
@@ -93,6 +99,15 @@ class CriticalPathResult:
     @property
     def critical(self) -> list[PathActivity]:
         return [a for a in self.activities if a.band == "critical"]
+
+    @property
+    def branch_points(self) -> list[str]:
+        """Activities driven by MORE THAN ONE followed predecessor —
+        the places where the driving path is genuinely parallel and a
+        single-chain reading would understate concurrency."""
+        from collections import Counter
+        c = Counter(l.succ_code for l in self.links)
+        return sorted(code for code, n in c.items() if n > 1)
 
     @property
     def near_critical(self) -> list[PathActivity]:
@@ -258,14 +273,18 @@ def extract_longest_path(
     end_task_code: str | None = None,
     near_critical_days: float = 10.0,
     gap_flag_days: float = 5.0,
+    branch_tolerance_hours: float = 1.0,
     config: DCMAConfig | None = None,
 ) -> CriticalPathResult:
-    """Backward driving-logic trace from the end activity/milestone.
+    """Backward driving-logic trace: the FULL DRIVING DAG.
 
-    At each activity the trace follows the predecessor(s) whose relationship
-    imposes the tightest constraint on its early dates (minimum slack; ties
-    within 1 hour are all followed). ``end_task_code`` defaults to the
-    incomplete activity with the latest early finish.
+    At each activity EVERY predecessor whose slack is within
+    ``branch_tolerance_hours`` of the tightest is followed — parallel
+    driving chains are all captured, not a single branch. Widen the
+    tolerance (e.g. to a working day) to surface near-parallel drivers
+    for a concurrency defence; ``branch_points`` lists where the path
+    genuinely forks. ``end_task_code`` defaults to the incomplete
+    activity with the latest early finish.
     """
     config = config or DCMAConfig()
     result = CriticalPathResult(
@@ -273,6 +292,7 @@ def extract_longest_path(
         float_tolerance_days=0.0,
         near_critical_days=near_critical_days,
         method="longest_path",
+        branch_tolerance_hours=branch_tolerance_hours,
     )
     result.caveats.extend(LONGEST_PATH_CAVEATS + SHARED_CAVEATS)
 
@@ -330,7 +350,7 @@ def extract_longest_path(
         implied = p_date + timedelta(days=lag_days)
         return (target - implied).total_seconds() / 3600.0
 
-    TIE_TOL_H = 1.0
+    TIE_TOL_H = max(branch_tolerance_hours, 0.0)
 
     # --- backward walk ----------------------------------------------------
     on_path: set[str] = set()

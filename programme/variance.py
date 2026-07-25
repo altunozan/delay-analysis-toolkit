@@ -273,7 +273,12 @@ def keydate_windows(rows: list[dict],
         actual = _delta_days(a["actual_finish"], b["actual_finish"])
         delay = (round(actual - planned, 1)
                  if planned is not None and actual is not None else None)
-        if delay is not None:
+        # As-built order differing from planned order makes the planned
+        # interval NEGATIVE: the pair was RESEQUENCED and 'delay' would
+        # carry a sequencing artefact, not elongation — flag it and
+        # keep it OUT of the cumulative sum.
+        resequenced = planned is not None and planned < 0
+        if delay is not None and not resequenced:
             cum = round(cum + delay, 1)
         out.append({
             "from_code": a["task_code"], "to_code": b["task_code"],
@@ -283,6 +288,8 @@ def keydate_windows(rows: list[dict],
             "actual_interval_days": (round(actual, 1)
                                      if actual is not None else None),
             "window_delay_days": delay,
-            "cumulative_delay_days": cum if delay is not None else None,
+            "resequenced": resequenced,
+            "cumulative_delay_days": (cum if delay is not None
+                                      and not resequenced else None),
         })
     return out

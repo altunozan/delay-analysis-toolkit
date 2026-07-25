@@ -57,6 +57,14 @@ class WindowRow:
     cp_retained: int = 0
     cp_similarity: float | None = None   # retained / union
     shifts: list[PathShift] = field(default_factory=list)
+    # --- bifurcation (AACE MIP 3.3/3.4 territory): the prior schedule
+    # re-run with the later update's PROGRESS ONLY splits the window's
+    # movement into what performance did vs what replanning did --------
+    performance_days: float | None = None    # progress-only vs prior own
+    replanning_days: float | None = None     # later own vs progress-only
+    replan_logic_days: float | None = None   # ..of which logic/duration
+    replan_scope_days: float | None = None   # ..of which scope add/drop
+    engine_window_days: float | None = None  # perf + replan (engine)
 
     @property
     def joined(self) -> list[PathShift]:
@@ -79,6 +87,9 @@ def analyse_windows(
     revisions: list[tuple[str, XerData]],
     *,
     switch_threshold: float = 0.5,
+    end_task_code: str | None = None,
+    branch_tolerance_hours: float = 1.0,
+    bifurcate: bool = True,
     config: DCMAConfig | None = None,
 ) -> WindowsResult:
     """Analyse movement per window across data-date-ordered revisions.
@@ -101,7 +112,9 @@ def analyse_windows(
     # Longest path per revision (default terminal = latest finisher).
     paths: dict[str, dict[str, str]] = {}          # label -> {code: name}
     for label, data in revisions:
-        cp = extract_longest_path(data, label, config=config)
+        cp = extract_longest_path(data, label, config=config,
+                     end_task_code=end_task_code,
+                     branch_tolerance_hours=branch_tolerance_hours)
         paths[label] = {a.task_code: a.name for a in cp.critical}
 
     for i in range(len(revisions) - 1):
@@ -148,6 +161,66 @@ def analyse_windows(
                 f"Window {row.index}: '{l_new}' does not have a later data "
                 f"date than '{l_old}' — check the revision ordering."
             )
+
+    # --- bifurcation: performance vs replanning per window ------------
+    if bifurcate and len(revisions) >= 2:
+        from .progress_transfer import run_progress_transfer
+        by_label = dict(revisions)
+        own_completion: dict[str, "datetime | None"] = {}
+
+        def _own(label: str):
+            if label not in own_completion:
+                d = by_label[label]
+                own_completion[label] = run_progress_transfer(
+                    d, d, label, label,
+                    config=config).completion_reference
+            return own_completion[label]
+
+        for row in result.windows:
+            try:
+                tr = run_progress_transfer(
+                    by_label[row.from_label], by_label[row.to_label],
+                    row.from_label, row.to_label, config=config)
+                prev_own = _own(row.from_label)
+                if tr.completion_transferred and prev_own:
+                    row.performance_days = round(
+                        (tr.completion_transferred - prev_own
+                         ).total_seconds() / 86400.0, 1)
+                if (tr.completion_reference
+                        and tr.completion_transferred):
+                    row.replanning_days = round(
+                        (tr.completion_reference
+                         - tr.completion_transferred
+                         ).total_seconds() / 86400.0, 1)
+                if tr.network_effect_days is not None:
+                    row.replan_logic_days = round(
+                        -tr.network_effect_days, 1)
+                if tr.scope_effect_days is not None:
+                    row.replan_scope_days = round(
+                        -tr.scope_effect_days, 1)
+                if (row.performance_days is not None
+                        and row.replanning_days is not None):
+                    row.engine_window_days = round(
+                        row.performance_days + row.replanning_days, 1)
+            except Exception as exc:               # noqa: BLE001
+                result.warnings.append(
+                    f"Window {row.index}: bifurcation failed "
+                    f"({type(exc).__name__}) — movement reported "
+                    "undecomposed.")
+        result.caveats.append(
+            "Bifurcation: each window's PRIOR schedule is re-run with "
+            "the LATER update's progress only (no revisions), splitting "
+            "the window movement into a PERFORMANCE component (what "
+            "execution did to the prior plan) and a REPLANNING "
+            "component (what the update's logic/duration/scope edits "
+            "did), the latter decomposed further into logic/duration "
+            "vs scope. All four figures come from the toolkit's own "
+            "engine run identically on both files, so the SPLIT is "
+            "method-consistent; its total can differ from the "
+            "file-scheduled movement by the engines' disclosed "
+            "calibration. A large replanning share is the signature of "
+            "recovery/re-baselining inside the window, not of "
+            "performance.")
 
     movements = [w.movement_days for w in result.windows
                  if w.movement_days is not None]

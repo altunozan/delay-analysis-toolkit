@@ -134,6 +134,7 @@ def collapse_asbuilt(
     label: str,
     remove_codes: set[str],
     *,
+    anchor_code: str | None = None,
     config: DCMAConfig | None = None,
 ) -> CollapseResult:
     """Unstatus, validate, extract, reschedule, measure."""
@@ -176,8 +177,18 @@ def collapse_asbuilt(
     anchor = min(t.act_start for t in started)
 
     # ---- run 1: unstatused as-built model (validation) -----------------
+    def _completion(EF: dict) -> "datetime | None":
+        if anchor_code and anchor_code in EF:
+            return EF[anchor_code]
+        return max(EF.values()) if EF else None
+
     _, EF1 = _schedule(dict(nodes), rels, anchor)
-    result.model_completion = max(EF1.values()) if EF1 else None
+    result.model_completion = _completion(EF1)
+    if anchor_code and anchor_code not in nodes:
+        result.warnings.append(
+            f"Contractual completion milestone '{anchor_code}' is not "
+            "in the modelled population — completion measured at the "
+            "latest modelled finish instead (disclosed).")
     if result.model_completion and result.asbuilt_completion:
         result.calibration_days = round(
             (result.model_completion
@@ -204,7 +215,7 @@ def collapse_asbuilt(
     for c in result.removed_codes:
         collapsed_nodes[c] = 0.0
     ES2, EF2 = _schedule(collapsed_nodes, rels, anchor)
-    result.collapsed_completion = max(EF2.values()) if EF2 else None
+    result.collapsed_completion = _completion(EF2)
     if result.model_completion and result.collapsed_completion:
         result.delta_days = round(
             (result.model_completion

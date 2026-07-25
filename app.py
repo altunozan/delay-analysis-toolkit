@@ -261,8 +261,8 @@ def cached_compare(key_old: str, key_new: str, label_old: str,
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
-def cached_windows(key: tuple, _ordered):
-    return analyse_windows(_ordered)
+def cached_windows(key: tuple, _ordered, end_code=None):
+    return analyse_windows(_ordered, end_task_code=end_code)
 
 
 @st.cache_data(show_spinner=False, max_entries=16)
@@ -281,9 +281,11 @@ def cached_repair_plan(key: str, _data):
 
 
 @st.cache_data(show_spinner=False, max_entries=24)
-def cached_longest_path(key: str, label: str, end_code, near: float, _data):
+def cached_longest_path(key: str, label: str, end_code, near: float,
+                        _data, branch_tol: float = 1.0):
     return extract_longest_path(_data, label, end_task_code=end_code,
-                                near_critical_days=near)
+                                near_critical_days=near,
+                                branch_tolerance_hours=branch_tol)
 
 
 @st.cache_data(show_spinner=False, max_entries=24)
@@ -546,6 +548,32 @@ def intake_tab() -> None:
 
     inv = build_inventory(files, baseline_file=baseline_file)
     st.session_state[sk.INVENTORY] = inv
+
+    # The completion obligation: ONE election, honoured by every module
+    # (windows, as-built trace, milestone tracker, collapsed as-built,
+    # impact bands). Without it, modules trace to the latest finisher —
+    # and post-PC activities (demob, DLP, handover admin) silently
+    # become the measured completion.
+    _latest_data = files[-1][1] if files else None
+    _ms_opts = ["(auto — latest finisher)"]
+    _ms_map = {}
+    if _latest_data is not None:
+        for t in _latest_data.tasks:
+            if t.is_milestone and not t.is_loe_or_wbs:
+                lbl = f"{t.task_code} — {t.name[:60]}"
+                _ms_opts.append(lbl)
+                _ms_map[lbl] = t.task_code
+    _cur_ms = st.session_state.get(sk.CONTRACT_MS)
+    _cur_lbl = next((l for l, c in _ms_map.items() if c == _cur_ms),
+                    _ms_opts[0])
+    _pick = st.selectbox(
+        "Contractual completion milestone (the completion obligation)",
+        _ms_opts, index=_ms_opts.index(_cur_lbl),
+        help="Every module traces and measures to this milestone. "
+             "'Auto' means the latest finisher in each file — which is "
+             "the wrong date whenever the programme carries post-"
+             "completion activities. Recorded in the Basis of Analysis.")
+    st.session_state[sk.CONTRACT_MS] = _ms_map.get(_pick)
 
     st.subheader("Data Inventory")
     inv_df = pd.DataFrame([
@@ -1029,7 +1057,11 @@ def milestone_tab() -> None:
     picked = st.multiselect(
         "Milestones to plot (worst slippage first)",
         options=[s.key for s in by_slip],
-        default=[s.key for s in by_slip[:min(5, len(by_slip))]],
+        default=list(dict.fromkeys(
+            ([st.session_state.get(sk.CONTRACT_MS)]
+             if any(s.key == st.session_state.get(sk.CONTRACT_MS)
+                    for s in by_slip) else [])
+            + [s.key for s in by_slip[:min(5, len(by_slip))]])),
         format_func=lambda k: labels[k],
         key="ms_multi",
     )
@@ -2285,7 +2317,10 @@ def report_tab() -> None:
                      "Changes by category")]))
 
         # Windows
-        wres = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
+        wres = cached_windows(
+        (tuple(_fkey(n) for n, _ in ordered),
+         st.session_state.get(sk.CONTRACT_MS)), ordered,
+        st.session_state.get(sk.CONTRACT_MS))
         sec = ReportSection("Windows / Period Movement")
         if wres.total_movement_days is not None:
             sec.key_findings.append(
@@ -3111,7 +3146,10 @@ def concurrency_tab() -> None:
 
     pool = dict(files)
     ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
-    wres = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
+    wres = cached_windows(
+        (tuple(_fkey(n) for n, _ in ordered),
+         st.session_state.get(sk.CONTRACT_MS)), ordered,
+        st.session_state.get(sk.CONTRACT_MS))
     res = screen_concurrency(wres, recs)
 
     m1, m2, m3, m4 = st.columns(4)
@@ -3564,6 +3602,8 @@ def apab_tab() -> None:
                 "Planned interval (d)": w["planned_interval_days"],
                 "Actual interval (d)": w["actual_interval_days"],
                 "Window delay (d)": w["window_delay_days"],
+                "Resequenced": ("⚠️ YES — excluded from cumulative"
+                                if w.get("resequenced") else ""),
                 "Cumulative (d)": w["cumulative_delay_days"],
             } for i, w in enumerate(kwin, start=1)]),
                 width="stretch", hide_index=True)
@@ -3732,10 +3772,30 @@ def collapsed_asbuilt_tab() -> None:
         if not picked:
             st.info("Confirm an extraction set in step ② first.")
             return
+        # HARD GATE: collapsing a file whose logic contradicts its own
+        # actuals produces a meaningless but-for date. Found empirically
+        # on the samples; enforced here, not just caveated.
+        _oos_n = len(cached_oos_flags(_fkey(chosen), data))
+        _rel_n = max(len(data.relationships), 1)
+        if _oos_n / _rel_n > 0.05:
+            st.error(
+                f"This file carries {_oos_n} out-of-sequence records "
+                f"({100 * _oos_n / _rel_n:.0f}% of its relationships). "
+                "Re-imposing this logic unstatused serialises work that "
+                "actually overlapped — the collapse would be unreliable. "
+                "Repair the as-built logic first (Out-of-Sequence "
+                "Repair → download the repaired .xer → load it at "
+                "intake) and collapse THAT file.")
+            if not st.checkbox(
+                    "Override: run the collapse anyway (the validation "
+                    "gap and this override will be disclosed)",
+                    key="cab_oos_override"):
+                return
         if st.button(f"Collapse ({len(picked)} activities extracted)",
                      type="primary", key="cab_go"):
             st.session_state[sk.CAB_RES] = collapse_asbuilt(
-                data, chosen, picked)
+                data, chosen, picked,
+                anchor_code=st.session_state.get(sk.CONTRACT_MS))
         res = st.session_state.get(sk.CAB_RES)
         if not res:
             return
@@ -3833,10 +3893,18 @@ def windows_tab() -> None:
 
     pool = dict(files)
     ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
-    res = cached_windows(tuple(_fkey(n) for n, _ in ordered), ordered)
+    res = cached_windows(
+        (tuple(_fkey(n) for n, _ in ordered),
+         st.session_state.get(sk.CONTRACT_MS)), ordered,
+        st.session_state.get(sk.CONTRACT_MS))
     basis_panel("Windows Analysis", ordered[-1][1], [
-        "Per-window driving path: independent longest-path trace of each "
-        "revision from its latest incomplete finisher",
+        "Per-window driving path: independent longest-path trace of "
+        "each revision to "
+        + (f"the CONTRACTUAL completion milestone "
+           f"{st.session_state.get(sk.CONTRACT_MS)}"
+           if st.session_state.get(sk.CONTRACT_MS)
+           else "its latest incomplete finisher (no contractual "
+                "completion milestone elected at intake)"),
         "Completion movement: calendar days between the revisions' "
         "scheduled finish dates as submitted (no recompute)",
     ])
@@ -3908,12 +3976,23 @@ def windows_tab() -> None:
         "Period": (f"{w.start:%Y-%m-%d} → {w.end:%Y-%m-%d}"
                    if w.start and w.end else "—"),
         "Window (d)": w.window_days,
-        "Completion movement (d)": w.movement_days,
+        "Movement (d)": w.movement_days,
+        "Performance (d)": w.performance_days,
+        "Replanning (d)": w.replanning_days,
+        "..logic (d)": w.replan_logic_days,
+        "..scope (d)": w.replan_scope_days,
         "Path retained": w.cp_retained,
         "Path similarity": (f"{w.cp_similarity:.0%}"
                             if w.cp_similarity is not None else "—"),
         "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
     } for w in res.windows]), width="stretch", hide_index=True)
+    st.caption(
+        "Movement = the files' scheduled finishes. Performance / "
+        "Replanning = the window BIFURCATED: prior schedule re-run "
+        "with the later update's progress only. A big replanning "
+        "share means the update's edits (not execution) moved the "
+        "forecast — recovery or covert re-baselining inside that "
+        "window.")
 
     for w in res.windows:
         if w.shifts:
@@ -4099,7 +4178,8 @@ def comparison_tab() -> None:
         with st.spinner("Tracing driving paths and ranking changes…"):
             imp = assess_comparison_impact(
                 pool[old_name], pool[new_name], old_name, new_name,
-                comparison=cmp)
+                comparison=cmp,
+                end_task_code=st.session_state.get(sk.CONTRACT_MS))
         i1, i2, i3, i4 = st.columns(4)
         i1.metric("Changes on / near driving path",
                   f"{imp.band_counts.get('critical', 0)} / "
@@ -4404,9 +4484,12 @@ def critical_path_tab() -> None:
             for code, name, ef in cands
         }
         cc1, cc2, cc3 = st.columns([3, 1, 1])
+        _cms = st.session_state.get(sk.CONTRACT_MS)
+        _cands = list(cand_labels.keys())
         end_code = cc1.selectbox(
             "Trace backward from",
-            options=list(cand_labels.keys()),
+            options=_cands,
+            index=(_cands.index(_cms) if _cms in _cands else 0),
             format_func=lambda c: cand_labels[c],
             help="Defaults to the latest finisher (completion milestone "
                  "preferred). Pick a sectional milestone to isolate its "
@@ -4414,6 +4497,14 @@ def critical_path_tab() -> None:
         )
         near = cc2.number_input("Near-critical ≤ (days)", 0.0, 200.0, 10.0, 1.0)
         show_near = cc3.toggle("Show near-critical", value=False)
+        branch_tol = st.slider(
+            "Driving-DAG branch tolerance (hours of slack)", 0.0, 48.0,
+            1.0, 1.0, key="cpath_branch_tol",
+            help="Every predecessor within this many hours of the "
+                 "tightest is followed. Widen (e.g. 8h or 24h) to "
+                 "surface NEAR-PARALLEL driving chains — the width a "
+                 "concurrency case turns on. The tolerance used is "
+                 "disclosed in the basis.")
         if st.checkbox(
             "Treat this as the CONTRACTUAL completion milestone",
             value=(st.session_state.get(sk.CONTRACT_MS)
@@ -4422,7 +4513,16 @@ def critical_path_tab() -> None:
                  "default trace terminal across the toolkit.",
         ):
             st.session_state[sk.CONTRACT_MS] = end_code
-        cp = cached_longest_path(_fkey(chosen), chosen, end_code, near, data)
+        cp = cached_longest_path(_fkey(chosen), chosen, end_code,
+                                 near, data, branch_tol)
+        if cp.branch_points:
+            st.info(f"Driving DAG forks at "
+                    f"{len(cp.branch_points)} activity(ies) — "
+                    "parallel driving chains present: "
+                    + ", ".join(cp.branch_points[:8])
+                    + (" …" if len(cp.branch_points) > 8 else "")
+                    + ". A single-chain reading would "
+                    "understate concurrency here.")
         basis_panel("Baseline Critical Path", data, [
             "Criticality definition: INDEPENDENT longest-path trace "
             "(backward driving-logic walk computed by this tool), not "
@@ -4433,6 +4533,9 @@ def critical_path_tab() -> None:
                == end_code else ""),
             f"Near-critical band: stored total float ≤ {near:.0f} "
             "working days",
+            f"Driving-DAG branch tolerance: {branch_tol:.0f} h — all "
+            "predecessors within this slack of the tightest are "
+            "followed (parallel chains captured)",
         ])
     else:
         cc1, cc2, cc3 = st.columns([1, 1, 1])
@@ -5457,6 +5560,13 @@ def explain_tab() -> None:
                         else "UNCERTAIN"),
         "Joined / left path": f"{len(w.joined)} / {len(w.left)}",
     } for w in res.windows]), width="stretch", hide_index=True)
+    st.caption(
+        "Movement = the files' scheduled finishes. Performance / "
+        "Replanning = the window BIFURCATED: prior schedule re-run "
+        "with the later update's progress only. A big replanning "
+        "share means the update's edits (not execution) moved the "
+        "forecast — recovery or covert re-baselining inside that "
+        "window.")
 
     for w in res.windows:
         if w.shifts:

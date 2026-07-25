@@ -1386,10 +1386,12 @@ check("J6b window delay identity: actual - planned interval",
       abs(_w0["window_delay_days"]
           - (_w0["actual_interval_days"]
              - _w0["planned_interval_days"])) < 0.05)
-check("J6c cumulative is a running sum",
-      abs(_j_win[1]["cumulative_delay_days"]
-          - (_j_win[0]["window_delay_days"]
-             + _j_win[1]["window_delay_days"])) < 0.05)
+check("J6c resequenced pair (negative planned interval) excluded "
+      "from cumulative — this real pair WAS resequenced",
+      _j_win[1]["resequenced"] is True
+      and _j_win[1]["cumulative_delay_days"] is None
+      and _j_win[0]["cumulative_delay_days"]
+      == _j_win[0]["window_delay_days"])
 check("J6d fewer than two usable key dates -> no windows",
       _kw(_j_all, ["A1870"]) == [] and _kw(_j_all, ["NOPE"]) == [])
 
@@ -1501,6 +1503,100 @@ for i in range(60):
             print(f"    fuzz #{i}: {type(exc).__name__}: {exc}")
 check("K4 60 seeded byte-mutation fuzz cases: no uncontrolled crash",
       _k_fuzz_bad == 0, f"{_k_fuzz_bad} crashes")
+
+from datetime import datetime as _dtt
+
+# ===================================================================== #
+# Layer L — attribution upgrades: driving DAG, anchoring, bifurcation,
+#           resequence flag, CAB anchor
+# ===================================================================== #
+print("\n--- Layer L: attribution upgrades ---")
+from programme.critical_path import extract_longest_path as _elp
+from programme.windows import analyse_windows as _aw2
+
+# L1 driving DAG: widening the tolerance can only grow the path, and
+# branch points expose genuine parallelism
+_l_narrow = _elp(_gb, "B", branch_tolerance_hours=1.0)
+_l_wide = _elp(_gb, "B", branch_tolerance_hours=24.0)
+check("L1 wider branch tolerance grows (never shrinks) the driving DAG",
+      len(_l_wide.critical) >= len(_l_narrow.critical)
+      and len(_l_wide.branch_points) >= len(_l_narrow.branch_points))
+check("L1b branch points are real forks (>=2 followed drivers each)",
+      all(sum(1 for l in _l_wide.links if l.succ_code == bp) >= 2
+          for bp in _l_wide.branch_points))
+check("L1c tolerance recorded on the result for disclosure",
+      _l_wide.branch_tolerance_hours == 24.0)
+
+# L2 terminal anchoring: tracing to an elected milestone excludes
+# later finishers from the measured path
+_l_kd15 = _elp(_gu, "U", end_task_code="KD15")
+check("L2 elected terminal honoured", _l_kd15.end_choice == "KD15")
+_l_win = _aw2([("B", _gb), ("U", _gu)], end_task_code="KD15",
+              bifurcate=False)
+check("L2b windows engine accepts and applies the elected terminal",
+      len(_l_win.windows) == 1)
+
+# L3 bifurcation: performance + replanning == engine window movement,
+# and the identity to the transfer decomposition holds
+_l_bif = _aw2([("B", _gb), ("U", _gu)])
+_w = _l_bif.windows[0]
+check("L3 bifurcation fields populated",
+      all(x is not None for x in (
+          _w.performance_days, _w.replanning_days,
+          _w.replan_logic_days, _w.replan_scope_days,
+          _w.engine_window_days)))
+check("L3b identity: performance + replanning == engine movement",
+      abs(_w.performance_days + _w.replanning_days
+          - _w.engine_window_days) < 0.15)
+check("L3c replanning == -(logic + scope effects) from the transfer",
+      abs(_w.replanning_days
+          - (_w.replan_logic_days + _w.replan_scope_days)) < 0.15)
+check("L3d engine total within calibration of file movement",
+      abs(_w.engine_window_days - _w.movement_days) < 30,
+      f"{_w.engine_window_days} vs {_w.movement_days}")
+check("L3e bifurcation caveat discloses the method",
+      any("PERFORMANCE" in c and "REPLANNING" in c
+          for c in _l_bif.caveats))
+_l_self = run_progress_transfer(_gb, _gb, "B", "B")
+check("L3f self-transfer sanity: zero network and scope effect",
+      _l_self.network_effect_days == 0.0
+      and _l_self.scope_effect_days == 0.0)
+
+# L4 key-date windows: resequenced pairs flagged and kept out of the
+# cumulative sum
+_l_rows = [
+    {"task_code": "A", "name": "a", "planned_start": None,
+     "planned_finish": _dtt(2016, 1, 10), "actual_start": None,
+     "actual_finish": _dtt(2016, 1, 10), "start_var_days": 0.0,
+     "finish_var_days": 0.0, "in_baseline": True},
+    {"task_code": "B", "name": "b", "planned_start": None,
+     "planned_finish": _dtt(2016, 1, 5), "actual_start": None,
+     "actual_finish": _dtt(2016, 2, 1), "start_var_days": None,
+     "finish_var_days": None, "in_baseline": True},
+    {"task_code": "C", "name": "c", "planned_start": None,
+     "planned_finish": _dtt(2016, 2, 10), "actual_start": None,
+     "actual_finish": _dtt(2016, 3, 1), "start_var_days": None,
+     "finish_var_days": None, "in_baseline": True},
+]
+_l_kw = _kw(_l_rows, ["A", "B", "C"])
+check("L4 resequenced pair (negative planned interval) flagged",
+      _l_kw[0]["resequenced"] is True
+      and _l_kw[0]["cumulative_delay_days"] is None)
+check("L4b clean pair still accumulates",
+      _l_kw[1]["resequenced"] is False
+      and _l_kw[1]["cumulative_delay_days"]
+      == _l_kw[1]["window_delay_days"])
+
+# L5 CAB anchor: completion measured at the elected milestone
+from programme.collapsed_asbuilt import collapse_asbuilt as _cab2
+_l_cabA = _cab2(_j_u2, "U", set(), anchor_code="KD15")
+_l_cabB = _cab2(_j_u2, "U", set())
+check("L5 CAB anchored completion <= latest-finisher completion",
+      _l_cabA.model_completion <= _l_cabB.model_completion)
+check("L5b missing anchor falls back with disclosure",
+      any("not in the modelled population" in w
+          for w in _cab2(_j_u2, "U", set(),
+                         anchor_code="NOPE-1").warnings))
 
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
