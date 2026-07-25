@@ -26,7 +26,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Byte-compile every module (catches syntax/f-string breaks)
-        run: python -m compileall -q app.py dcma programme
+        run: python -m compileall -q app.py state.py dcma programme views
       - name: Engine QA suite
         run: python test_qa.py
 
