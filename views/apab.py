@@ -20,8 +20,10 @@ from views.variance import variance_tab
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def cached_stitch(key: tuple, core_freq: float, _ordered):
-    return analyse_asbuilt_path(_ordered, core_min_frequency=core_freq)
+def cached_stitch(key: tuple, core_freq: float, _ordered,
+                  end_code=None):
+    return analyse_asbuilt_path(_ordered, core_min_frequency=core_freq,
+                                end_task_code=end_code)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -80,30 +82,41 @@ def apab_tab() -> None:
              "Reconstructed sequence (stitched contemporaneous paths)"],
             key="apab_basis_pick")
         if basis.startswith("Activity"):
-            cands = trace_end_candidates(ordered)
-            labels = {c: f"{c} — {n}" + (f" (AF {d:%Y-%m-%d})" if d
-                                         else "")
-                      for c, n, d in cands}
+            cands = trace_end_candidates(
+                ordered, contract_ms=st.session_state.get(sk.CONTRACT_MS))
+            labels = {
+                c: (f"{c} — {n}"
+                    + (f" ({'AF' if ok else 'forecast'} {d:%Y-%m-%d})"
+                       if d else "")
+                    + ("" if ok else "  ⚠ not achieved"))
+                for c, n, d, ok in cands}
             end = st.selectbox("Trace backward from", list(labels),
                                format_func=lambda k: labels[k],
                                key="apab_end")
             tr = cached_trace(okey, end, ordered)
+            if tr.hybrid:
+                st.warning(
+                    "⚠️ **Hybrid path** — the elected completion "
+                    "milestone has not been achieved. Rows marked "
+                    "'forecast' are the programme's remaining early "
+                    "dates, not a record of what happened.")
             for w in tr.warnings:
                 st.warning(w)
             path = [(a.task_code, a.name) for a in tr.activities]
             st.dataframe(pd.DataFrame([{
                 "Activity ID": a.task_code, "Activity": a.name,
-                "Actual start": (f"{a.act_start:%Y-%m-%d}"
-                                 if a.act_start else "—"),
-                "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
-                                  if a.act_finish else "—"),
+                "Basis": a.basis,
+                "Start": (f"{a.act_start:%Y-%m-%d}"
+                          if a.act_start else "—"),
+                "Finish": (f"{a.act_finish:%Y-%m-%d}"
+                           if a.act_finish else "—"),
             } for a in tr.activities]), width="stretch",
                 hide_index=True)
             with st.expander("Cross-check: where do the two independent "
                              "reconstructions agree?"):
                 stitch = cached_stitch(
                     okey, st.session_state.get(sk.APAB_STITCH_FREQ, 0.5),
-                    ordered)
+                    ordered, st.session_state.get(sk.CONTRACT_MS))
                 tri = triangulate(stitch, tr)
                 both = getattr(tri, "agreed_codes", None) or [
                     c for c in tr.codes
@@ -116,7 +129,9 @@ def apab_tab() -> None:
                 "activity must have been on the forecast path)",
                 0.2, 1.0, 0.5, 0.05, key="apab_freq")
             st.session_state[sk.APAB_STITCH_FREQ] = core_freq
-            stitch = cached_stitch(okey, core_freq, ordered)
+            stitch = cached_stitch(
+                okey, core_freq, ordered,
+                st.session_state.get(sk.CONTRACT_MS))
             for w in stitch.warnings:
                 st.warning(w)
             path = [(a.task_code, a.name) for a in stitch.stitched]

@@ -36,7 +36,17 @@ def asbuilt_tab() -> None:
         help="An activity joins the persistent core when it was on the "
              "forecast path in at least this share of the revisions in "
              "which it remained to be performed.") / 100.0
-    res = analyse_asbuilt_path(ordered, core_min_frequency=core_freq)
+    _cms = st.session_state.get(sk.CONTRACT_MS)
+    if _cms:
+        st.caption(f"Anchored on the elected contractual completion "
+                   f"milestone **{_cms}** (change it in Data Intake).")
+    else:
+        st.info("No contractual completion milestone elected — both "
+                "reconstructions will terminate at each revision's latest "
+                "finisher. Elect the completion milestone in **Data "
+                "Intake** to anchor the as-built path to it.")
+    res = analyse_asbuilt_path(ordered, core_min_frequency=core_freq,
+                               end_task_code=_cms)
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Windows", len(res.windows))
@@ -101,43 +111,79 @@ def asbuilt_tab() -> None:
         "evidenced by a programmed relationship. Where no such hand-off "
         "exists within the gap window, the trace stops and says so."
     )
-    cands = trace_end_candidates(ordered)
+    cands = trace_end_candidates(ordered, contract_ms=_cms)
     trace = tri = None
     if not cands:
         st.info("No actually finished activities in the latest revision — "
                 "nothing to trace.")
     else:
-        cand_labels = {c: f"{c} — {n}" + (f"  (AF {af:%Y-%m-%d})"
-                                          if af else "")
-                       for c, n, af in cands}
+        cand_labels = {
+            c: (f"{c} — {n}"
+                + (f"  ({'AF' if ok else 'forecast'} {d:%Y-%m-%d})"
+                   if d else "")
+                + ("" if ok else "  ⚠ not achieved"))
+            for c, n, d, ok in cands}
         tc1, tc2, tc3 = st.columns([3, 1, 1])
         end_code = tc1.selectbox(
             "Trace backward from", options=list(cand_labels.keys()),
             format_func=lambda c: cand_labels[c], key="ab_trace_end",
-            help="Defaults to the latest actual finisher (milestones "
-                 "within a week of it preferred).")
+            help="Defaults to the elected contractual completion "
+                 "milestone. Where that milestone has not been achieved "
+                 "the path is traced as a disclosed hybrid: as-built to "
+                 "the data date, forecast beyond it.")
         max_gap = tc2.number_input("Max hand-off gap (days)",
                                    1.0, 730.0, 60.0, 5.0, key="ab_gap",
                                    help="Widen when work stalled between "
                                         "logically linked activities.")
-        fallback = tc3.toggle(
-            "Allow un-logic'd hops", value=False, key="ab_fallback",
-            help="Continue through the tightest temporal neighbour where "
-                 "no programmed relationship exists. Such links are weak "
-                 "evidence and flagged as such.")
+        strict = tc3.toggle(
+            "Strict logic only", value=False, key="ab_strict",
+            help="OFF (default): the chain continues through the tightest "
+                 "temporal neighbour where no programmed relationship "
+                 "exists, so the path runs unbroken from the milestone "
+                 "back to project start — every such hop is flagged as "
+                 "sequence-only evidence. ON: the trace STOPS at the "
+                 "first hand-off the records cannot evidence.")
         trace = extract_actual_trace(
             ordered, end_task_code=end_code, max_gap_days=max_gap,
-            allow_temporal_fallback=fallback)
+            allow_temporal_fallback=not strict)
 
-        t1, t2, t3 = st.columns(3)
+        t1, t2, t3, t4 = st.columns(4)
         t1.metric("Chain length", len(trace.activities))
         logic_n = sum(1 for lk in trace.links if lk.had_logic)
         t2.metric("Logic-evidenced hand-offs",
                   f"{logic_n} / {len(trace.links)}" if trace.links else "—")
-        t3.metric("Traced from", trace.terminal_code or "—")
+        t3.metric("As-built / forecast",
+                  f"{trace.asbuilt_count} / {trace.forecast_count}",
+                  help="Activities whose dates are recorded actuals vs "
+                       "the file's remaining early dates.")
+        t4.metric("Traced from", trace.terminal_code or "—")
+        if trace.hybrid:
+            st.warning(
+                "⚠️ **Hybrid path** — the elected completion milestone "
+                "has not been achieved. The tail beyond the data date is "
+                "the programme's own forecast, not a record of what "
+                "happened; it is labelled as such in the chain below.")
         for w in trace.warnings:
             (st.info if w.startswith("Logic corroboration")
              else st.warning)(w)
+
+        if trace.activities:
+            _BASIS_MARK = {"as-built": "▮ as-built",
+                           "in-progress": "▨ in progress",
+                           "forecast": "▯ forecast"}
+            st.markdown("**Traced chain** — terminal at the top of the "
+                        "programme, walking back to the first activity.")
+            st.dataframe(pd.DataFrame([{
+                "#": i,
+                "Basis": _BASIS_MARK.get(a.basis, a.basis),
+                "Activity ID": a.task_code,
+                "Activity": a.name,
+                "Start": (f"{a.act_start:%Y-%m-%d}"
+                          if a.act_start else "—"),
+                "Finish": (f"{a.act_finish:%Y-%m-%d}"
+                           if a.act_finish else "—"),
+            } for i, a in enumerate(trace.activities, start=1)]),
+                width="stretch", hide_index=True, height=340)
         if trace.links:
             st.dataframe(pd.DataFrame([{
                 "Predecessor": lk.pred_code,

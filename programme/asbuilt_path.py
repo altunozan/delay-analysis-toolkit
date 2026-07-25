@@ -69,6 +69,9 @@ class StitchActivity:
     act_start: datetime | None
     act_finish: datetime | None
     forecast_by: str                # revision whose path predicted it
+    # "as-built" (actual finish recorded) | "in-progress" (started, not
+    # finished) | "forecast" (neither — the file's remaining early dates)
+    basis: str = "as-built"
 
 
 @dataclass
@@ -107,6 +110,7 @@ def analyse_asbuilt_path(
     *,
     core_min_frequency: float = 0.5,
     low_coverage_pct: float = 50.0,
+    end_task_code: str | None = None,
     config: DCMAConfig | None = None,
 ) -> AsBuiltPathResult:
     """Reconstruct the as-built critical path from ordered revisions.
@@ -131,7 +135,8 @@ def analyse_asbuilt_path(
     paths: list[dict[str, str]] = []          # per revision: code -> name
     eligible: list[set[str]] = []             # incomplete codes per revision
     for label, data in revisions:
-        cp = extract_longest_path(data, label, config=config)
+        cp = extract_longest_path(data, label, config=config,
+                                  end_task_code=end_task_code)
         paths.append({a.task_code: a.name for a in cp.critical})
         eligible.append({t.task_code for t in data.tasks
                          if not t.is_loe_or_wbs and t.is_incomplete})
@@ -253,17 +258,32 @@ def analyse_asbuilt_path(
 # --------------------------------------------------------------------------- #
 
 TRACE_CAVEATS = [
-    "The actual-date trace walks backward from the latest actualised "
-    "activity, at each step following the candidate predecessor whose "
-    "recorded dates most tightly precede the activity (smallest hand-off "
-    "gap), strengthened where a logic relationship between the pair existed "
-    "in any programme revision. It is independent of any revision's "
-    "forecast criticality.",
+    "The trace walks backward from the elected completion milestone (or, "
+    "where none is elected, the latest actualised activity), at each step "
+    "following the candidate predecessor whose recorded dates most tightly "
+    "precede the activity (smallest hand-off gap), strengthened where a "
+    "logic relationship between the pair existed in any programme "
+    "revision. It is independent of any revision's forecast criticality.",
     "Each link carries a confidence score (temporal tightness + logic "
     "evidence). Links flagged weak — a large gap or no logic in any "
     "revision — mark hand-offs where the true driver may be a resource, "
     "access, or off-programme constraint; these call for analyst review.",
+    "By default the chain CONTINUES through the tightest temporal "
+    "neighbour where no programmed relationship exists, so the path runs "
+    "unbroken from the terminal back to project start. Every such hop is "
+    "recorded as un-evidenced by logic and listed for review: a "
+    "date-adjacent hand-off is a sequential observation, not proof that "
+    "one activity drove the other.",
 ]
+
+HYBRID_CAVEAT = (
+    "HYBRID PATH — the elected completion milestone has not been achieved "
+    "at the latest data date. Activities up to the data date are as-built "
+    "(recorded actual dates); the tail from the data date to the milestone "
+    "is FORECAST (the programme's own remaining early dates). Every "
+    "activity is labelled with its basis, and the forecast portion is not "
+    "evidence of what happened — it is what the file predicts will happen."
+)
 
 
 @dataclass
@@ -284,12 +304,43 @@ class ActualTraceResult:
     terminal_code: str | None = None
     activities: list[StitchActivity] = field(default_factory=list)  # chain
     links: list[TraceLink] = field(default_factory=list)
+    hybrid: bool = False             # chain includes a forecast tail
+    data_date: datetime | None = None
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
 
     @property
     def codes(self) -> set[str]:
         return {a.task_code for a in self.activities}
+
+    @property
+    def asbuilt_count(self) -> int:
+        return sum(1 for a in self.activities if a.basis == "as-built")
+
+    @property
+    def forecast_count(self) -> int:
+        return sum(1 for a in self.activities if a.basis == "forecast")
+
+    @property
+    def in_progress_count(self) -> int:
+        return sum(1 for a in self.activities if a.basis == "in-progress")
+
+
+def _basis(t) -> str:
+    """Evidential basis of an activity's dates."""
+    if t.act_finish is not None:
+        return "as-built"
+    if t.act_start is not None:
+        return "in-progress"
+    return "forecast"
+
+
+def _eff_start(t) -> datetime | None:
+    return t.act_start or t.early_start
+
+
+def _eff_finish(t) -> datetime | None:
+    return t.act_finish or t.early_finish
 
 
 def extract_actual_trace(
@@ -299,22 +350,29 @@ def extract_actual_trace(
     max_gap_days: float = 15.0,
     overlap_tolerance_days: float = 2.0,
     weak_score: float = 0.5,
-    allow_temporal_fallback: bool = False,
+    allow_temporal_fallback: bool = True,
+    allow_forecast_tail: bool = True,
     config: DCMAConfig | None = None,
 ) -> ActualTraceResult:
-    """Backward trace through ACTUAL dates in the latest revision.
+    """Backward trace from the completion milestone through recorded dates.
 
-    Candidate drivers of an activity: predecessors whose actual finish sits
-    within ``max_gap_days`` before its actual start (finish-start hand-off,
-    small overlaps tolerated), or which were running when it started
-    (parallel), scored by temporal tightness + logic evidence.
+    Candidate drivers of an activity: predecessors whose finish sits within
+    ``max_gap_days`` before its start (finish-start hand-off, small
+    overlaps tolerated), or which were running when it started (parallel),
+    scored by temporal tightness + logic evidence.
 
-    By default only candidates with a programmed relationship (in any
-    revision) may continue the chain — where none exists within the gap
-    window, the trace STOPS and reports the break rather than inventing a
-    hand-off from date coincidence. Set ``allow_temporal_fallback=True`` to
-    continue through the tightest temporal neighbour instead; such links
-    are flagged weak.
+    By DEFAULT the chain continues through the tightest temporal neighbour
+    where no programmed relationship exists, so the path runs unbroken from
+    the terminal back to project start; those hops are flagged as
+    un-evidenced by logic. Set ``allow_temporal_fallback=False`` for the
+    strict reading, where the trace stops at the first hand-off the records
+    cannot evidence.
+
+    ``allow_forecast_tail`` lets an elected completion milestone that has
+    NOT been achieved anchor the trace anyway: the tail from the data date
+    to the milestone is taken from the file's remaining early dates and
+    labelled ``forecast``, producing a disclosed hybrid path. Completed
+    work is never allowed to be driven by work that has not started.
     """
     result = ActualTraceResult()
     result.caveats.extend(TRACE_CAVEATS)
@@ -323,8 +381,12 @@ def extract_actual_trace(
         return result
 
     _, latest = revisions[-1]
-    acts = {t.task_code: t for t in latest.tasks
-            if not t.is_loe_or_wbs and t.act_start is not None}
+    result.data_date = latest.project.data_date if latest.project else None
+    # Universe: everything schedulable that carries usable dates. Pure
+    # forecast rows only ever participate in a hybrid tail (guarded below).
+    universe = {t.task_code: t for t in latest.tasks
+                if not t.is_loe_or_wbs and _eff_start(t) is not None}
+    acts = {c: t for c, t in universe.items() if t.act_start is not None}
     if not acts:
         result.warnings.append(
             "The latest revision records no actualised activities — "
@@ -341,15 +403,34 @@ def extract_actual_trace(
             if p and s:
                 logic_pairs.add((p, s))
 
-    # Terminal: latest actual finish; a finish milestone within a week of
-    # the latest date is preferred over an ordinary activity.
+    # Terminal: the elected completion milestone wherever possible. An
+    # elected milestone that has NOT been achieved still anchors the
+    # trace (hybrid: as-built spine + forecast tail) rather than being
+    # silently swapped for whatever finished last.
     if end_task_code and end_task_code in acts:
         terminal = acts[end_task_code]
+    elif (end_task_code and allow_forecast_tail
+            and end_task_code in universe):
+        terminal = universe[end_task_code]
+        result.hybrid = True
+        result.caveats.insert(0, HYBRID_CAVEAT)
+        dd = f"{result.data_date:%d %b %Y}" if result.data_date else \
+            "the latest data date"
+        fin = _eff_finish(terminal)
+        result.warnings.append(
+            f"'{end_task_code}' ({terminal.name}) has NOT been achieved "
+            f"at {dd}"
+            + (f" — the file forecasts it for {fin:%d %b %Y}." if fin
+               else ".")
+            + " The path below is a HYBRID: as-built up to the data date, "
+              "forecast from there to the milestone. The forecast portion "
+              "shows what the programme predicts, not what happened."
+        )
     else:
         if end_task_code:
             result.warnings.append(
-                f"End activity '{end_task_code}' has no actual dates in the "
-                "latest revision — using the latest actual finisher."
+                f"End activity '{end_task_code}' is not in the latest "
+                "revision — using the latest actual finisher instead."
             )
         finished = [t for t in acts.values() if t.act_finish]
         if not finished:
@@ -360,18 +441,36 @@ def extract_actual_trace(
                 if (latest_fin - t.act_finish).days <= 7]
         milestones = [t for t in tail if t.is_milestone]
         terminal = max(milestones or tail, key=lambda t: t.act_finish)
+        if not end_task_code:
+            result.warnings.append(
+                f"No contractual completion milestone elected — the trace "
+                f"terminates at '{terminal.task_code}' ({terminal.name}), "
+                "the latest recorded finish. Elect the completion "
+                "milestone in Data Intake to anchor the path to it."
+            )
     result.terminal_code = terminal.task_code
 
     def candidates(succ):
+        # Completed work cannot have been driven by work that has not
+        # started: a pure-forecast predecessor is only admissible where
+        # the successor is itself forecast or still in progress.
+        succ_basis = _basis(succ)
+        allow_forecast_pred = succ_basis in ("forecast", "in-progress")
+        s_start = _eff_start(succ)
         out = []
-        for p in acts.values():
-            if p.task_code == succ.task_code or p.act_finish is None:
+        for p in universe.values():
+            if p.task_code == succ.task_code:
                 continue
-            gap = (succ.act_start - p.act_finish).total_seconds() / 86400.0
+            p_basis = _basis(p)
+            if p_basis == "forecast" and not allow_forecast_pred:
+                continue
+            p_fin, p_start = _eff_finish(p), _eff_start(p)
+            if p_fin is None or p_start is None or s_start is None:
+                continue
+            gap = (s_start - p_fin).total_seconds() / 86400.0
             if -overlap_tolerance_days <= gap <= max_gap_days:
                 kind = "finish-start"
-            elif (p.act_start <= succ.act_start
-                    and p.act_finish >= succ.act_start):
+            elif p_start <= s_start <= p_fin:
                 kind, gap = "parallel", 0.0
             else:
                 continue
@@ -418,8 +517,17 @@ def extract_actual_trace(
     chain.reverse()
     result.activities = [StitchActivity(
         task_code=t.task_code, name=t.name,
-        act_start=t.act_start, act_finish=t.act_finish,
-        forecast_by="actual-date trace") for t in chain]
+        act_start=_eff_start(t), act_finish=_eff_finish(t),
+        forecast_by="actual-date trace", basis=_basis(t)) for t in chain]
+
+    if result.forecast_count or result.in_progress_count:
+        result.warnings.append(
+            f"Path composition: {result.asbuilt_count} as-built, "
+            f"{result.in_progress_count} in progress, "
+            f"{result.forecast_count} forecast "
+            f"(of {len(result.activities)} activities). Only the as-built "
+            "portion is a record of what happened."
+        )
 
     weak = [lk for lk in result.links if lk.score < weak_score]
     if weak:
@@ -433,12 +541,24 @@ def extract_actual_trace(
                         for lk in worst)
             + " — analyst review recommended at these points."
         )
-    no_logic = sum(1 for lk in result.links if not lk.had_logic)
+    unevidenced = [lk for lk in result.links if not lk.had_logic]
     if result.links:
         result.warnings.append(
-            f"Logic corroboration: {len(result.links) - no_logic} of "
-            f"{len(result.links)} traced hand-offs follow a relationship "
-            "that existed in at least one programme revision."
+            f"Logic corroboration: {len(result.links) - len(unevidenced)} "
+            f"of {len(result.links)} traced hand-offs follow a "
+            "relationship that existed in at least one programme revision."
+        )
+    if unevidenced:
+        result.warnings.append(
+            f"{len(unevidenced)} hand-off(s) continue the chain on "
+            "SEQUENCE ALONE — the activities are date-adjacent but no "
+            "programmed relationship between them exists in any revision: "
+            + "; ".join(f"{lk.pred_code}→{lk.succ_code} (gap "
+                        f"{lk.gap_days:+.0f}d)"
+                        for lk in unevidenced[:8])
+            + (" …" if len(unevidenced) > 8 else "")
+            + ". These are sequential observations, not evidenced "
+              "drivers — confirm each against the contemporaneous record."
         )
     return result
 
@@ -499,13 +619,33 @@ def triangulate(stitched: AsBuiltPathResult,
 
 
 def trace_end_candidates(
-    revisions: list[tuple[str, XerData]], limit: int = 40
-) -> list[tuple[str, str, datetime | None]]:
-    """Candidate trace terminals: actually finished, latest first."""
+    revisions: list[tuple[str, XerData]], limit: int = 40,
+    contract_ms: str | None = None,
+) -> list[tuple[str, str, datetime | None, bool]]:
+    """Candidate trace terminals, latest first: (code, name, date, achieved).
+
+    An elected contractual completion milestone is offered FIRST even when
+    it has not been achieved — anchoring the path to the contractual
+    milestone matters more than restricting the list to finished work, and
+    the unachieved case is handled as a disclosed hybrid by the trace.
+    """
     if not revisions:
         return []
     _, latest = revisions[-1]
+    out: list[tuple[str, str, datetime | None, bool]] = []
+    seen: set[str] = set()
+    if contract_ms:
+        for t in latest.tasks:
+            if t.task_code == contract_ms and not t.is_loe_or_wbs:
+                out.append((t.task_code, t.name,
+                            t.act_finish or t.early_finish,
+                            t.act_finish is not None))
+                seen.add(t.task_code)
+                break
     done = [t for t in latest.tasks
-            if not t.is_loe_or_wbs and t.act_finish is not None]
+            if not t.is_loe_or_wbs and t.act_finish is not None
+            and t.task_code not in seen]
     done.sort(key=lambda t: (t.act_finish, t.is_milestone), reverse=True)
-    return [(t.task_code, t.name, t.act_finish) for t in done[:limit]]
+    out.extend((t.task_code, t.name, t.act_finish, True)
+               for t in done[:limit])
+    return out

@@ -891,10 +891,21 @@ def build_asbuilt_prompt(
 
     if trace is not None:
         lines.append("<actual_date_trace terminal='"
-                     f"{trace.terminal_code}'>")
+                     f"{trace.terminal_code}'"
+                     f" hybrid='{str(trace.hybrid).lower()}'>")
+        if trace.hybrid:
+            lines.append(
+                "! HYBRID PATH: the elected completion milestone was NOT "
+                "achieved at the data date. Activities marked [forecast] "
+                "are the programme's remaining early dates, NOT a record "
+                "of what happened. Say so explicitly in the narrative and "
+                "never describe the forecast tail as as-built.")
+        lines.append(f"- composition: {trace.asbuilt_count} as-built, "
+                     f"{trace.in_progress_count} in progress, "
+                     f"{trace.forecast_count} forecast")
         for a in trace.activities:
             af = fmt(a.act_finish) if a.act_finish else "in progress"
-            lines.append(f"- {a.task_code} '{a.name}': performed "
+            lines.append(f"- {a.task_code} '{a.name}' [{a.basis}]: "
                          f"{fmt(a.act_start)} -> {af}")
         for lk in trace.links:
             lines.append(f"  link {lk.pred_code} -> {lk.succ_code} "

@@ -650,6 +650,30 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
                 c.fill = SLIP_FILL
     _autofit(s3, {1: 8, 2: 26, 3: 26, 4: 26, 5: 16, 6: 18, 7: 11})
 
+    # The traced chain itself, terminal-first, with each activity's
+    # evidential basis — a hybrid path must never read as all as-built.
+    if trace is not None and trace.activities:
+        s3b = wb.create_sheet("Traced Chain")
+        if trace.hybrid:
+            s3b["A1"] = ("HYBRID PATH — the elected completion milestone "
+                         "was not achieved; rows marked 'forecast' are "
+                         "the programme's remaining early dates, not a "
+                         "record of what happened.")
+            s3b["A1"].font = Font(bold=True, color="9B3227")
+        _header_row(s3b, 3, ["#", "Basis", "Activity ID", "Activity",
+                             "Start", "Finish"])
+        for i, a in enumerate(trace.activities, start=1):
+            vals = [i, a.basis, a.task_code, a.name,
+                    _fmt(a.act_start), _fmt(a.act_finish)]
+            for col, v in enumerate(vals, start=1):
+                c = s3b.cell(row=i + 3, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 2:
+                    c.fill = (GAIN_FILL if v == "as-built"
+                              else SLIP_FILL if v == "forecast" else None)
+        _autofit(s3b, {1: 5, 2: 13, 3: 20, 4: 48, 5: 13, 6: 13})
+        s3b.freeze_panes = "A4"
+
     if trace is not None and trace.links:
         s4 = wb.create_sheet("Actual-Date Trace")
         _header_row(s4, 1, ["Predecessor", "Pred name", "Kind", "Successor",

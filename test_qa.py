@@ -234,8 +234,10 @@ check("A15e asbuilt single revision -> warning, no crash",
 
 
 # A16. Actual-date trace + triangulation invariants
-from programme import extract_actual_trace, triangulate
-tr_strict = extract_actual_trace([("B", B), ("U", U)], max_gap_days=240)
+from programme import (extract_actual_trace, trace_end_candidates,
+                       triangulate)
+tr_strict = extract_actual_trace([("B", B), ("U", U)], max_gap_days=240,
+                                 allow_temporal_fallback=False)
 check("A16 strict trace: every link logic-evidenced",
       all(lk.had_logic for lk in tr_strict.links))
 check("A16b trace links form a chain (each pred is next activity)",
@@ -243,11 +245,40 @@ check("A16b trace links form a chain (each pred is next activity)",
           for lk in tr_strict.links))
 codes = [a.task_code for a in tr_strict.activities]
 check("A16c trace chain has no duplicates", len(codes) == len(set(codes)))
-tr_fb = extract_actual_trace([("B", B), ("U", U)], max_gap_days=15,
-                             allow_temporal_fallback=True)
-check("A16d fallback trace longer or equal to strict at same gap",
+tr_fb = extract_actual_trace([("B", B), ("U", U)], max_gap_days=15)
+check("A16d default (continuous) trace >= strict at same gap",
       len(tr_fb.activities) >= len(extract_actual_trace(
-          [("B", B), ("U", U)], max_gap_days=15).activities))
+          [("B", B), ("U", U)], max_gap_days=15,
+          allow_temporal_fallback=False).activities))
+check("A16f default continues on sequence: un-evidenced hops disclosed",
+      all(lk.had_logic for lk in tr_fb.links)
+      or any("SEQUENCE ALONE" in w for w in tr_fb.warnings))
+
+# A16g-k. Contractual-milestone anchoring + hybrid forecast tail.
+_kd15 = next((t for t in U.tasks if t.task_code == "KD15"), None)
+check("A16g sample carries an unachieved completion milestone (KD15)",
+      _kd15 is not None and _kd15.act_finish is None)
+_hy = extract_actual_trace([("B", B), ("U", U)], end_task_code="KD15",
+                           max_gap_days=60)
+check("A16h unachieved elected milestone still anchors the trace",
+      _hy.terminal_code == "KD15" and _hy.hybrid)
+check("A16i hybrid disclosed in warnings and caveats",
+      any("HYBRID" in c for c in _hy.caveats)
+      and any("not been achieved" in w.lower() or "NOT been achieved" in w
+              for w in _hy.warnings))
+check("A16j hybrid chain is basis-labelled and reaches back to as-built",
+      _hy.forecast_count > 0 and _hy.asbuilt_count > 0
+      and {a.basis for a in _hy.activities} <= {
+          "as-built", "in-progress", "forecast"})
+# ordering: as-built work must precede the forecast tail
+_bases = [a.basis for a in _hy.activities]
+check("A16k forecast tail sits at the end of the chain (no forecast "
+      "before as-built work)",
+      all(b == "forecast" for b in _bases[_bases.index("forecast"):])
+      if "forecast" in _bases else True)
+check("A16l terminal candidates offer the elected milestone first",
+      trace_end_candidates([("B", B), ("U", U)], contract_ms="KD15")[0][0]
+      == "KD15")
 tri = triangulate(ab, tr_strict)
 check("A16e triangulation: agreement in [0,100] and sets partition union",
       (tri.agreement_pct is None or 0 <= tri.agreement_pct <= 100)
