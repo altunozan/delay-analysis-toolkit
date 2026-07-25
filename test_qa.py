@@ -215,27 +215,25 @@ check("A14b histogram sums to totals", abs(hist_total - mod_total) < 1.0,
       f"hist={hist_total:,.0f} vs {mod_total:,.0f}")
 
 
-# A15. As-built path invariants
-from programme import analyse_asbuilt_path
-ab = analyse_asbuilt_path([("B", B), ("U", U)])
-check("A15 asbuilt: stitched activities were forecast critical",
-      all(a.forecast_by == "B" for w in ab.windows for a in w.activities))
-check("A15b asbuilt: persistence freq within [0,1] and on<=eligible",
-      all(0 <= e.frequency <= 1 and e.times_on_path <= e.times_eligible
-          for e in ab.persistence))
-check("A15c asbuilt: coverage within [0,100]",
-      all(w.coverage_pct is None or 0 <= w.coverage_pct <= 100
-          for w in ab.windows))
-check("A15d asbuilt: core subset of persistence",
-      set(ab.core_codes) <= {e.task_code for e in ab.persistence})
-ab1 = analyse_asbuilt_path([("B", B)])
-check("A15e asbuilt single revision -> warning, no crash",
-      not ab1.windows and ab1.warnings)
+# A15. Milestone terminals: EVERY milestone is offered, achieved or
+# not — you pick what you are measuring to; whether the works reached
+# it is disclosed, never a filter.
+from programme import trace_end_candidates as _tec
+_a15 = _tec([("B", B), ("U", U)], contract_ms="KD15")
+check("A15 elected milestone offered first even though unachieved",
+      _a15[0][0] == "KD15" and _a15[0][3] is False)
+_ms_codes = {t.task_code for t in U.tasks if t.is_milestone
+             and not t.is_loe_or_wbs}
+_offered = {c for c, _, _, _ in _a15}
+check("A15b every milestone is offered, achieved or not",
+      _ms_codes <= _offered, f"{len(_ms_codes - _offered)} missing")
+check("A15c unachieved milestones carry achieved=False + a forecast date",
+      all(ok or d is not None
+          for c, _, d, ok in _a15 if c in _ms_codes))
 
 
 # A16. Actual-date trace + triangulation invariants
-from programme import (extract_actual_trace, trace_end_candidates,
-                       triangulate)
+from programme import extract_actual_trace, trace_end_candidates
 tr_strict = extract_actual_trace([("B", B), ("U", U)], max_gap_days=240,
                                  allow_temporal_fallback=False)
 check("A16 strict trace: every link logic-evidenced",
@@ -279,11 +277,6 @@ check("A16k forecast tail sits at the end of the chain (no forecast "
 check("A16l terminal candidates offer the elected milestone first",
       trace_end_candidates([("B", B), ("U", U)], contract_ms="KD15")[0][0]
       == "KD15")
-tri = triangulate(ab, tr_strict)
-check("A16e triangulation: agreement in [0,100] and sets partition union",
-      (tri.agreement_pct is None or 0 <= tri.agreement_pct <= 100)
-      and not (set(tri.both) & set(tri.trace_only))
-      and not (set(tri.both) & set(tri.stitched_only)))
 
 
 # A17. Sequence coding invariants
@@ -1746,25 +1739,71 @@ check("N6c prompt carries the CP flag for every listed activity",
 # fill, so a conditional fill with an `else None` branch raises only
 # when a chain actually contains an in-progress activity — which is
 # exactly what a hybrid path produces. Shipped once; pinned now.
-from programme import (analyse_asbuilt_path as _aap2,
-                       build_asbuilt_xlsx as _bax, triangulate as _tri2)
+from programme import build_asbuilt_xlsx as _bax
 import io as _n_io
 import openpyxl as _n_xl
-_n_stitch = _aap2([("B", B), ("U", U)], end_task_code="KD15")
 check("N7 hybrid chain contains an in-progress activity (the trigger)",
       _n_tr.in_progress_count > 0)
-_n_book = _bax(_n_stitch, "narrative", trace=_n_tr,
-               tri=_tri2(_n_stitch, _n_tr), roll=_n_res)
+_n_book = _bax(_n_tr, "narrative", roll=_n_res)
 _n_wb = _n_xl.load_workbook(_n_io.BytesIO(_n_book))
 check("N7b as-built workbook builds with a hybrid chain + roll-up",
-      {"Traced Chain", "Work Packages", "Work Package Members"}
-      <= set(_n_wb.sheetnames))
+      {"As-Built Path", "Hand-Offs", "Work Packages",
+       "Work Package Members"} <= set(_n_wb.sheetnames))
 check("N7c work-package sheet names the driving member",
       _n_wb["Work Packages"].cell(row=4, column=6).value
       == _n_u.driving_member)
 check("N7d workbook without a roll-up omits the package sheets",
       "Work Packages" not in _n_xl.load_workbook(_n_io.BytesIO(
-          _bax(_n_stitch, None, trace=_n_tr))).sheetnames)
+          _bax(_n_tr, None))).sheetnames)
+
+# N8. Logic links at umbrella level: links that cross a package
+# boundary aggregate; links inside a package are internal, not shown as
+# package-to-package.
+from programme import (umbrella_links as _ul, internal_links as _il,
+                       asbuilt_path_tree as _apt, build_gantt_html as _bgh)
+_n_g2 = {"Package A": _n_on[:2], "Package B": _n_on[2:3]}
+_n_ul = _ul(_n_tr.links, _n_g2)
+check("N8 umbrella links never join a package to itself",
+      all(r["from"] != r["to"] for r in _n_ul))
+_n_int = _il(_n_tr.links, _n_g2)
+_n_cross = sum(r["hand_off_count"] for r in _n_ul)
+_n_inside = sum(_n_int.values())
+_n_involved = sum(1 for lk in _n_tr.links
+                  if lk.pred_code in {c for cs in _n_g2.values() for c in cs}
+                  or lk.succ_code in {c for cs in _n_g2.values()
+                                      for c in cs})
+check("N8b every hand-off is either internal or crossing, never both",
+      _n_cross + _n_inside <= len(_n_tr.links))
+check("N8c a link basis reflects its underlying hand-offs",
+      all(r["basis"] in ("logic", "sequence only", "mixed")
+          and (r["basis"] != "logic" or r["sequence_only"] == 0)
+          and (r["basis"] != "sequence only" or r["logic_evidenced"] == 0)
+          for r in _n_ul))
+
+# N9. Gantt tree carries basis + the data-date marker, flat and grouped.
+_n_flat = _apt(_n_tr.activities, links=_n_tr.links)
+_n_grp = _apt(_n_tr.activities, groups=_n_g2, links=_n_tr.links)
+def _acts(node):
+    out = list(node.get("activities", []))
+    for k in node.get("children", []):
+        out.extend(_acts(k))
+    return out
+check("N9 flat and grouped trees carry the same activities",
+      {a["id"] for a in _acts(_n_flat)}
+      == {a["id"] for a in _acts(_n_grp)}
+      == {a.task_code for a in _n_tr.activities})
+check("N9b every bar carries its evidential basis as status",
+      {a["status"] for a in _acts(_n_flat)}
+      <= {"as-built", "in-progress", "forecast"})
+check("N9c forecast activities survive into the gantt (the data-date "
+      "truncation bug)",
+      any(a["status"] == "forecast" for a in _acts(_n_flat)))
+_n_html = _bgh(_n_flat, data_date=f"{_n_tr.data_date:%Y-%m-%d}")
+check("N9d the data date reaches the rendered gantt",
+      f"{_n_tr.data_date:%Y-%m-%d}" in _n_html)
+check("N9e grouped tree nests members under their package",
+      any(k["name"] == "Package A"
+          for k in _n_grp["children"][0].get("children", [])))
 
 
 # ===================================================================== #

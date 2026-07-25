@@ -1,22 +1,21 @@
-"""As-Built Critical Path (contemporaneous reconstruction).
+"""As-Built Critical Path — backward trace from a chosen milestone.
 
-Two deterministic, mutually reinforcing views of what actually drove the
-works, both read from the project's own contemporaneous programmes:
+ONE method, the way a delay analyst actually works:
 
-1. **Stitched contemporaneous path** — for each window between data dates,
-   the activities that were on the then-forecast longest path AND were
-   actually performed during that window. Stitching those segments across
-   windows reconstructs the as-built critical path as the contemporaneous
-   records saw it (the observational approach; no analyst theory of what
-   "should" have been critical is injected).
+    pick the milestone -> walk backwards, activity by activity, to the
+    start of the works.
 
-2. **Criticality persistence index** — for every activity, in how many
-   revisions it sat on the forecast longest path while still to be
-   performed. Activities critical in revision after revision form the
-   empirical spine of the as-built path; activities critical only once are
-   flagged as weakly corroborated.
+At each step the predecessor is the activity whose recorded dates most
+tightly precede it. Where a programmed relationship exists between the
+pair it corroborates the hand-off; where none does, the chain continues
+on SEQUENCE alone and says so, because a real as-built path does not
+stop just because the contractor never drew the link.
 
-Pure engine: ordered XerData revisions in, structured result out. No LLM.
+The milestone may be one the works never reached. Then the path is a
+disclosed HYBRID: as-built up to the data date, forecast beyond it,
+every activity labelled with its basis.
+
+Pure engine. No LLM.
 """
 
 from __future__ import annotations
@@ -27,235 +26,20 @@ from datetime import datetime
 from dcma.config import DCMAConfig
 from dcma.xer_parser import XerData
 
-from .critical_path import extract_longest_path
-
-STANDING_CAVEATS = [
-    "The reconstruction reads the project's own contemporaneous programmes: "
-    "an activity is on the as-built critical path for a window when the "
-    "programme in force at that window's start forecast it critical and the "
-    "records show it was performed in that window. It asserts no analyst "
-    "theory of what should have been critical.",
-    "The quality of the reconstruction is bounded by the update cadence and "
-    "the reliability of each update (see the DCMA and revision-comparison "
-    "modules); long gaps between data dates coarsen the windows.",
-    "Forecast criticality per revision comes from a backward driving-logic "
-    "trace from that revision's completion; actual dates are taken from the "
-    "revision that closes each window, i.e. as contemporaneously recorded.",
-    "Identifying the driving chain is a factual screening; it does not "
-    "attribute delay in any window to either party.",
-]
-
 
 @dataclass
-class PersistenceEntry:
-    task_code: str
-    name: str
-    times_on_path: int
-    times_eligible: int             # revisions where present & incomplete
-    act_start: datetime | None      # from the latest revision
-    act_finish: datetime | None
-    is_complete: bool = False
-
-    @property
-    def frequency(self) -> float:
-        return (self.times_on_path / self.times_eligible
-                if self.times_eligible else 0.0)
-
-
-@dataclass
-class StitchActivity:
+class PathActivity:
+    """One activity on the traced as-built path."""
     task_code: str
     name: str
     act_start: datetime | None
     act_finish: datetime | None
-    forecast_by: str                # revision whose path predicted it
+    forecast_by: str = "actual-date trace"
     # "as-built" (actual finish recorded) | "in-progress" (started, not
     # finished) | "forecast" (neither — the file's remaining early dates)
     basis: str = "as-built"
 
 
-@dataclass
-class StitchWindow:
-    index: int
-    from_label: str
-    to_label: str
-    start: datetime | None
-    end: datetime | None
-    activities: list[StitchActivity] = field(default_factory=list)
-    forecast_critical_count: int = 0   # path size at window start
-    coverage_pct: float | None = None  # window days with driving work active
-
-
-@dataclass
-class AsBuiltPathResult:
-    revision_count: int = 0
-    persistence: list[PersistenceEntry] = field(default_factory=list)
-    windows: list[StitchWindow] = field(default_factory=list)
-    core_codes: list[str] = field(default_factory=list)   # persistent core
-    remaining_path_count: int = 0    # last revision's path still to perform
-    warnings: list[str] = field(default_factory=list)
-    caveats: list[str] = field(default_factory=list)
-
-    @property
-    def stitched(self) -> list[StitchActivity]:
-        """The full stitched chain across windows, in actual-start order."""
-        acts = [a for w in self.windows for a in w.activities]
-        acts.sort(key=lambda a: (a.act_start or datetime.max,
-                                 a.act_finish or datetime.max))
-        return acts
-
-
-def analyse_asbuilt_path(
-    revisions: list[tuple[str, XerData]],
-    *,
-    core_min_frequency: float = 0.5,
-    low_coverage_pct: float = 50.0,
-    end_task_code: str | None = None,
-    config: DCMAConfig | None = None,
-) -> AsBuiltPathResult:
-    """Reconstruct the as-built critical path from ordered revisions.
-
-    ``core_min_frequency`` — an activity belongs to the persistent core when
-    it was on the forecast path in at least this fraction of the revisions
-    in which it was still to be performed (and in at least two revisions,
-    where the revision count allows).
-    """
-    config = config or DCMAConfig()
-    result = AsBuiltPathResult(revision_count=len(revisions))
-    result.caveats.extend(STANDING_CAVEATS)
-
-    if len(revisions) < 2:
-        result.warnings.append(
-            "At least two revisions are required to reconstruct an as-built "
-            "path from contemporaneous programmes."
-        )
-        return result
-
-    # --- longest path + eligibility per revision --------------------------
-    paths: list[dict[str, str]] = []          # per revision: code -> name
-    eligible: list[set[str]] = []             # incomplete codes per revision
-    for label, data in revisions:
-        cp = extract_longest_path(data, label, config=config,
-                                  end_task_code=end_task_code)
-        paths.append({a.task_code: a.name for a in cp.critical})
-        eligible.append({t.task_code for t in data.tasks
-                         if not t.is_loe_or_wbs and t.is_incomplete})
-
-    # --- persistence index -------------------------------------------------
-    last_label, last_data = revisions[-1]
-    last_by_code = {t.task_code: t for t in last_data.tasks
-                    if not t.is_loe_or_wbs}
-    ever_on_path: dict[str, str] = {}
-    for p in paths:
-        ever_on_path.update(p)
-    for code, name in ever_on_path.items():
-        on = sum(1 for p in paths if code in p)
-        elig = sum(1 for e in eligible if code in e)
-        t = last_by_code.get(code)
-        result.persistence.append(PersistenceEntry(
-            task_code=code, name=name,
-            times_on_path=on, times_eligible=max(elig, on),
-            act_start=t.act_start if t else None,
-            act_finish=t.act_finish if t else None,
-            is_complete=t.is_complete if t else False,
-        ))
-    result.persistence.sort(
-        key=lambda e: (-e.frequency, e.act_start or datetime.max))
-    min_times = 2 if len(revisions) > 2 else 1
-    result.core_codes = [
-        e.task_code for e in result.persistence
-        if e.frequency >= core_min_frequency
-        and e.times_on_path >= min_times
-    ]
-
-    # --- stitched contemporaneous path --------------------------------------
-    for i in range(len(revisions) - 1):
-        (l_from, d_from), (l_to, d_to) = revisions[i], revisions[i + 1]
-        dd_from = d_from.project.data_date if d_from.project else None
-        dd_to = d_to.project.data_date if d_to.project else None
-        win = StitchWindow(index=i + 1, from_label=l_from, to_label=l_to,
-                           start=dd_from, end=dd_to,
-                           forecast_critical_count=len(paths[i]))
-        # Actuals as contemporaneously recorded by the closing revision.
-        closing = {t.task_code: t for t in d_to.tasks if not t.is_loe_or_wbs}
-        intervals = []
-        for code, name in paths[i].items():
-            t = closing.get(code)
-            if t is None or t.act_start is None:
-                continue
-            a_start, a_finish = t.act_start, t.act_finish
-            if dd_from and dd_to:
-                # executed during the window?
-                started_before_end = a_start < dd_to
-                finished_after_start = (a_finish is None
-                                        or a_finish > dd_from)
-                if not (started_before_end and finished_after_start):
-                    continue
-                intervals.append((max(a_start, dd_from),
-                                  min(a_finish or dd_to, dd_to)))
-            win.activities.append(StitchActivity(
-                task_code=code, name=name,
-                act_start=a_start, act_finish=a_finish,
-                forecast_by=l_from))
-        win.activities.sort(key=lambda a: (a.act_start or datetime.max))
-
-        # Coverage: share of the window with forecast-critical work active.
-        if dd_from and dd_to and dd_to > dd_from:
-            merged, total = [], 0.0
-            for s, e in sorted(intervals):
-                if merged and s <= merged[-1][1]:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], e))
-                else:
-                    merged.append((s, e))
-            total = sum((e - s).total_seconds() for s, e in merged)
-            win.coverage_pct = round(
-                100.0 * total / (dd_to - dd_from).total_seconds(), 1)
-        result.windows.append(win)
-
-    # Remaining (not yet as-built) path at the last data date.
-    result.remaining_path_count = sum(
-        1 for code in paths[-1]
-        if (t := last_by_code.get(code)) is not None and t.is_incomplete)
-
-    # --- diagnostics ---------------------------------------------------------
-    for w in result.windows:
-        if not w.activities:
-            result.warnings.append(
-                f"Window {w.index} ({w.from_label} -> {w.to_label}): none of "
-                f"the {w.forecast_critical_count} activities forecast "
-                "critical at the window's start were recorded as performed "
-                "in the window — the then-critical work did not progress, "
-                "or progress was recorded elsewhere."
-            )
-        elif (w.coverage_pct is not None
-                and w.coverage_pct < low_coverage_pct):
-            result.warnings.append(
-                f"Window {w.index}: forecast-critical work was active for "
-                f"only {w.coverage_pct:.0f}% of the window — the driving "
-                "work was idle for substantial periods, or the true driver "
-                "sat off the forecast path."
-            )
-    if result.core_codes:
-        share = len(result.core_codes) / max(len(result.persistence), 1)
-        result.warnings.append(
-            f"Corroboration: {len(result.core_codes)} activities "
-            f"({share:.0%} of all ever-critical activities) form the "
-            "persistent core — critical in at least "
-            f"{core_min_frequency:.0%} of the revisions in which they "
-            "remained to be performed."
-        )
-    if result.remaining_path_count:
-        result.warnings.append(
-            f"{result.remaining_path_count} activities on the latest "
-            "revision's forecast path are still to be performed — the "
-            "as-built reconstruction covers the works up to the latest "
-            "data date only."
-        )
-    return result
-
-# --------------------------------------------------------------------------- #
-# Independent check — backward trace on ACTUAL dates, with scored links
-# --------------------------------------------------------------------------- #
 
 TRACE_CAVEATS = [
     "The trace walks backward from the elected completion milestone (or, "
@@ -302,7 +86,7 @@ class TraceLink:
 @dataclass
 class ActualTraceResult:
     terminal_code: str | None = None
-    activities: list[StitchActivity] = field(default_factory=list)  # chain
+    activities: list[PathActivity] = field(default_factory=list)  # chain
     links: list[TraceLink] = field(default_factory=list)
     hybrid: bool = False             # chain includes a forecast tail
     data_date: datetime | None = None
@@ -515,7 +299,7 @@ def extract_actual_trace(
         cur = best if best.task_code not in seen else None
 
     chain.reverse()
-    result.activities = [StitchActivity(
+    result.activities = [PathActivity(
         task_code=t.task_code, name=t.name,
         act_start=_eff_start(t), act_finish=_eff_finish(t),
         forecast_by="actual-date trace", basis=_basis(t)) for t in chain]
@@ -563,89 +347,46 @@ def extract_actual_trace(
     return result
 
 
-# --------------------------------------------------------------------------- #
-# Method triangulation — agreement between the two reconstructions
-# --------------------------------------------------------------------------- #
-
-@dataclass
-class TriangulationResult:
-    agreement_pct: float | None = None    # Jaccard of the two methods
-    both: list[str] = field(default_factory=list)
-    stitched_only: list[str] = field(default_factory=list)
-    trace_only: list[str] = field(default_factory=list)
-    names: dict[str, str] = field(default_factory=dict)
-    warnings: list[str] = field(default_factory=list)
-    caveats: list[str] = field(default_factory=list)
-
-
-def triangulate(stitched: AsBuiltPathResult,
-                trace: ActualTraceResult) -> TriangulationResult:
-    """Where do the two independent reconstructions agree?"""
-    tri = TriangulationResult()
-    tri.caveats.append(
-        "The two reconstructions are methodologically independent: the "
-        "stitched path reads contemporaneous forecast criticality; the "
-        "trace reads only recorded actual dates (with logic as secondary "
-        "evidence). Activities identified by both are method-invariant "
-        "findings; divergences localise where analyst judgement is needed."
-    )
-    a = {x.task_code: x.name for x in stitched.stitched}
-    b = {x.task_code: x.name for x in trace.activities}
-    tri.names = {**a, **b}
-    both = a.keys() & b.keys()
-    union = a.keys() | b.keys()
-    tri.both = sorted(both)
-    tri.stitched_only = sorted(a.keys() - b.keys())
-    tri.trace_only = sorted(b.keys() - a.keys())
-    if union:
-        tri.agreement_pct = round(100.0 * len(both) / len(union), 1)
-    if tri.agreement_pct is not None:
-        trace_share = (100.0 * len(both) / len(b)) if b else 0.0
-        tri.warnings.append(
-            f"Method agreement: {len(both)} activities identified by BOTH "
-            f"reconstructions ({tri.agreement_pct:.0f}% of the union; "
-            f"{trace_share:.0f}% of the traced chain is corroborated by "
-            "the contemporaneous method)."
-        )
-    if tri.trace_only:
-        tri.warnings.append(
-            f"{len(tri.trace_only)} activities appear only in the "
-            "actual-date trace — candidates for driving work that sat off "
-            "the forecast critical path: "
-            + ", ".join(tri.trace_only[:8])
-            + (" …" if len(tri.trace_only) > 8 else "")
-        )
-    return tri
 
 
 def trace_end_candidates(
     revisions: list[tuple[str, XerData]], limit: int = 40,
     contract_ms: str | None = None,
 ) -> list[tuple[str, str, datetime | None, bool]]:
-    """Candidate trace terminals, latest first: (code, name, date, achieved).
+    """Terminals to trace back from: (code, name, date, achieved).
 
-    An elected contractual completion milestone is offered FIRST even when
-    it has not been achieved — anchoring the path to the contractual
-    milestone matters more than restricting the list to finished work, and
-    the unachieved case is handled as a disclosed hybrid by the trace.
+    EVERY milestone is offered, achieved or not — you pick the milestone
+    you are measuring to, and whether the works reached it is a fact the
+    tool discloses, not a filter on the list. Milestones come first
+    (elected contractual milestone at the very top), then finished
+    activities for the cases where the terminal is ordinary work.
     """
     if not revisions:
         return []
     _, latest = revisions[-1]
     out: list[tuple[str, str, datetime | None, bool]] = []
     seen: set[str] = set()
+
+    def _add(t) -> None:
+        out.append((t.task_code, t.name, t.act_finish or t.early_finish,
+                    t.act_finish is not None))
+        seen.add(t.task_code)
+
+    live = [t for t in latest.tasks if not t.is_loe_or_wbs]
     if contract_ms:
-        for t in latest.tasks:
-            if t.task_code == contract_ms and not t.is_loe_or_wbs:
-                out.append((t.task_code, t.name,
-                            t.act_finish or t.early_finish,
-                            t.act_finish is not None))
-                seen.add(t.task_code)
+        for t in live:
+            if t.task_code == contract_ms:
+                _add(t)
                 break
-    done = [t for t in latest.tasks
-            if not t.is_loe_or_wbs and t.act_finish is not None
-            and t.task_code not in seen]
-    done.sort(key=lambda t: (t.act_finish, t.is_milestone), reverse=True)
+    # every milestone, latest date first, achieved or not
+    ms = [t for t in live if t.is_milestone and t.task_code not in seen]
+    ms.sort(key=lambda t: (t.act_finish or t.early_finish or datetime.min),
+            reverse=True)
+    for t in ms:
+        _add(t)
+    done = [t for t in live
+            if t.act_finish is not None and t.task_code not in seen]
+    done.sort(key=lambda t: t.act_finish, reverse=True)
     out.extend((t.task_code, t.name, t.act_finish, True)
                for t in done[:limit])
     return out

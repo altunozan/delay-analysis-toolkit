@@ -593,145 +593,66 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
 # --------------------------------------------------------------------------- #
 # Module 12 — As-built critical path
 # --------------------------------------------------------------------------- #
-def build_asbuilt_xlsx(res, narrative: str | None = None,
-                       trace=None, tri=None, roll=None) -> bytes:
-    """res: AsBuiltPathResult; trace: ActualTraceResult; tri:
-    Triangulation; roll: RollupResult (umbrella work packages)"""
+def build_asbuilt_xlsx(trace, narrative: str | None = None,
+                       roll=None, links=None) -> bytes:
+    """trace: ActualTraceResult; roll: RollupResult; links: umbrella links."""
     wb = Workbook()
     ws = wb.active
-    ws.title = "Stitched Path"
-    _title(ws, "As-Built Critical Path (Contemporaneous Reconstruction)", 7)
-    core = set(res.core_codes)
+    ws.title = "As-Built Path"
+    _title(ws, "As-Built Critical Path — backward trace", 6)
+    ws.cell(row=3, column=1, value=(
+        f"Traced back from {trace.terminal_code} · "
+        f"{len(trace.activities)} activities · "
+        f"{trace.asbuilt_count} as-built, {trace.in_progress_count} in "
+        f"progress, {trace.forecast_count} forecast · data date "
+        f"{_fmt(trace.data_date)}")).font = Font(italic=True)
+    if trace.hybrid:
+        c = ws.cell(row=4, column=1, value=(
+            "HYBRID PATH — the milestone was not achieved; rows marked "
+            "'forecast' are the programme's remaining early dates, not a "
+            "record of what happened."))
+        c.font = Font(bold=True, color="9B3227")
 
-    _header_row(ws, 4, ["Window", "Forecast by", "Activity ID", "Activity",
-                        "Actual start", "Actual finish", "Persistent core"])
-    row = 5
-    for w in res.windows:
-        for a in w.activities:
-            vals = [f"W{w.index}", a.forecast_by, a.task_code, a.name,
-                    _fmt(a.act_start), _fmt(a.act_finish),
-                    "Yes" if a.task_code in core else ""]
-            for col, v in enumerate(vals, start=1):
-                c = ws.cell(row=row, column=col, value=v)
-                c.border = THIN_BORDER
-                if col == 7 and v == "Yes":
-                    c.fill = GAIN_FILL
-            row += 1
-    _autofit(ws, {1: 8, 2: 26, 3: 18, 4: 48, 5: 12, 6: 12, 7: 14})
-    ws.freeze_panes = "A5"
-
-    s2 = wb.create_sheet("Persistence Index")
-    _header_row(s2, 1, ["Activity ID", "Activity", "On path (revisions)",
-                        "Eligible (revisions)", "Frequency",
-                        "Actual start", "Actual finish"])
-    for i, e in enumerate(res.persistence, start=2):
-        vals = [e.task_code, e.name, e.times_on_path, e.times_eligible,
-                f"{e.frequency:.0%}", _fmt(e.act_start), _fmt(e.act_finish)]
+    _header_row(ws, 6, ["#", "Basis", "Activity ID", "Activity",
+                        "Start", "Finish"])
+    for i, a in enumerate(trace.activities, start=1):
+        vals = [i, a.basis, a.task_code, a.name,
+                _fmt(a.act_start), _fmt(a.act_finish)]
         for col, v in enumerate(vals, start=1):
-            c = s2.cell(row=i, column=col, value=v)
+            c = ws.cell(row=i + 6, column=col, value=v)
             c.border = THIN_BORDER
-            if col == 5 and e.frequency >= 0.5:
+            if col == 2 and v == "as-built":
                 c.fill = GAIN_FILL
-    _autofit(s2, {1: 18, 2: 48, 3: 18, 4: 18, 5: 11, 6: 12, 7: 12})
-    s2.freeze_panes = "A2"
-
-    s3 = wb.create_sheet("Window Summary")
-    _header_row(s3, 1, ["Window", "From", "To", "Period",
-                        "Forecast critical", "Performed in window",
-                        "Coverage %"])
-    for i, w in enumerate(res.windows, start=2):
-        period = (f"{_fmt(w.start)} -> {_fmt(w.end)}")
-        vals = [w.index, w.from_label, w.to_label, period,
-                w.forecast_critical_count, len(w.activities),
-                w.coverage_pct]
-        for col, v in enumerate(vals, start=1):
-            c = s3.cell(row=i, column=col, value=v)
-            c.border = THIN_BORDER
-            if (col == 7 and isinstance(v, (int, float)) and v < 50):
+            elif col == 2 and v == "forecast":
                 c.fill = SLIP_FILL
-    _autofit(s3, {1: 8, 2: 26, 3: 26, 4: 26, 5: 16, 6: 18, 7: 11})
+    _autofit(ws, {1: 5, 2: 13, 3: 20, 4: 52, 5: 13, 6: 13})
+    ws.freeze_panes = "A7"
 
-    # The traced chain itself, terminal-first, with each activity's
-    # evidential basis — a hybrid path must never read as all as-built.
-    if trace is not None and trace.activities:
-        s3b = wb.create_sheet("Traced Chain")
-        if trace.hybrid:
-            s3b["A1"] = ("HYBRID PATH — the elected completion milestone "
-                         "was not achieved; rows marked 'forecast' are "
-                         "the programme's remaining early dates, not a "
-                         "record of what happened.")
-            s3b["A1"].font = Font(bold=True, color="9B3227")
-        _header_row(s3b, 3, ["#", "Basis", "Activity ID", "Activity",
-                             "Start", "Finish"])
-        for i, a in enumerate(trace.activities, start=1):
-            vals = [i, a.basis, a.task_code, a.name,
-                    _fmt(a.act_start), _fmt(a.act_finish)]
-            for col, v in enumerate(vals, start=1):
-                c = s3b.cell(row=i + 3, column=col, value=v)
-                c.border = THIN_BORDER
-                # openpyxl rejects a None fill — leave in-progress rows
-                # unfilled rather than assigning one.
-                if col == 2 and v == "as-built":
-                    c.fill = GAIN_FILL
-                elif col == 2 and v == "forecast":
-                    c.fill = SLIP_FILL
-        _autofit(s3b, {1: 5, 2: 13, 3: 20, 4: 48, 5: 13, 6: 13})
-        s3b.freeze_panes = "A4"
-
-    if trace is not None and trace.links:
-        s4 = wb.create_sheet("Actual-Date Trace")
-        _header_row(s4, 1, ["Predecessor", "Pred name", "Kind", "Successor",
-                            "Succ name", "Gap (d)", "Programmed logic",
-                            "Confidence"])
+    if trace.links:
+        s2 = wb.create_sheet("Hand-Offs")
+        _header_row(s2, 1, ["Predecessor", "Pred name", "Kind",
+                            "Successor", "Succ name", "Gap (d)",
+                            "Programmed logic", "Confidence"])
         for i, lk in enumerate(trace.links, start=2):
             vals = [lk.pred_code, lk.pred_name, lk.kind, lk.succ_code,
                     lk.succ_name, lk.gap_days,
-                    "Yes" if lk.had_logic else "NO", lk.score]
+                    "Yes" if lk.had_logic else "SEQUENCE ONLY", lk.score]
             for col, v in enumerate(vals, start=1):
-                c = s4.cell(row=i, column=col, value=v)
+                c = s2.cell(row=i, column=col, value=v)
                 c.border = THIN_BORDER
                 if col == 7:
                     c.fill = GAIN_FILL if lk.had_logic else SLIP_FILL
-        _autofit(s4, {1: 18, 2: 38, 3: 12, 4: 18, 5: 38, 6: 9, 7: 16,
+        _autofit(s2, {1: 18, 2: 38, 3: 12, 4: 18, 5: 38, 6: 9, 7: 17,
                       8: 11})
-        s4.freeze_panes = "A2"
+        s2.freeze_panes = "A2"
 
-    if tri is not None and tri.agreement_pct is not None:
-        s5 = wb.create_sheet("Method Agreement")
-        s5["A1"] = (f"Agreement: {tri.agreement_pct:.0f}% of the union — "
-                    f"{len(tri.both)} activities identified by BOTH methods")
-        s5["A1"].font = Font(bold=True)
-        _header_row(s5, 3, ["Activity ID", "Activity", "Identified by"])
-        row = 4
-        groups = [(tri.both, "Both methods", True),
-                  (tri.trace_only, "Actual-date trace only", False),
-                  (tri.stitched_only, "Stitched path only", False)]
-        for codes, label, highlight in groups:
-            for code in codes:
-                vals = [code, tri.names.get(code, ""), label]
-                for col, v in enumerate(vals, start=1):
-                    c = s5.cell(row=row, column=col, value=v)
-                    c.border = THIN_BORDER
-                    if col == 3 and highlight:
-                        c.fill = GAIN_FILL
-                row += 1
-        _autofit(s5, {1: 18, 2: 48, 3: 24})
-        s5.freeze_panes = "A4"
-
-    extra = []
-    if trace is not None:
-        extra += list(trace.warnings) + list(trace.caveats)
-    if tri is not None:
-        extra += list(tri.warnings) + list(tri.caveats)
-    # Work packages: the measured span of each umbrella, then every
-    # member beneath it with the driver marked.
     if roll is not None and roll.umbrellas:
-        s6 = wb.create_sheet("Work Packages")
-        s6["A1"] = ("Umbrella dates are measured from CRITICAL-PATH "
+        s3 = wb.create_sheet("Work Packages")
+        s3["A1"] = ("Umbrella dates are measured from CRITICAL-PATH "
                     "members only — grouping is presentation and does "
                     "not move the measured delay.")
-        s6["A1"].font = Font(bold=True)
-        _header_row(s6, 3, ["Work package", "Members", "On CP",
+        s3["A1"].font = Font(bold=True)
+        _header_row(s3, 3, ["Work package", "Members", "On CP",
                             "Measured start", "Measured finish",
                             "Driving member", "Full group runs on (d)",
                             "Measured?"])
@@ -741,18 +662,18 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
                     u.driving_member or "", u.presentation_only_days,
                     "yes" if u.measured else "PRESENTATION ONLY"]
             for col, v in enumerate(vals, start=1):
-                c = s6.cell(row=i, column=col, value=v)
+                c = s3.cell(row=i, column=col, value=v)
                 c.border = THIN_BORDER
                 if col == 8:
                     c.fill = GAIN_FILL if u.measured else SLIP_FILL
-        _autofit(s6, {1: 34, 2: 9, 3: 7, 4: 15, 5: 15, 6: 20, 7: 20,
+        _autofit(s3, {1: 34, 2: 9, 3: 7, 4: 15, 5: 15, 6: 20, 7: 20,
                       8: 18})
-        s6.freeze_panes = "A4"
+        s3.freeze_panes = "A4"
 
         members = roll.member_rows()
         if members:
-            s7 = wb.create_sheet("Work Package Members")
-            _header_row(s7, 1, ["Work package", "Activity ID", "Activity",
+            s4 = wb.create_sheet("Work Package Members")
+            _header_row(s4, 1, ["Work package", "Activity ID", "Activity",
                                 "On critical path", "Actual start",
                                 "Actual finish", "Drives finish"])
             for i, m in enumerate(members, start=2):
@@ -761,15 +682,34 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
                         _fmt(m["actual_finish"]),
                         m["drives_umbrella_finish"]]
                 for col, v in enumerate(vals, start=1):
-                    c = s7.cell(row=i, column=col, value=v)
+                    c = s4.cell(row=i, column=col, value=v)
                     c.border = THIN_BORDER
                     if col == 4:
-                        c.fill = (GAIN_FILL if v == "yes" else SLIP_FILL)
-            _autofit(s7, {1: 30, 2: 20, 3: 44, 4: 17, 5: 13, 6: 13,
+                        c.fill = GAIN_FILL if v == "yes" else SLIP_FILL
+            _autofit(s4, {1: 30, 2: 20, 3: 44, 4: 17, 5: 13, 6: 13,
                           7: 13})
-            s7.freeze_panes = "A2"
+            s4.freeze_panes = "A2"
 
-    _notes_sheet(wb, res.warnings + res.caveats + extra
+    if links:
+        s5 = wb.create_sheet("Package Links")
+        _header_row(s5, 1, ["From", "To", "Basis", "Hand-offs",
+                            "Logic-evidenced", "Sequence only",
+                            "Underlying activity hand-offs"])
+        for i, r in enumerate(links, start=2):
+            vals = [r["from"], r["to"], r["basis"], r["hand_off_count"],
+                    r["logic_evidenced"], r["sequence_only"],
+                    "; ".join(r["hand_offs"][:8])]
+            for col, v in enumerate(vals, start=1):
+                c = s5.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 3 and v == "logic":
+                    c.fill = GAIN_FILL
+                elif col == 3 and v == "sequence only":
+                    c.fill = SLIP_FILL
+        _autofit(s5, {1: 30, 2: 30, 3: 14, 4: 10, 5: 16, 6: 14, 7: 60})
+        s5.freeze_panes = "A2"
+
+    _notes_sheet(wb, list(trace.warnings) + list(trace.caveats)
                  + (list(roll.caveats) + list(roll.warnings)
                     if roll is not None else []),
                  "Warnings & Caveats")
@@ -778,6 +718,7 @@ def build_asbuilt_xlsx(res, narrative: str | None = None,
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
 
 # --------------------------------------------------------------------------- #
 # Module 13 — Sequence coding

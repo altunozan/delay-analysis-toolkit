@@ -322,6 +322,65 @@ def build_rollup(
     return result
 
 
+def umbrella_links(links, groups: dict[str, list[str]]) -> list[dict]:
+    """Lift activity-level path links to links BETWEEN work packages.
+
+    ``links`` are TraceLink records from the as-built path. A link whose
+    two ends sit in different umbrellas becomes an umbrella-to-umbrella
+    link; links inside one umbrella are internal and reported as such
+    (they are what makes the package one item of work). Each umbrella
+    link keeps the underlying activity hand-offs so a reader can open it
+    and see exactly which activities joined the two packages.
+    """
+    owner: dict[str, str] = {}
+    for name, codes in groups.items():
+        for c in codes:
+            owner.setdefault(c, name)
+
+    agg: dict[tuple[str, str], dict] = {}
+    for lk in links:
+        a = owner.get(lk.pred_code, lk.pred_code)
+        b = owner.get(lk.succ_code, lk.succ_code)
+        if a == b:
+            continue                      # internal to one package
+        key = (a, b)
+        row = agg.setdefault(key, {
+            "from": a, "to": b,
+            "from_is_umbrella": lk.pred_code in owner,
+            "to_is_umbrella": lk.succ_code in owner,
+            "hand_offs": [], "logic_evidenced": 0, "sequence_only": 0,
+            "min_gap_days": None})
+        row["hand_offs"].append(
+            f"{lk.pred_code}→{lk.succ_code} ({lk.gap_days:+.0f}d, "
+            f"{'logic' if lk.had_logic else 'sequence only'})")
+        if lk.had_logic:
+            row["logic_evidenced"] += 1
+        else:
+            row["sequence_only"] += 1
+        row["min_gap_days"] = (lk.gap_days if row["min_gap_days"] is None
+                               else min(row["min_gap_days"], lk.gap_days))
+    for row in agg.values():
+        row["hand_off_count"] = len(row["hand_offs"])
+        row["basis"] = ("logic" if row["sequence_only"] == 0
+                        else "sequence only" if row["logic_evidenced"] == 0
+                        else "mixed")
+    return list(agg.values())
+
+
+def internal_links(links, groups: dict[str, list[str]]) -> dict[str, int]:
+    """How many path hand-offs sit INSIDE each umbrella."""
+    owner: dict[str, str] = {}
+    for name, codes in groups.items():
+        for c in codes:
+            owner.setdefault(c, name)
+    counts: dict[str, int] = {}
+    for lk in links:
+        a, b = owner.get(lk.pred_code), owner.get(lk.succ_code)
+        if a is not None and a == b:
+            counts[a] = counts.get(a, 0) + 1
+    return counts
+
+
 # --------------------------------------------------------------------------- #
 # AI-assisted grouping (proposal only; analyst confirms every umbrella)
 # --------------------------------------------------------------------------- #

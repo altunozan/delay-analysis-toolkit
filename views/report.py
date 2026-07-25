@@ -14,7 +14,8 @@ from dcma.narrative import (
     build_report_prompt, stream_narrative,
 )
 from programme import (
-    BasisOfAnalysis, ReportSection, SourceFile, analyse_asbuilt_path,
+    BasisOfAnalysis, ReportSection, SourceFile, build_rollup,
+    planned_vs_actual,
     analyse_float_erosion, analyse_sequence, build_asbuilt_prompt,
     build_assembled_report, build_comparison_prompt,
     build_critical_path_prompt, build_float_erosion_prompt,
@@ -23,7 +24,7 @@ from programme import (
     build_variance_prompt, build_windows_prompt, compute_progress,
     compute_variance_by_mapping, extract_actual_trace,
     extract_resource_loading, propose_sequence_mapping, report_charts,
-    task_wbs_assignments, triangulate,
+    task_wbs_assignments,
 )
 from views._shared import (
     _fkey, cached_compare, cached_longest_path, cached_milestone_shifts,
@@ -284,44 +285,53 @@ def report_tab() -> None:
             charts=[(lambda fe=fe: report_charts.float_chart(fe),
                      "Float profile by revision")]))
 
-        # As-built critical path (contemporaneous reconstruction + trace)
-        ab = analyse_asbuilt_path(ordered)
-        ab_trace = extract_actual_trace(ordered, max_gap_days=60.0)
-        ab_tri = triangulate(ab, ab_trace)
+        # As-built critical path — backward trace from the elected
+        # contractual milestone (or the latest recorded finish).
+        ab_trace = extract_actual_trace(
+            ordered, end_task_code=st.session_state.get(sk.CONTRACT_MS),
+            max_gap_days=365.0)
+        _ab_groups = st.session_state.get(sk.UMBRELLAS) or {}
+        ab_roll = None
+        if _ab_groups:
+            ab_roll = build_rollup(
+                planned_vs_actual(pool[base_name], ordered[-1][1], None),
+                _ab_groups, set(ab_trace.codes))
         sec = ReportSection("As-Built Critical Path")
+        _seq = sum(1 for lk in ab_trace.links if not lk.had_logic)
         sec.key_findings = [
-            f"{len(ab.stitched)} activities on the stitched contemporaneous "
-            f"path across {len(ab.windows)} window(s); persistent core "
-            f"{len(ab.core_codes)} of {len(ab.persistence)} ever-critical "
-            "activities.",
+            f"{len(ab_trace.activities)} activities on the as-built "
+            f"critical path traced back from {ab_trace.terminal_code}: "
+            f"{ab_trace.asbuilt_count} as-built, "
+            f"{ab_trace.in_progress_count} in progress, "
+            f"{ab_trace.forecast_count} forecast.",
+            f"{len(ab_trace.links) - _seq} of {len(ab_trace.links)} "
+            "hand-offs are corroborated by a programmed relationship; "
+            f"{_seq} continue on the recorded sequence alone.",
         ]
-        covs = [w.coverage_pct for w in ab.windows
-                if w.coverage_pct is not None]
-        if covs:
+        if ab_trace.hybrid:
             sec.key_findings.append(
-                f"Driving-work coverage: {min(covs):.0f}%–{max(covs):.0f}% "
-                "of each window with forecast-critical work active.")
-        if ab_tri.agreement_pct is not None:
+                f"The terminal milestone {ab_trace.terminal_code} was NOT "
+                "achieved: the path is as-built to the data date and "
+                "forecast beyond it.")
+        if ab_roll is not None:
+            _meas = [u for u in ab_roll.umbrellas if u.measured]
             sec.key_findings.append(
-                f"Independent actual-date trace: {len(ab_trace.activities)} "
-                f"activities; method agreement {ab_tri.agreement_pct:.0f}% "
-                f"({len(ab_tri.both)} activities identified by both "
-                "reconstructions).")
-        sec.caveats = (list(ab.caveats) + list(ab.warnings)
-                       + list(ab_trace.caveats) + list(ab_trace.warnings)
-                       + list(ab_tri.caveats) + list(ab_tri.warnings))
+                f"Presented as {len(_meas)} work package(s); each "
+                "measured on its critical-path members only.")
+        sec.caveats = (list(ab_trace.caveats) + list(ab_trace.warnings)
+                       + (list(ab_roll.caveats) + list(ab_roll.warnings)
+                          if ab_roll is not None else []))
         candidates.append(dict(
             label="As-built critical path", sec=sec,
-            settings=["As-built path — contemporaneous stitching; "
-                      "persistent core at ≥50% of eligible revisions; "
-                      "actual-date trace with logic-evidenced hand-offs, "
-                      "max gap 60d, no temporal fallback"],
+            settings=[f"As-built path — traced back from "
+                      f"{ab_trace.terminal_code}; hand-offs continue on "
+                      "recorded sequence where no programmed "
+                      "relationship exists (flagged); break threshold "
+                      "365d"],
             nar_key="nar_asbuilt",
-            prompt=lambda ab=ab, tr=ab_trace, tg=ab_tri:
-                build_asbuilt_prompt(ab, tr, tg),
-            charts=[(lambda ab=ab:
-                     report_charts.asbuilt_persistence_chart(ab),
-                     "Criticality persistence on actual dates")]))
+            prompt=lambda tr=ab_trace, rl=ab_roll:
+                build_asbuilt_prompt(tr, rl),
+            charts=[]))
 
     # Resources (baseline)
     rl = extract_resource_loading(pool[base_name], base_name)

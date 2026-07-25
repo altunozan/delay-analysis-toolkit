@@ -129,10 +129,15 @@ def main() -> int:
 
             goto("As-Built Critical Path")
             page.wait_for_timeout(4000)
-            check("as-built page uses the shared CP picker",
-                  page.get_by_text("Max hand-off gap").count() > 0)
-            check("as-built page offers the work-package view",
-                  page.get_by_text("Work-package view").count() > 0)
+            check("as-built page leads with the milestone dropdown",
+                  page.get_by_text("Trace back from").count() > 0)
+            check("as-built page renders the path gantt",
+                  page.locator("iframe").count() > 0)
+            check("as-built page shows logic links",
+                  page.get_by_text("Logic links along the path").count() > 0)
+            check("stitched/persistence jargon is gone",
+                  page.get_by_text("persisten", exact=False).count() == 0
+                  and page.get_by_text("stitch", exact=False).count() == 0)
             check("as-built work-package section exception-free",
                   exc() == 0, f"{exc()} exceptions")
 
@@ -154,8 +159,8 @@ def main() -> int:
             page.get_by_text("② As-built critical path",
                              exact=True).first.click()
             page.wait_for_timeout(4000)
-            check("APvAB step ② uses the shared CP picker (gap control)",
-                  page.get_by_text("Max hand-off gap").count() > 0)
+            check("APvAB step ② offers trace-or-define-it-yourself",
+                  page.get_by_text("I define it myself").count() > 0)
             adopt = page.get_by_role(
                 "button", name="Use this as the as-built critical path →")
             if adopt.count():

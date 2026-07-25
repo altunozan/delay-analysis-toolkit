@@ -9,7 +9,6 @@ modules share one backend.
 
 from __future__ import annotations
 
-from .asbuilt_path import AsBuiltPathResult
 from .comparison import ComparisonResult
 from .critical_path import CriticalPathResult
 from .explain import ExplainResult
@@ -112,46 +111,40 @@ recovering between the two programmes?
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
     "asbuilt_path": """\
-## As-Built Critical Path (Contemporaneous Reconstruction)
+## As-Built Critical Path
 
 ### 1. Executive Summary
-2-3 sentences: the period reconstructed, how the as-built critical path was
-derived (contemporaneous forecast criticality confirmed by recorded
-performance), and how well corroborated it is (persistent core share,
-coverage).
+2-3 sentences: the milestone traced to, whether the works reached it, the
+period the path spans, and how far the chain is corroborated by programmed
+logic rather than sequence alone.
 
-### 2. The Driving Chain, Window by Window
-Per window: what the then-current programme forecast as critical, which of
-that work the records show was performed, and the share of the window with
-driving work active. Tell it as a construction story (stages of work), not
-an activity list.
+### 2. The Driving Chain
+Walk the path from the start of the works to the terminal milestone as a
+construction story — stages of work, not an activity list. Give the dates
+of the significant hand-offs.
 
-### 3. The Persistent Core
-The activities critical in revision after revision — the empirical spine of
-the as-built path. State the corroboration level plainly. Activities on the
-path in only one revision are weakly corroborated; say so.
+### 3. Work Packages
+Where a work-package grouping is provided: each package, its span, and the
+activity that drove its finish. State plainly that grouping is presentation
+and that each package's dates come from its critical-path members only.
 
-### 4. Gaps and Counter-Indications
-Windows where forecast-critical work did not progress or coverage was low —
-periods where the true driver may sit off the forecast path. Report these
-with the same weight as the corroborated findings.
+### 4. Evidence Behind the Hand-Offs
+How many hand-offs follow a programmed relationship and how many continue on
+sequence alone. Name the sequence-only hand-offs — they are the points where
+the records show one activity followed another without the programme ever
+linking them, and they need contemporaneous corroboration.
 
-### 5. Independent Check — Actual-Date Trace
-Where provided: the chain traced backward through recorded actual dates
-(logic-evidenced hand-offs only, unless stated otherwise), where it stopped
-and why, and the size of the hand-off gaps — long gaps between logically
-linked work indicate stalling and should be stated plainly.
+### 5. Stalls and Long Gaps
+Hand-offs with large gaps: work that stopped between one activity finishing
+and the next starting. Report the periods and their length; do not attribute
+them to either party.
 
-### 6. Method Agreement
-Where provided: how far the two independent reconstructions identify the
-same activities. Method-invariant findings carry the most weight; state the
-divergences and what they localise for analyst review.
+### 6. As-Built versus Forecast
+Where the milestone was NOT achieved: state exactly where the recorded work
+ends and the forecast begins, and never describe the forecast tail as
+as-built.
 
-### 7. Remaining Path
-Work on the latest forecast path still to be performed (the reconstruction
-covers only the works to the latest data date).
-
-### 8. Limitations
+### 7. Limitations
 Every standing caveat and warning provided, in full.""",
     "comparison": """\
 ## Programme Revision Comparison
@@ -835,107 +828,73 @@ def build_resources_prompt(
 
 
 def build_asbuilt_prompt(
-    res: AsBuiltPathResult,
-    trace=None,
-    tri=None,
+    trace,
+    roll=None,
     template: str | None = None,
 ) -> str:
+    """Prompt for the as-built critical path (backward trace)."""
     def fmt(d):
         return f"{d:%Y-%m-%d}" if d else "unknown"
-    lines = ["<context>As-built critical path reconstructed from the "
-             "project's own contemporaneous programmes: an activity is on "
-             "the as-built path for a window when the programme in force at "
-             "the window's start forecast it critical (backward driving-"
-             "logic trace) AND the closing revision records it as performed "
-             "in that window. The persistence index counts, per activity, "
-             "the revisions in which it sat on the forecast path while "
-             "still to be performed.</context>\n"]
+    lines = ["<context>As-built critical path traced BACKWARDS from a "
+             "chosen milestone to the start of the works. At each step "
+             "the predecessor is the activity whose recorded dates most "
+             "tightly precede it; a programmed relationship between the "
+             "pair corroborates the hand-off, and where none exists the "
+             "chain continues on SEQUENCE alone and is flagged. Activity "
+             "dates are as recorded; where the milestone was not reached "
+             "the tail is the file's own forecast and is labelled "
+             "'forecast'.</context>\n"]
 
-    core = set(res.core_codes)
     lines.append("<summary>")
-    lines.append(f"- Revisions used: {res.revision_count}; windows: "
-                 f"{len(res.windows)}")
-    lines.append(f"- Ever forecast-critical activities: "
-                 f"{len(res.persistence)}; persistent core: "
-                 f"{len(res.core_codes)}")
-    lines.append(f"- Latest-path activities still to perform: "
-                 f"{res.remaining_path_count}")
+    lines.append(f"- Terminal milestone: {trace.terminal_code}")
+    lines.append(f"- Path length: {len(trace.activities)} activities")
+    lines.append(f"- Basis: {trace.asbuilt_count} as-built, "
+                 f"{trace.in_progress_count} in progress, "
+                 f"{trace.forecast_count} forecast")
+    lines.append(f"- Data date: {fmt(trace.data_date)}")
+    if trace.hybrid:
+        lines.append("- HYBRID PATH: the milestone was NOT achieved. Never "
+                     "describe the forecast tail as as-built.")
+    n_seq = sum(1 for lk in trace.links if not lk.had_logic)
+    lines.append(f"- Hand-offs: {len(trace.links) - n_seq} corroborated by "
+                 f"programmed logic, {n_seq} on sequence alone")
     lines.append("</summary>\n")
 
-    for w in res.windows:
-        lines.append(f"<window_{w.index} from='{w.from_label}' "
-                     f"to='{w.to_label}' period='{fmt(w.start)} to "
-                     f"{fmt(w.end)}'>")
-        cov = (f"{w.coverage_pct:.0f}%" if w.coverage_pct is not None
-               else "n/a")
-        lines.append(f"- Forecast critical at window start: "
-                     f"{w.forecast_critical_count}; performed in window: "
-                     f"{len(w.activities)}; driving-work coverage: {cov}")
-        for a in w.activities[:60]:
-            af = fmt(a.act_finish) if a.act_finish else "in progress"
-            tag = " [CORE]" if a.task_code in core else ""
-            lines.append(f"  - {a.task_code} '{a.name}'{tag}: performed "
-                         f"{fmt(a.act_start)} -> {af}")
-        if len(w.activities) > 60:
-            lines.append(f"  ... (+{len(w.activities) - 60} more)")
-        lines.append(f"</window_{w.index}>\n")
+    lines.append("<path>")
+    for i, a in enumerate(trace.activities, start=1):
+        lines.append(f"{i}. {a.task_code} '{a.name}' [{a.basis}]: "
+                     f"{fmt(a.act_start)} -> {fmt(a.act_finish)}")
+    lines.append("</path>\n")
 
-    lines.append("<persistence_index>")
-    for e in res.persistence[:80]:
-        lines.append(f"- {e.task_code} '{e.name}': on forecast path "
-                     f"{e.times_on_path} of {e.times_eligible} eligible "
-                     f"revisions ({e.frequency:.0%})")
-    if len(res.persistence) > 80:
-        lines.append(f"... (+{len(res.persistence) - 80} more)")
-    lines.append("</persistence_index>\n")
-
-    if trace is not None:
-        lines.append("<actual_date_trace terminal='"
-                     f"{trace.terminal_code}'"
-                     f" hybrid='{str(trace.hybrid).lower()}'>")
-        if trace.hybrid:
-            lines.append(
-                "! HYBRID PATH: the elected completion milestone was NOT "
-                "achieved at the data date. Activities marked [forecast] "
-                "are the programme's remaining early dates, NOT a record "
-                "of what happened. Say so explicitly in the narrative and "
-                "never describe the forecast tail as as-built.")
-        lines.append(f"- composition: {trace.asbuilt_count} as-built, "
-                     f"{trace.in_progress_count} in progress, "
-                     f"{trace.forecast_count} forecast")
-        for a in trace.activities:
-            af = fmt(a.act_finish) if a.act_finish else "in progress"
-            lines.append(f"- {a.task_code} '{a.name}' [{a.basis}]: "
-                         f"{fmt(a.act_start)} -> {af}")
+    if trace.links:
+        lines.append("<hand_offs>")
         for lk in trace.links:
-            lines.append(f"  link {lk.pred_code} -> {lk.succ_code} "
-                         f"[{lk.kind}] gap {lk.gap_days:+.0f}d, "
-                         f"{'programmed logic' if lk.had_logic else 'NO logic'}, "
-                         f"confidence {lk.score:.2f}")
-        lines.append("</actual_date_trace>\n")
-    if tri is not None and tri.agreement_pct is not None:
-        lines.append("<method_agreement>")
-        lines.append(f"- Agreement: {tri.agreement_pct:.0f}% of the union; "
-                     f"{len(tri.both)} activities identified by BOTH "
-                     "methods")
-        lines.append(f"- Stitched-only: {len(tri.stitched_only)}; "
-                     f"trace-only: {len(tri.trace_only)}")
-        for code in tri.trace_only[:10]:
-            lines.append(f"  trace-only: {code} '{tri.names.get(code,'')}'")
-        lines.append("</method_agreement>\n")
-    lines.append("<caveats>")
-    lines.extend(f"- {c}" for c in res.caveats)
-    lines.extend(f"- {w}" for w in res.warnings)
-    if trace is not None:
-        lines.extend(f"- {c}" for c in trace.caveats)
-        lines.extend(f"- {w}" for w in trace.warnings)
-    if tri is not None:
-        lines.extend(f"- {c}" for c in tri.caveats)
-        lines.extend(f"- {w}" for w in tri.warnings)
-    lines.append("</caveats>\n")
-    lines.append(_instructions(template or DEFAULT_TEMPLATES["asbuilt_path"]))
-    return "\n".join(lines)
+            lines.append(f"- {lk.pred_code} -> {lk.succ_code} [{lk.kind}] "
+                         f"gap {lk.gap_days:+.0f}d, "
+                         f"{'programmed logic' if lk.had_logic else 'SEQUENCE ONLY'}"
+                         f", confidence {lk.score:.2f}")
+        lines.append("</hand_offs>\n")
 
+    if roll is not None and roll.umbrellas:
+        lines.append("<work_packages note='grouping is presentation only; "
+                     "measured dates come from critical-path members'>")
+        for u in roll.umbrellas:
+            if not u.measured:
+                continue
+            lines.append(f"- {u.name}: {u.member_count} activities "
+                         f"({u.on_path_count} on path), "
+                         f"{fmt(u.actual_start)} -> {fmt(u.actual_finish)}, "
+                         f"driven by {u.driving_member}")
+        lines.append("</work_packages>\n")
+
+    lines.append("<caveats>")
+    for c in list(trace.caveats) + (list(roll.caveats) if roll else []):
+        lines.append(f"- {c}")
+    for w in trace.warnings:
+        lines.append(f"- WARNING: {w}")
+    lines.append("</caveats>\n")
+    lines.append(template or DEFAULT_TEMPLATES["asbuilt_path"])
+    return "\n".join(lines)
 
 def build_sequence_prompt(
     seq: SequenceResult, template: str | None = None

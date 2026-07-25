@@ -11,7 +11,7 @@ from programme import (build_inventory, extract_longest_path,
                        build_repair_plan, apply_asbuilt_repairs,
                        compare_revisions, assess_comparison_impact,
                        build_provenance, analyse_windows,
-                       track_milestone_shifts, analyse_asbuilt_path,
+                       track_milestone_shifts,
                        extract_actual_trace, collapse_asbuilt,
                        run_progress_transfer, explain_delay,
                        oos_evolution, planned_vs_actual,
@@ -69,7 +69,6 @@ if parsed:
     step("float erosion", analyse_float_erosion, parsed)
     step("progress s-curve", compute_progress, parsed[0][1],
          parsed[0][0], parsed[1:])
-    step("asbuilt stitch", analyse_asbuilt_path, parsed)
     step("asbuilt actual trace", extract_actual_trace, parsed)
     step("collapse (empty set)", collapse_asbuilt, latest, latest_lbl,
          set())

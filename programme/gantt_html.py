@@ -370,6 +370,70 @@ STATUS_CATEGORIES = [
     {"key": "not started", "label": "not started", "color": "#4c8ede"},
 ]
 
+# As-built path bars are coloured by the EVIDENCE behind their dates, not
+# by P6 status: what is recorded, what is running, what is still only a
+# forecast. With the data-date line drawn, the split reads at a glance.
+ASBUILT_CATEGORIES = [
+    {"key": "as-built", "label": "as-built (recorded)",
+     "color": "#14324A"},
+    {"key": "in-progress", "label": "in progress at data date",
+     "color": "#B07A24"},
+    {"key": "forecast", "label": "forecast (not yet performed)",
+     "color": "#9B3227"},
+]
+
+
+def asbuilt_path_tree(activities, groups=None, links=None,
+                      root_name="As-built critical path") -> dict:
+    """Tree for the traced as-built path, flat or grouped by umbrella.
+
+    ``activities`` — PathActivity records, in as-built order.
+    ``groups``     — {umbrella name: [task_code]}; None renders flat.
+    ``links``      — TraceLink records; drawn as dependency arrows.
+
+    Bars carry ``basis`` as their status so the data-date split is
+    visible; umbrella rows are group bars bracketing their members.
+    """
+    succs: dict[str, list[str]] = {}
+    for lk in (links or []):
+        succs.setdefault(lk.pred_code, []).append(lk.succ_code)
+
+    def act(a) -> dict:
+        return {"id": a.task_code, "name": a.name,
+                "start": a.act_start, "finish": a.act_finish,
+                "milestone": a.act_start == a.act_finish,
+                "status": a.basis,
+                "lid": a.task_code,
+                "links": succs.get(a.task_code, [])}
+
+    if not groups:
+        return group_tree([{"name": root_name,
+                            "activities": [act(a) for a in activities]}])
+
+    owner: dict[str, str] = {}
+    for name, codes in groups.items():
+        for c in codes:
+            owner.setdefault(c, name)
+    # Preserve as-built order of both the packages and their members.
+    order: list[str] = []
+    buckets: dict[str, list] = {}
+    for a in activities:
+        key = owner.get(a.task_code) or a.task_code
+        if key not in buckets:
+            buckets[key] = []
+            order.append(key)
+        buckets[key].append(a)
+    children = []
+    for key in order:
+        members = buckets[key]
+        if key in groups:
+            children.append({"name": key,
+                             "activities": [act(a) for a in members]})
+        else:
+            children.append({"name": members[0].name[:44],
+                             "activities": [act(a) for a in members]})
+    return group_tree([{"name": root_name, "children": children}])
+
 
 def build_gantt_html(tree: dict, zoom_px_per_month: int = 34,
                      data_date: str | None = None,

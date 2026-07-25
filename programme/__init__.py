@@ -23,17 +23,11 @@ from .activity_codes import (
     task_code_assignments,
 )
 from .asbuilt_path import (
+    PathActivity,
     ActualTraceResult,
-    AsBuiltPathResult,
-    PersistenceEntry,
-    StitchActivity,
-    StitchWindow,
     TraceLink,
-    TriangulationResult,
-    analyse_asbuilt_path,
     extract_actual_trace,
     trace_end_candidates,
-    triangulate,
 )
 from .comparison import (
     ActivityRef,
@@ -118,7 +112,9 @@ from .float_erosion import (
     WindowErosion,
     analyse_float_erosion,
 )
-from .gantt_html import (build_apab_gantt_html, build_gantt_html, group_tree)
+from .gantt_html import (ASBUILT_CATEGORIES, asbuilt_path_tree,
+                         build_apab_gantt_html, build_gantt_html,
+                         group_tree)
 from .hierarchy import (
     Dimension,
     sequence_dimension_mappings,
@@ -274,6 +270,8 @@ from .progress import (
 )
 from .rollup import (
     ROLLUP_CAVEATS,
+    internal_links,
+    umbrella_links,
     Umbrella,
     UmbrellaMember,
     RollupResult,
@@ -324,6 +322,8 @@ __all__ = [
     "available_dimensions",
     "build_hierarchy",
     "build_gantt_html",
+    "asbuilt_path_tree",
+    "ASBUILT_CATEGORIES",
     "group_tree",
     "config_from_json",
     "config_to_json",
@@ -331,17 +331,11 @@ __all__ = [
     "sequence_dimension_mappings",
     "build_hierarchy_xlsx",
     # as-built path
-    "AsBuiltPathResult",
-    "PersistenceEntry",
-    "StitchActivity",
-    "StitchWindow",
     "ActualTraceResult",
     "TraceLink",
-    "TriangulationResult",
-    "analyse_asbuilt_path",
+    "PathActivity",
     "extract_actual_trace",
     "trace_end_candidates",
-    "triangulate",
     # comparison
     "ActivityRef",
     "ComparisonResult",
@@ -467,6 +461,8 @@ __all__ = [
     "validate_fragnet",
     # rollup (umbrella activities)
     "ROLLUP_CAVEATS",
+    "internal_links",
+    "umbrella_links",
     "Umbrella",
     "UmbrellaMember",
     "RollupResult",

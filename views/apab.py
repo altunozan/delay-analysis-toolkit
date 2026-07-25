@@ -9,23 +9,16 @@ import streamlit as st
 
 import state as sk
 from programme import (
-    ROLLUP_CAVEATS, analyse_asbuilt_path, build_apab_gantt_html,
-    build_rollup, build_simple_xlsx, extract_actual_trace,
-    keydate_windows, planned_vs_actual,
+    ROLLUP_CAVEATS, build_apab_gantt_html, build_rollup,
+    build_simple_xlsx, extract_actual_trace, keydate_windows,
+    planned_vs_actual,
 )
-from views._asbuilt_cp import cross_check, stitched_basis, trace_basis
+from views._asbuilt_cp import trace_basis
 from views._shared import _fkey, basis_panel, get_parsed_files
 from views._submodules import analysis_submodules
 from views._umbrella import umbrella_editor
 from views.hierarchy import hierarchy_tab
 from views.variance import variance_tab
-
-
-@st.cache_data(show_spinner=False, max_entries=8)
-def cached_stitch(key: tuple, core_freq: float, _ordered,
-                  end_code=None):
-    return analyse_asbuilt_path(_ordered, core_min_frequency=core_freq,
-                                end_task_code=end_code)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -110,41 +103,50 @@ def apab_tab() -> None:
     elif step.startswith("②"):
         st.subheader("② Define the as-built critical path")
         basis = st.radio(
-            "Basis — the analyst's definitional choice, recorded in the "
-            "measurement",
-            ["Activity-level (backward trace through actual dates)",
-             "Reconstructed sequence (stitched contemporaneous paths)"],
-            key="apab_basis_pick")
+            "How is the as-built critical path defined?",
+            ["Traced back from a milestone",
+             "I define it myself"],
+            key="apab_basis_pick",
+            help="Trace it, or pick the activities yourself — the choice "
+                 "is recorded with the measurement either way.")
         # Identical component to the standalone As-Built Critical Path
         # page — see views/_asbuilt_cp.py for why this is shared.
-        if basis.startswith("Activity"):
+        if basis.startswith("Traced"):
             tr = trace_basis(ordered, "apab")
             if tr is None:
                 return
             path = [(a.task_code, a.name) for a in tr.activities]
-            with st.expander("Cross-check: where do the two independent "
-                             "reconstructions agree?"):
-                stitch = cached_stitch(
-                    okey, st.session_state.get(sk.APAB_STITCH_FREQ, 0.5),
-                    ordered, st.session_state.get(sk.CONTRACT_MS))
-                cross_check(stitch, tr)
+            with st.expander("The traced path"):
+                st.dataframe(pd.DataFrame([{
+                    "#": i, "Basis": a.basis,
+                    "Activity ID": a.task_code, "Activity": a.name,
+                    "Start": (f"{a.act_start:%Y-%m-%d}"
+                              if a.act_start else "—"),
+                    "Finish": (f"{a.act_finish:%Y-%m-%d}"
+                               if a.act_finish else "—"),
+                } for i, a in enumerate(tr.activities, start=1)]),
+                    width="stretch", hide_index=True)
         else:
-            stitch = stitched_basis(ordered, "apab")
-            path = [(a.task_code, a.name) for a in stitch.stitched]
-            st.write(f"Reconstructed-sequence basis: **{len(path)}** "
-                     "activities, stitched from the contemporaneous "
-                     "forecast paths:")
-            st.dataframe(pd.DataFrame([{
-                "Activity ID": a.task_code, "Activity": a.name,
-                "Actual start": (f"{a.act_start:%Y-%m-%d}"
-                                 if a.act_start else "—"),
-                "Actual finish": (f"{a.act_finish:%Y-%m-%d}"
-                                  if a.act_finish else "—"),
-                "On forecast path of": a.forecast_by,
-            } for a in stitch.stitched[:400]]), width="stretch",
-                hide_index=True)
+            st.caption(
+                "Pick the activities that make up the as-built critical "
+                "path. Group them into work packages below once adopted.")
+            acts = [(t.task_code, t.name) for t in latest.tasks
+                    if not t.is_loe_or_wbs]
+            acts.sort(key=lambda p: p[0])
+            names = dict(acts)
+            prior = [c for c, _ in
+                     (st.session_state.get(sk.APAB_PATH) or [])]
+            picked = st.multiselect(
+                "Activities on the as-built critical path",
+                options=[c for c, _ in acts],
+                default=[c for c in prior if c in names],
+                format_func=lambda c: f"{c} — {names.get(c, '')[:52]}",
+                key="apab_manual_path")
+            path = [(c, names[c]) for c in picked]
+            st.write(f"**{len(path)}** activities selected.")
         if st.button("Use this as the as-built critical path →",
-                     type="primary", key="apab_adopt"):
+                     type="primary", key="apab_adopt",
+                     disabled=not path):
             st.session_state[sk.APAB_PATH] = path
             st.session_state[sk.APAB_PATH_BASIS] = basis
             st.success(f"Adopted: {len(path)} activities. Steps ③-⑤ "
