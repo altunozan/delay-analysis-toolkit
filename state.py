@@ -46,6 +46,13 @@ APAB_KEYDATES = "apab_keydates"      # dict[code, why-key note]
 APAB_CMP_ROWS = "apab_cmp_rows"      # planned_vs_actual rows (step ③→⑤)
 APAB_STITCH_FREQ = "apab_stitch_freq"  # persistence threshold chosen
 
+# --- Umbrella activities (work-package roll-up) -------------------------
+# ONE grouping, defined once and reused wherever an as-built activity
+# list is presented. Analyst-confirmed; AI may only propose it.
+UMBRELLAS = "umbrella_groups"        # dict[umbrella name, [task_code]]
+UMBRELLA_PROPOSED = "umbrella_proposed"   # last AI proposal (unconfirmed)
+UMBRELLA_ON = "umbrella_on"          # bool — measure on umbrella rows
+
 # --- Impacted As-Planned / Collapsed As-Built ---------------------------
 IAP_EVENTS = "iap_events"        # on-page event rows (standalone capture)
 IAP_RES = "iap_res"              # last run result dict

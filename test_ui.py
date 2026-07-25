@@ -140,6 +140,27 @@ def main() -> int:
             check("APvAB comparison gantt iframe renders",
                   page.locator("iframe").count() > 0)
 
+            # Umbrella grouping: only appears once a path is adopted, so
+            # the plain step walk above never reaches it.
+            page.get_by_text("② As-built critical path",
+                             exact=True).first.click()
+            page.wait_for_timeout(4000)
+            check("APvAB step ② uses the shared CP picker (gap control)",
+                  page.get_by_text("Max hand-off gap").count() > 0)
+            adopt = page.get_by_role(
+                "button", name="Use this as the as-built critical path →")
+            if adopt.count():
+                adopt.first.click()
+                page.wait_for_timeout(5000)
+                check("umbrella grouping section appears after adoption",
+                      page.get_by_text("Group into umbrella activities",
+                                       exact=False).count() > 0)
+                check("umbrella adoption exception-free",
+                      exc() == 0, f"{exc()} exceptions")
+            else:
+                check("umbrella grouping section appears after adoption",
+                      False, "adopt button not found")
+
             # TIA stepper gating (Prospective group)
             goto("Time Impact Analysis")
             page.wait_for_timeout(3000)

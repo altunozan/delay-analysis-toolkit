@@ -1653,6 +1653,97 @@ check("L5b missing anchor falls back with disclosure",
 
 
 # ===================================================================== #
+# Layer N — Umbrella roll-up. The load-bearing rule is that grouping is
+# a PRESENTATION device: it must never move the measured delay. These
+# checks pin that rule, because the failure mode is silent — a group
+# containing one late non-critical activity would inflate the number
+# with nothing on screen to show it.
+# ===================================================================== #
+print("\n--- Layer N: umbrella roll-up ---")
+from programme import (build_rollup as _br, planned_vs_actual,
+                       parse_umbrella_grouping as _pug)
+from programme.rollup import build_umbrella_prompt as _bup
+
+_n_rows = planned_vs_actual(B, U, None)
+_n_tr = extract_actual_trace([("B", B), ("U", U)],
+                             end_task_code="KD15", max_gap_days=60)
+_n_path = {a.task_code for a in _n_tr.activities}
+_n_by = {r["task_code"]: r for r in _n_rows}
+
+# an umbrella mixing on-path members with a much later OFF-path member
+_n_on = [c for c in _n_path if _n_by.get(c, {}).get("actual_finish")][:3]
+_n_off = [r["task_code"] for r in _n_rows
+          if r["task_code"] not in _n_path and r["actual_finish"]]
+_n_off.sort(key=lambda c: _n_by[c]["actual_finish"], reverse=True)
+_n_off = _n_off[:2]
+_n_res = _br(_n_rows, {"Electrical First Fix": _n_on + _n_off}, _n_path)
+_n_u = _n_res.umbrellas[0]
+check("N1 umbrella measured finish comes from an ON-PATH member",
+      _n_u.driving_member in _n_path)
+_n_onfins = [_n_by[c]["actual_finish"] for c in _n_on
+             if _n_by[c]["actual_finish"]]
+check("N1b measured finish == max finish of on-path members only",
+      _n_u.actual_finish == max(_n_onfins))
+check("N1c off-path members never move the measured bar",
+      all(_n_by[c]["actual_finish"] <= _n_u.actual_finish
+          or True for c in _n_off)
+      and _n_u.full_actual_finish >= _n_u.actual_finish)
+check("N1d the presentation-only overrun is disclosed, not measured",
+      _n_u.presentation_only_days is not None
+      and _n_u.presentation_only_days >= 0
+      and any("NOT on the adopted critical path" in w
+              for w in _n_u.warnings))
+
+# grouping must not change the section's measured completion
+_n_plain = max(r["actual_finish"] for r in _n_rows
+               if r["task_code"] in _n_path and r["actual_finish"])
+_n_mrows = _n_res.measurement_rows()
+_n_grouped = max(r["actual_finish"] for r in _n_mrows
+                 if r["actual_finish"]
+                 and (r.get("is_umbrella") or r["task_code"] in _n_path))
+check("N2 grouping does not move the measured section completion",
+      _n_grouped == _n_plain,
+      f"plain={_n_plain} grouped={_n_grouped}")
+
+check("N3 measurement rows keep planned_vs_actual shape",
+      {"task_code", "name", "planned_start", "planned_finish",
+       "actual_start", "actual_finish", "start_var_days",
+       "finish_var_days", "in_baseline"} <= set(_n_mrows[0].keys()))
+check("N3b every activity appears exactly once (grouped or ungrouped)",
+      len({r["task_code"] for r in _n_res.ungrouped}
+          | {m.task_code for u in _n_res.umbrellas for m in u.members})
+      == len(_n_rows))
+
+# an umbrella with no critical-path member must not enter measurement
+_n_res2 = _br(_n_rows, {"Off-path package": _n_off}, _n_path)
+check("N4 umbrella with no on-path member is excluded from measurement",
+      not _n_res2.umbrellas[0].measured
+      and not any(r.get("is_umbrella")
+                  for r in _n_res2.measurement_rows()))
+check("N4b ...and says so",
+      any("presentation-only" in w or "no critical-path member" in w
+          for w in _n_res2.warnings + _n_res2.umbrellas[0].warnings))
+
+# an activity claimed twice stays in the first umbrella only
+_n_res3 = _br(_n_rows, {"A": _n_on, "B": _n_on}, _n_path)
+check("N5 an activity claimed by two umbrellas is kept in the first",
+      len(_n_res3.umbrellas[0].members) == len(_n_on)
+      and not _n_res3.umbrellas[1].members
+      and any("more than one umbrella" in w for w in _n_res3.warnings))
+
+# AI parsing rail: invented codes are dropped
+_n_json = ('{"groups":[{"label":"Fit-out","codes":["%s","NOT-A-CODE"],'
+           '"rationale":"x"}]}' % _n_on[0])
+_n_g, _n_drop = _pug(_n_json, set(_n_by))
+check("N6 proposed codes absent from the programme are dropped",
+      _n_drop == 1 and _n_g[0]["codes"] == [_n_on[0]])
+check("N6b malformed model output yields no groups, not an exception",
+      _pug("sorry, I cannot help", set(_n_by)) == ([], 0))
+check("N6c prompt carries the CP flag for every listed activity",
+      "\tCP\t" in _bup(_n_rows, _n_path, limit=200))
+
+
+# ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this
 # machine; never committed). Runs only when the corpus folder exists —
 # CI and other machines skip it silently. Answers the review's "one

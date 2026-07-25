@@ -8,9 +8,10 @@ import streamlit as st
 import state as sk
 from programme import (
     analyse_asbuilt_path, build_asbuilt_prompt, build_asbuilt_xlsx,
-    extract_actual_trace, report_charts, trace_end_candidates, triangulate,
+    report_charts,
 )
 from programme.narrative import DEFAULT_TEMPLATES
+from views._asbuilt_cp import cross_check, trace_basis
 from views._shared import ai_narrative_panel, get_parsed_files
 
 
@@ -111,79 +112,9 @@ def asbuilt_tab() -> None:
         "evidenced by a programmed relationship. Where no such hand-off "
         "exists within the gap window, the trace stops and says so."
     )
-    cands = trace_end_candidates(ordered, contract_ms=_cms)
     trace = tri = None
-    if not cands:
-        st.info("No actually finished activities in the latest revision — "
-                "nothing to trace.")
-    else:
-        cand_labels = {
-            c: (f"{c} — {n}"
-                + (f"  ({'AF' if ok else 'forecast'} {d:%Y-%m-%d})"
-                   if d else "")
-                + ("" if ok else "  ⚠ not achieved"))
-            for c, n, d, ok in cands}
-        tc1, tc2, tc3 = st.columns([3, 1, 1])
-        end_code = tc1.selectbox(
-            "Trace backward from", options=list(cand_labels.keys()),
-            format_func=lambda c: cand_labels[c], key="ab_trace_end",
-            help="Defaults to the elected contractual completion "
-                 "milestone. Where that milestone has not been achieved "
-                 "the path is traced as a disclosed hybrid: as-built to "
-                 "the data date, forecast beyond it.")
-        max_gap = tc2.number_input("Max hand-off gap (days)",
-                                   1.0, 730.0, 60.0, 5.0, key="ab_gap",
-                                   help="Widen when work stalled between "
-                                        "logically linked activities.")
-        strict = tc3.toggle(
-            "Strict logic only", value=False, key="ab_strict",
-            help="OFF (default): the chain continues through the tightest "
-                 "temporal neighbour where no programmed relationship "
-                 "exists, so the path runs unbroken from the milestone "
-                 "back to project start — every such hop is flagged as "
-                 "sequence-only evidence. ON: the trace STOPS at the "
-                 "first hand-off the records cannot evidence.")
-        trace = extract_actual_trace(
-            ordered, end_task_code=end_code, max_gap_days=max_gap,
-            allow_temporal_fallback=not strict)
-
-        t1, t2, t3, t4 = st.columns(4)
-        t1.metric("Chain length", len(trace.activities))
-        logic_n = sum(1 for lk in trace.links if lk.had_logic)
-        t2.metric("Logic-evidenced hand-offs",
-                  f"{logic_n} / {len(trace.links)}" if trace.links else "—")
-        t3.metric("As-built / forecast",
-                  f"{trace.asbuilt_count} / {trace.forecast_count}",
-                  help="Activities whose dates are recorded actuals vs "
-                       "the file's remaining early dates.")
-        t4.metric("Traced from", trace.terminal_code or "—")
-        if trace.hybrid:
-            st.warning(
-                "⚠️ **Hybrid path** — the elected completion milestone "
-                "has not been achieved. The tail beyond the data date is "
-                "the programme's own forecast, not a record of what "
-                "happened; it is labelled as such in the chain below.")
-        for w in trace.warnings:
-            (st.info if w.startswith("Logic corroboration")
-             else st.warning)(w)
-
-        if trace.activities:
-            _BASIS_MARK = {"as-built": "▮ as-built",
-                           "in-progress": "▨ in progress",
-                           "forecast": "▯ forecast"}
-            st.markdown("**Traced chain** — terminal at the top of the "
-                        "programme, walking back to the first activity.")
-            st.dataframe(pd.DataFrame([{
-                "#": i,
-                "Basis": _BASIS_MARK.get(a.basis, a.basis),
-                "Activity ID": a.task_code,
-                "Activity": a.name,
-                "Start": (f"{a.act_start:%Y-%m-%d}"
-                          if a.act_start else "—"),
-                "Finish": (f"{a.act_finish:%Y-%m-%d}"
-                           if a.act_finish else "—"),
-            } for i, a in enumerate(trace.activities, start=1)]),
-                width="stretch", hide_index=True, height=340)
+    trace = trace_basis(ordered, "ab")     # shared with APvAB step ②
+    if trace is not None:
         if trace.links:
             st.dataframe(pd.DataFrame([{
                 "Predecessor": lk.pred_code,
@@ -197,20 +128,8 @@ def asbuilt_tab() -> None:
                 hide_index=True)
 
         # ---- method agreement -------------------------------------------
-        tri = triangulate(res, trace)
         st.subheader("Method agreement")
-        a1, a2, a3, a4 = st.columns(4)
-        a1.metric("Agreement",
-                  f"{tri.agreement_pct:.0f}%"
-                  if tri.agreement_pct is not None else "—",
-                  help="Share of the union of both reconstructions "
-                       "identified by both.")
-        a2.metric("Both methods", len(tri.both))
-        a3.metric("Stitched only", len(tri.stitched_only))
-        a4.metric("Trace only", len(tri.trace_only))
-        for w in tri.warnings:
-            (st.success if w.startswith("Method agreement")
-             else st.warning)(w)
+        tri = cross_check(res, trace)
         if tri.both or tri.trace_only:
             with st.expander("Membership detail"):
                 rows = ([{"Activity ID": c,

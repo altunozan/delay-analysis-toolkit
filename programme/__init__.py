@@ -272,6 +272,16 @@ from .progress import (
     WEIGHT_OPTIONS,
     compute_progress,
 )
+from .rollup import (
+    ROLLUP_CAVEATS,
+    Umbrella,
+    UmbrellaMember,
+    RollupResult,
+    UMBRELLA_SYSTEM_PROMPT,
+    build_rollup,
+    build_umbrella_prompt,
+    parse_umbrella_grouping,
+)
 from .windows import (
     PathShift,
     WindowDriver,
@@ -455,6 +465,15 @@ __all__ = [
     "EXPORT_CAVEAT",
     "build_impacted_xer",
     "validate_fragnet",
+    # rollup (umbrella activities)
+    "ROLLUP_CAVEATS",
+    "Umbrella",
+    "UmbrellaMember",
+    "RollupResult",
+    "UMBRELLA_SYSTEM_PROMPT",
+    "build_rollup",
+    "build_umbrella_prompt",
+    "parse_umbrella_grouping",
     # windows
     "PathShift",
     "WindowDriver",

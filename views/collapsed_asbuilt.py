@@ -86,6 +86,25 @@ def collapsed_asbuilt_tab() -> None:
                                "codes": hits,
                                "rationale": "deterministic keyword "
                                             "match"})
+        # Reuse a work-package breakdown already defined for APvAB —
+        # one grouping, defined once. Extraction candidates and
+        # presentation umbrellas are different questions, so this is an
+        # explicit import, never automatic.
+        _umb = st.session_state.get(sk.UMBRELLAS) or {}
+        if _umb:
+            st.caption(f"{len(_umb)} umbrella activity(ies) are defined "
+                       "in As-Planned vs As-Built.")
+            if st.button("Import them as candidate groups",
+                         key="cab_umb_import"):
+                gs = st.session_state.setdefault(sk.CAB_GROUPS, [])
+                have = {g["label"] for g in gs}
+                for name, codes in _umb.items():
+                    if name not in have:
+                        gs.append({"label": name, "codes": list(codes),
+                                   "rationale": "imported from the "
+                                                "as-built work-package "
+                                                "breakdown"})
+                st.rerun()
         for g in st.session_state.get(sk.CAB_GROUPS, []):
             with st.expander(f"{g['label']} — {len(g['codes'])} "
                              "activities"):

@@ -9,12 +9,14 @@ import streamlit as st
 
 import state as sk
 from programme import (
-    analyse_asbuilt_path, build_apab_gantt_html, build_simple_xlsx,
-    extract_actual_trace, keydate_windows, planned_vs_actual,
-    trace_end_candidates, triangulate,
+    ROLLUP_CAVEATS, analyse_asbuilt_path, build_apab_gantt_html,
+    build_rollup, build_simple_xlsx, extract_actual_trace,
+    keydate_windows, planned_vs_actual,
 )
+from views._asbuilt_cp import cross_check, stitched_basis, trace_basis
 from views._shared import _fkey, basis_panel, get_parsed_files
 from views._submodules import analysis_submodules
+from views._umbrella import umbrella_editor
 from views.hierarchy import hierarchy_tab
 from views.variance import variance_tab
 
@@ -29,6 +31,38 @@ def cached_stitch(key: tuple, core_freq: float, _ordered,
 @st.cache_data(show_spinner=False, max_entries=8)
 def cached_trace(key: tuple, end_code, _ordered):
     return extract_actual_trace(_ordered, end_task_code=end_code)
+
+
+def _roll_members(baseline, latest) -> list[dict]:
+    """Flat member listing for the workbook's drill-down sheet."""
+    groups = st.session_state.get(sk.UMBRELLAS) or {}
+    path = {c for c, _ in st.session_state.get(sk.APAB_PATH, [])}
+    res = build_rollup(planned_vs_actual(baseline, latest, None),
+                       groups, path or None)
+    return res.member_rows() or [{}]
+
+
+def _apply_umbrellas(all_rows, path_codes, scope_codes=None):
+    """Roll per-activity rows into umbrellas where a grouping is adopted.
+
+    The roll-up always sees the FULL row set so an umbrella can carry its
+    off-path members for context; only on-path members set its measured
+    dates (see programme/rollup.py). ``scope_codes`` then trims the
+    UNGROUPED remainder to the analyst's comparison scope — umbrellas are
+    already critical-path-measured by construction and always survive.
+    """
+    groups = st.session_state.get(sk.UMBRELLAS) or {}
+    if not groups or not st.session_state.get(sk.UMBRELLA_ON):
+        rows = (all_rows if scope_codes is None
+                else [r for r in all_rows
+                      if r["task_code"] in scope_codes])
+        return rows, None
+    res = build_rollup(all_rows, groups, path_codes)
+    rows = res.measurement_rows()
+    if scope_codes is not None:
+        rows = [r for r in rows
+                if r.get("is_umbrella") or r["task_code"] in scope_codes]
+    return rows, res
 
 
 def apab_tab() -> None:
@@ -81,59 +115,21 @@ def apab_tab() -> None:
             ["Activity-level (backward trace through actual dates)",
              "Reconstructed sequence (stitched contemporaneous paths)"],
             key="apab_basis_pick")
+        # Identical component to the standalone As-Built Critical Path
+        # page — see views/_asbuilt_cp.py for why this is shared.
         if basis.startswith("Activity"):
-            cands = trace_end_candidates(
-                ordered, contract_ms=st.session_state.get(sk.CONTRACT_MS))
-            labels = {
-                c: (f"{c} — {n}"
-                    + (f" ({'AF' if ok else 'forecast'} {d:%Y-%m-%d})"
-                       if d else "")
-                    + ("" if ok else "  ⚠ not achieved"))
-                for c, n, d, ok in cands}
-            end = st.selectbox("Trace backward from", list(labels),
-                               format_func=lambda k: labels[k],
-                               key="apab_end")
-            tr = cached_trace(okey, end, ordered)
-            if tr.hybrid:
-                st.warning(
-                    "⚠️ **Hybrid path** — the elected completion "
-                    "milestone has not been achieved. Rows marked "
-                    "'forecast' are the programme's remaining early "
-                    "dates, not a record of what happened.")
-            for w in tr.warnings:
-                st.warning(w)
+            tr = trace_basis(ordered, "apab")
+            if tr is None:
+                return
             path = [(a.task_code, a.name) for a in tr.activities]
-            st.dataframe(pd.DataFrame([{
-                "Activity ID": a.task_code, "Activity": a.name,
-                "Basis": a.basis,
-                "Start": (f"{a.act_start:%Y-%m-%d}"
-                          if a.act_start else "—"),
-                "Finish": (f"{a.act_finish:%Y-%m-%d}"
-                           if a.act_finish else "—"),
-            } for a in tr.activities]), width="stretch",
-                hide_index=True)
             with st.expander("Cross-check: where do the two independent "
                              "reconstructions agree?"):
                 stitch = cached_stitch(
                     okey, st.session_state.get(sk.APAB_STITCH_FREQ, 0.5),
                     ordered, st.session_state.get(sk.CONTRACT_MS))
-                tri = triangulate(stitch, tr)
-                both = getattr(tri, "agreed_codes", None) or [
-                    c for c in tr.codes
-                    if c in {a.task_code for a in stitch.stitched}]
-                st.write(f"**{len(both)}** activities identified by "
-                         "BOTH methods (method-invariant findings).")
+                cross_check(stitch, tr)
         else:
-            core_freq = st.slider(
-                "Persistence threshold (fraction of revisions an "
-                "activity must have been on the forecast path)",
-                0.2, 1.0, 0.5, 0.05, key="apab_freq")
-            st.session_state[sk.APAB_STITCH_FREQ] = core_freq
-            stitch = cached_stitch(
-                okey, core_freq, ordered,
-                st.session_state.get(sk.CONTRACT_MS))
-            for w in stitch.warnings:
-                st.warning(w)
+            stitch = stitched_basis(ordered, "apab")
             path = [(a.task_code, a.name) for a in stitch.stitched]
             st.write(f"Reconstructed-sequence basis: **{len(path)}** "
                      "activities, stitched from the contemporaneous "
@@ -154,6 +150,20 @@ def apab_tab() -> None:
             st.success(f"Adopted: {len(path)} activities. Steps ③-⑤ "
                        "now use this path.")
 
+        # ---- optional: roll the path into work packages --------------
+        adopted = st.session_state.get(sk.APAB_PATH)
+        if adopted:
+            st.divider()
+            st.markdown("##### Group into umbrella activities (optional)")
+            with st.expander(
+                "Define work packages — e.g. one 'Electrical First Fix' "
+                "bar instead of twenty containment and trunking rows",
+                expanded=bool(st.session_state.get(sk.UMBRELLAS))
+            ):
+                umbrella_editor(
+                    planned_vs_actual(baseline, latest, None),
+                    {c for c, _ in adopted}, key_prefix="apab_umb")
+
     # ---------------- ③ planned-dates comparison ----------------------- #
     elif step.startswith("③"):
         st.subheader("③ As-built section vs PLANNED dates")
@@ -171,7 +181,17 @@ def apab_tab() -> None:
         if scope.startswith("As") and not path:
             st.info("No path adopted yet — showing all matched "
                     "activities. Adopt a path in step ②.")
-        rows = planned_vs_actual(baseline, latest, codes)
+        rows, roll = _apply_umbrellas(
+            planned_vs_actual(baseline, latest, None),
+            {c for c, _ in path} if path else None, codes)
+        if roll is not None:
+            n_umb = sum(1 for r in rows if r.get("is_umbrella"))
+            st.success(
+                f"Measuring on **{n_umb} umbrella activity(ies)** plus "
+                f"{len(rows) - n_umb} ungrouped activities. Umbrella "
+                "dates come from critical-path members only.")
+            for w in roll.warnings:
+                st.warning(w)
         matched = [r for r in rows if r["in_baseline"]]
         fv = [r["finish_var_days"] for r in matched
               if r["finish_var_days"] is not None]
@@ -188,7 +208,9 @@ def apab_tab() -> None:
             height=560)
         with st.expander("Comparison table (all columns)"):
             st.dataframe(pd.DataFrame([{
-                "Activity ID": r["task_code"], "Activity": r["name"][:50],
+                "Activity ID": r["task_code"],
+                "Activity": (("▣ " if r.get("is_umbrella") else "")
+                             + r["name"][:50]),
                 "Planned start": (f"{r['planned_start']:%Y-%m-%d}"
                                   if r["planned_start"] else "—"),
                 "Planned finish": (f"{r['planned_finish']:%Y-%m-%d}"
@@ -201,6 +223,27 @@ def apab_tab() -> None:
                 "Finish var (d)": r["finish_var_days"],
             } for r in rows[:400]]), width="stretch", hide_index=True)
         st.session_state[sk.APAB_CMP_ROWS] = rows
+        if roll is not None and roll.member_rows():
+            with st.expander("Umbrella drill-down — every member "
+                             "activity beneath its work package"):
+                st.caption(
+                    "'DRIVER' marks the member whose recorded finish "
+                    "sets its umbrella's measured finish. Members shown "
+                    "as not on the critical path are carried for "
+                    "context and never move the measurement.")
+                st.dataframe(pd.DataFrame([{
+                    "Umbrella": m["umbrella"],
+                    "Activity ID": m["task_code"],
+                    "Activity": m["name"][:44],
+                    "On CP": m["on_critical_path"],
+                    "Planned finish": (f"{m['planned_finish']:%Y-%m-%d}"
+                                       if m["planned_finish"] else "—"),
+                    "Actual finish": (f"{m['actual_finish']:%Y-%m-%d}"
+                                      if m["actual_finish"] else "—"),
+                    "Finish var (d)": m["finish_var_days"],
+                    "": m["drives_umbrella_finish"],
+                } for m in roll.member_rows()]), width="stretch",
+                    hide_index=True, height=320)
         with st.expander("Breakdown view (by activity code / WBS — the "
                          "grouped comparison tool)"):
             variance_tab()
@@ -213,12 +256,24 @@ def apab_tab() -> None:
             st.info("Adopt an as-built critical path in step ② first.")
             return
         saved = st.session_state.get(sk.APAB_KEYDATES, {})
+        # Key dates are chosen from whatever the measurement runs on —
+        # so an umbrella ("Electrical First Fix complete") can itself be
+        # a key date, not just a raw activity.
+        rows_kd, roll_kd = _apply_umbrellas(
+            planned_vs_actual(baseline, latest, None),
+            {c for c, _ in path}, {c for c, _ in path})
+        pickable = [(r["task_code"], r["name"]) for r in rows_kd]
+        if roll_kd is not None:
+            st.caption("Umbrella activities (▣) can be key dates in their "
+                       "own right.")
         kd_df = pd.DataFrame([{
             "Key date": c in saved,
-            "Activity ID": c, "Activity": n[:60],
+            "Activity ID": c,
+            "Activity": (("▣ " if c.startswith("UMB-") else "")
+                         + n[:60]),
             "Why it is key (contractual / logic significance)":
                 saved.get(c, ""),
-        } for c, n in path])
+        } for c, n in pickable])
         edited = st.data_editor(
             kd_df, width="stretch", hide_index=True,
             disabled=["Activity ID", "Activity"], key="apab_kd_ed")
@@ -235,9 +290,10 @@ def apab_tab() -> None:
     # ---------------- ⑤ windows from key dates + measurement ----------- #
     else:
         st.subheader("⑤ Analysis windows & delay measurement")
-        rows = st.session_state.get(sk.APAB_CMP_ROWS) or planned_vs_actual(
-            baseline, latest,
-            {c for c, _ in st.session_state.get(sk.APAB_PATH, [])} or None)
+        _p = {c for c, _ in st.session_state.get(sk.APAB_PATH, [])}
+        rows = st.session_state.get(sk.APAB_CMP_ROWS) or _apply_umbrellas(
+            planned_vs_actual(baseline, latest, None),
+            _p or None, _p or None)[0]
         kd = st.session_state.get(sk.APAB_KEYDATES, {})
         by_code = {r["task_code"]: r for r in rows}
         kd_rows = []
@@ -304,6 +360,8 @@ def apab_tab() -> None:
         else:
             st.caption("No key dates defined (step ④) — measuring on "
                        "the section's completion only.")
+        _umb = st.session_state.get(sk.UMBRELLAS) or {}
+        _umb_on = bool(_umb and st.session_state.get(sk.UMBRELLA_ON))
         basis_panel("As-Planned vs As-Built", latest, [
             f"As-built critical path basis: "
             f"{st.session_state.get('apab_path_basis', 'not adopted')}",
@@ -311,6 +369,11 @@ def apab_tab() -> None:
             "dates from the latest revision as recorded; variances in "
             "calendar days",
             f"{len(kd)} analyst-defined key date(s)",
+            (f"Presentation: {len(_umb)} analyst-confirmed umbrella "
+             "activity(ies); each measured on its critical-path members "
+             "only, so grouping does not affect the measured delay"
+             if _umb_on else
+             "Presentation: per-activity (no umbrella grouping adopted)"),
         ])
         st.download_button(
             "⬇️ Download as-planned vs as-built workbook (Excel)",
@@ -319,7 +382,10 @@ def apab_tab() -> None:
                 {"Comparison": [{k: v for k, v in r.items()}
                                 for r in rows],
                  "Key dates": kd_rows or [{}],
-                 "Key-date windows": kwin or [{}]},
+                 "Key-date windows": kwin or [{}],
+                 "Umbrella members": (
+                     _roll_members(baseline, latest) if _umb_on
+                     else [{}])},
                 notes=["Method: as-planned vs as-built, stepped. "
                        "As-built path basis: "
                        + st.session_state.get(sk.APAB_PATH_BASIS,
@@ -327,7 +393,8 @@ def apab_tab() -> None:
                        "Variances in calendar days; positive = later "
                        "than planned. 'As-recorded' caveat applies: "
                        "actual dates are as recorded in the file, not "
-                       "independently verified."]),
+                       "independently verified."]
+                      + (list(ROLLUP_CAVEATS) if _umb_on else [])),
             file_name="as_planned_vs_as_built.xlsx",
             mime="application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet",
