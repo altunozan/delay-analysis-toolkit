@@ -1006,33 +1006,44 @@ def milestone_tab() -> None:
             })
     chart_df = pd.DataFrame(rows)
 
-    # Left axis (y1): forecast/actual completion date per data date.
+    # ONE line per milestone. The delay in days is the SAME information
+    # as the completion date (delay = date - first forecast), so a second
+    # dashed line on an independent axis only creates a false visual
+    # divergence — instead the y-axis itself switches between the two
+    # readings of the same line.
+    y_mode = st.radio(
+        "Y-axis", ["Completion date", "Delay vs first forecast (days)"],
+        horizontal=True, key="ms_ymode")
     x_axis = alt.X("Data date:T", title="Data date",
                    axis=alt.Axis(format="%b %Y", labelAngle=-30,
                                  grid=True, titleFontSize=13,
                                  labelFontSize=11))
-    date_line = (
+    if y_mode == "Completion date":
+        y_enc = alt.Y("Milestone date:T",
+                      title="Completion date (forecast / actual)",
+                      scale=alt.Scale(zero=False),
+                      axis=alt.Axis(format="%b %Y", grid=True,
+                                    titleFontSize=13, labelFontSize=11))
+    else:
+        y_enc = alt.Y("Delay (days):Q",
+                      title="Delay vs first forecast (days)",
+                      axis=alt.Axis(grid=True, titleFontSize=13,
+                                    labelFontSize=11, format="+.0f"))
+    line = (
         alt.Chart(chart_df)
         .mark_line(strokeWidth=2.5, interpolate="monotone")
         .encode(
-            x=x_axis,
-            y=alt.Y("Milestone date:T",
-                    title="Completion date (forecast / actual)",
-                    scale=alt.Scale(zero=False),
-                    axis=alt.Axis(format="%b %Y", grid=True,
-                                  orient="left", titleFontSize=13,
-                                  labelFontSize=11)),
+            x=x_axis, y=y_enc,
             color=alt.Color("Milestone:N",
                             legend=alt.Legend(orient="bottom", columns=2,
                                               labelLimit=380, title=None)),
         )
     )
-    date_pts = (
+    pts = (
         alt.Chart(chart_df)
         .mark_point(size=110, filled=True)
         .encode(
-            x=x_axis,
-            y=alt.Y("Milestone date:T", scale=alt.Scale(zero=False)),
+            x=x_axis, y=y_enc,
             color=alt.Color("Milestone:N", legend=None),
             shape=alt.Shape(
                 "Status:N",
@@ -1050,33 +1061,19 @@ def milestone_tab() -> None:
             ],
         )
     )
-    # Right axis (y2): delay vs first forecast, in days.
-    delay_line = (
-        alt.Chart(chart_df)
-        .mark_line(strokeWidth=1.6, strokeDash=[6, 3], opacity=0.75)
-        .encode(
-            x=x_axis,
-            y=alt.Y("Delay (days):Q",
-                    title="Delay vs first forecast (days)",
-                    axis=alt.Axis(orient="right", grid=False,
-                                  titleFontSize=13, labelFontSize=11,
-                                  titleColor="#cf222e",
-                                  labelColor="#cf222e")),
-            color=alt.Color("Milestone:N", legend=None),
-        )
-    )
     st.altair_chart(
-        alt.layer(date_line + date_pts, delay_line)
-        .resolve_scale(y="independent")
-        .properties(height=440, padding={"left": 28, "right": 12,
+        (line + pts)
+        .properties(height=440, padding={"left": 44, "right": 12,
                                          "top": 8, "bottom": 4})
         .interactive(),
         width="stretch",
     )
     st.caption(
-        "Solid lines (left axis): forecast/actual completion date. "
-        "Dashed lines (right axis, red): delay against the first "
-        "forecast, in days. ◆ = achieved (actual) · ● = forecast."
+        "One line per milestone. Switch the y-axis between the "
+        "completion date and its equivalent delay in days — both are "
+        "the same trajectory, read on different scales. "
+        "◆ = achieved (actual) · ● = forecast. The tooltip always "
+        "carries both readings."
     )
 
     st.subheader("Shift summary")
