@@ -115,6 +115,26 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def build_narrative_docx(title: str, narrative_md: str) -> bytes:
+    """One module's AI narrative as a Word document.
+
+    Analysts deliver in Word; a .md file forces a paste-and-restyle
+    detour. Reuses the assembled-report markdown renderer so headings,
+    bullets and numbering carry through."""
+    from docx import Document as _Document
+    doc = _Document()
+    doc.add_heading(title, level=1)
+    p = doc.add_paragraph()
+    run = p.add_run(f"Generated {datetime.now():%d %b %Y %H:%M} — "
+                    "AI-drafted from the module's computed figures; "
+                    "review before inclusion in any deliverable.")
+    run.italic = True
+    _add_markdown(doc, narrative_md, base_heading_level=2)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def build_assembled_report(
     report_title: str,
     project_name: str,

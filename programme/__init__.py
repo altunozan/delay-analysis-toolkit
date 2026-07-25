@@ -160,6 +160,7 @@ from .report_docx import (
     ReportSection,
     SourceFile,
     build_assembled_report,
+    build_narrative_docx,
 )
 from .report_xlsx import (
     build_asbuilt_xlsx,
@@ -477,6 +478,7 @@ __all__ = [
     "ReportSection",
     "SourceFile",
     "build_assembled_report",
+    "build_narrative_docx",
     # excel
     "build_asbuilt_xlsx",
     "build_comparison_xlsx",

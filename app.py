@@ -121,6 +121,7 @@ from programme import (
     build_asbuilt_prompt,
     build_asbuilt_xlsx,
     build_assembled_report,
+    build_narrative_docx,
     build_comparison_prompt,
     build_float_erosion_prompt,
     build_float_erosion_xlsx,
@@ -321,9 +322,8 @@ def ai_credentials_panel(page: str) -> None:
     shared keys so the choice survives navigation.
     """
     managed = managed_ai_key()
-    own_key = f"aic_own_{page}"
 
-    if managed and not st.session_state.get(own_key):
+    if managed and st.session_state.get(sk.AI_MANAGED, True):
         # ---- managed default: no key input rendered at all ----------
         st.session_state[sk.AI_PROVIDER] = "nvidia"
         st.session_state[sk.AI_KEY] = managed
@@ -341,7 +341,7 @@ def ai_credentials_panel(page: str) -> None:
             "forbids third-party processing, switch to your own key or "
             "a self-hosted endpoint below.")
         if st.button("Use my own API key instead", key=f"aic_sw_{page}"):
-            st.session_state[own_key] = True
+            st.session_state[sk.AI_MANAGED] = False
             st.rerun()
         return
 
@@ -376,7 +376,7 @@ def ai_credentials_panel(page: str) -> None:
                    "be disabled.")
     if managed and st.button("Back to the managed endpoint",
                              key=f"aic_bk_{page}"):
-        st.session_state[own_key] = False
+        st.session_state[sk.AI_MANAGED] = True
         st.session_state.pop(wkey, None)
         st.rerun()
 
@@ -462,14 +462,19 @@ def ai_narrative_panel(
                         and bool(_managed))
         if _use_managed:
             # Managed default: the credential is never rendered. Only the
-            # model is offered, so the analyst can trade speed for depth.
+            # model is offered — and the own-key switch is RIGHT HERE, in
+            # every panel, not routed through one page. The switch is one
+            # app-wide state: flipping it anywhere flips it everywhere.
             pcol1, pcol2 = st.columns([1, 1])
-            pcol1.caption("Managed NVIDIA endpoint — no key required. "
-                          "Change this in step ① of Time Impact Analysis.")
+            pcol1.caption("Managed NVIDIA endpoint — no key required.")
             provider = "nvidia"
             pinfo = PROVIDERS[provider]
             model = model_selector(pcol2, pinfo, f"{state_key}_nvidia")
             api_key = _managed
+            if st.button("Use my own API key instead",
+                         key=f"{state_key}_own"):
+                st.session_state[sk.AI_MANAGED] = False
+                st.rerun()
         else:
             pcol1, pcol2 = st.columns(2)
             _pk = f"{state_key}_provider"
@@ -495,6 +500,10 @@ def ai_narrative_panel(
                      "this request; never stored.",
                 key=f"{state_key}_key",
             )
+            if _managed and st.button("Back to the managed NVIDIA "
+                                      "endpoint", key=f"{state_key}_bk"):
+                st.session_state[sk.AI_MANAGED] = True
+                st.rerun()
 
         if st.button("Generate narrative", type="primary",
                      disabled=not api_key, key=f"{state_key}_go"):
@@ -513,10 +522,13 @@ def ai_narrative_panel(
         narrative = st.session_state.get(state_key)
         if narrative:
             st.download_button(
-                "Download narrative (Markdown)",
-                data=narrative,
-                file_name=f"{file_stub}_narrative.md",
-                mime="text/markdown",
+                "⬇️ Download narrative (Word)",
+                data=build_narrative_docx(
+                    file_stub.replace("_", " ").title() + " — Narrative",
+                    narrative),
+                file_name=f"{file_stub}_narrative.docx",
+                mime="application/vnd.openxmlformats-officedocument."
+                     "wordprocessingml.document",
                 key=f"{state_key}_dl",
             )
     return st.session_state.get(state_key)
