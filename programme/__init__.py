@@ -274,6 +274,7 @@ from .progress import (
 )
 from .windows import (
     PathShift,
+    WindowDriver,
     WindowRow,
     WindowsResult,
     analyse_windows,
@@ -456,6 +457,7 @@ __all__ = [
     "validate_fragnet",
     # windows
     "PathShift",
+    "WindowDriver",
     "WindowRow",
     "WindowsResult",
     "analyse_windows",

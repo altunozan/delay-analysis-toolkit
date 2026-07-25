@@ -161,17 +161,36 @@ def collapsed_asbuilt_tab() -> None:
                    f"{res.n_excluded_unstarted} unstarted excluded).")
         for w in res.warnings:
             st.warning(w)
-        if res.critical_chain:
-            with st.expander("Collapsed model's controlling chain "
-                             "(realism review)"):
-                st.dataframe(pd.DataFrame([{
+        if res.critical_chain or res.model_chain:
+            def _chain_df(chain):
+                return pd.DataFrame([{
                     "Activity ID": a.task_code, "Activity": a.name[:50],
                     "Duration (d)": a.duration_days,
                     "Start": f"{a.start:%Y-%m-%d}" if a.start else "—",
                     "Finish": f"{a.finish:%Y-%m-%d}" if a.finish else "—",
                     "Extracted": "YES" if a.removed else "",
-                } for a in res.critical_chain]), width="stretch",
-                    hide_index=True)
+                } for a in chain])
+            with st.expander("Controlling chains — with events vs "
+                             "collapsed (the trace behind the delta)"):
+                st.caption(
+                    "The delay attributable figure is the difference "
+                    "between these two runs. Left: the chain governing "
+                    "the model WITH the events in. Right: the chain the "
+                    "model collapses onto once they are extracted.")
+                c_model, c_collapsed = st.tabs(
+                    ["With events (model)", "Collapsed (but-for)"])
+                with c_model:
+                    if res.model_chain:
+                        st.dataframe(_chain_df(res.model_chain),
+                                     width="stretch", hide_index=True)
+                    else:
+                        st.caption("No model chain derived.")
+                with c_collapsed:
+                    if res.critical_chain:
+                        st.dataframe(_chain_df(res.critical_chain),
+                                     width="stretch", hide_index=True)
+                    else:
+                        st.caption("No collapsed chain derived.")
         basis_panel("Collapsed As-Built", data, [
             "Method: collapsed as-built (but-for) — unstatused model on "
             "actual durations and the file's logic; extraction by "
@@ -201,7 +220,13 @@ def collapsed_asbuilt_tab() -> None:
                     ("Extracted", len(res.removed_codes))]],
                  "Extraction set": [{"Activity ID": c}
                                     for c in res.removed_codes],
-                 "Controlling chain": [{
+                 "Chain with events": [{
+                     "Activity ID": a.task_code, "Activity": a.name,
+                     "Duration (d)": a.duration_days,
+                     "Start": a.start, "Finish": a.finish,
+                     "Extracted": "YES" if a.removed else ""}
+                     for a in res.model_chain],
+                 "Chain collapsed": [{
                      "Activity ID": a.task_code, "Activity": a.name,
                      "Duration (d)": a.duration_days,
                      "Start": a.start, "Finish": a.finish,

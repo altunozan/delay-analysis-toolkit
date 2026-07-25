@@ -197,6 +197,34 @@ def windows_tab() -> None:
         "window.")
 
     for w in res.windows:
+        if w.drivers:
+            mv = (f"{w.movement_days:+.0f} d"
+                  if w.movement_days is not None else "—")
+            with st.expander(
+                f"Window {w.index} drivers — the rows behind the "
+                f"{mv} movement ({w.from_label} → {w.to_label})"
+            ):
+                st.caption(
+                    "The later revision's driving-path activities with "
+                    "each revision's own stored finishes. Biggest "
+                    "movers first; 'joined' = not on the prior "
+                    "revision's driving path.")
+                st.dataframe(pd.DataFrame([{
+                    "Activity ID": d.task_code,
+                    "Activity": d.name[:50],
+                    "On path": d.membership,
+                    "Finish (from)": (f"{d.finish_old:%Y-%m-%d}"
+                                      if d.finish_old else "—"),
+                    "Finish (to)": (f"{d.finish_new:%Y-%m-%d}"
+                                    if d.finish_new else "—"),
+                    "Slip (d)": d.slip_days,
+                    "Basis": d.basis_new,
+                } for d in w.drivers[:25]]), width="stretch",
+                    hide_index=True)
+                if len(w.drivers) > 25:
+                    st.caption(f"Top 25 of {len(w.drivers)} path "
+                               "activities — the workbook export "
+                               "carries the full set.")
         if w.shifts:
             with st.expander(
                 f"Window {w.index} path changes — {len(w.joined)} joined, "

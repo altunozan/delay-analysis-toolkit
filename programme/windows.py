@@ -31,6 +31,11 @@ STANDING_CAVEATS = [
     "A window's movement reflects everything that happened in it — progress, "
     "logic revisions, and re-planning combined; separating those effects "
     "requires the revision comparison module and analyst review.",
+    "Driver rows trace each window's movement to the later revision's "
+    "driving-path activities using STORED dates only (actual finish where "
+    "recorded, else the stored early finish) — they show which path "
+    "activities moved and by how much, which is attribution of movement "
+    "within the schedule model, not a statement of responsibility.",
 ]
 
 
@@ -39,6 +44,21 @@ class PathShift:
     task_code: str
     name: str
     direction: str          # "joined" | "left"
+
+
+@dataclass
+class WindowDriver:
+    """One driving-path activity's movement across a window — the row-
+    level trace behind the window's movement figure. STORED dates only:
+    each side is the finish that revision itself asserts (actual finish
+    if recorded, else the stored early finish), never a recomputation."""
+    task_code: str
+    name: str
+    membership: str                  # "retained" | "joined"
+    finish_old: datetime | None      # prior revision's stored finish
+    finish_new: datetime | None      # later revision's stored finish
+    slip_days: float | None          # + = moved later within the window
+    basis_new: str = ""              # "actual" | "forecast" (later rev)
 
 
 @dataclass
@@ -65,6 +85,9 @@ class WindowRow:
     replan_logic_days: float | None = None   # ..of which logic/duration
     replan_scope_days: float | None = None   # ..of which scope add/drop
     engine_window_days: float | None = None  # perf + replan (engine)
+    # --- traceback: the later revision's driving-path activities with
+    # their stored finishes on both sides of the window ----------------
+    drivers: list[WindowDriver] = field(default_factory=list)
 
     @property
     def joined(self) -> list[PathShift]:
@@ -111,11 +134,13 @@ def analyse_windows(
 
     # Longest path per revision (default terminal = latest finisher).
     paths: dict[str, dict[str, str]] = {}          # label -> {code: name}
+    tasks_by_code: dict[str, dict] = {}            # label -> {code: Task}
     for label, data in revisions:
         cp = extract_longest_path(data, label, config=config,
                      end_task_code=end_task_code,
                      branch_tolerance_hours=branch_tolerance_hours)
         paths[label] = {a.task_code: a.name for a in cp.critical}
+        tasks_by_code[label] = {t.task_code: t for t in data.tasks}
 
     for i in range(len(revisions) - 1):
         (l_old, d_old), (l_new, d_new) = revisions[i], revisions[i + 1]
@@ -144,6 +169,33 @@ def analyse_windows(
             row.shifts.append(PathShift(code, new_cp[code], "joined"))
         for code in sorted(old_cp.keys() - new_cp.keys()):
             row.shifts.append(PathShift(code, old_cp[code], "left"))
+
+        # --- traceback: per-activity movement on the incoming driving
+        # path, from each revision's OWN stored dates. The window's
+        # movement figure is only defensible when the reader can see
+        # which path activities slipped inside the window and by how
+        # much — this is that row set, not a recomputation.
+        t_old = tasks_by_code[l_old]
+        t_new = tasks_by_code[l_new]
+        for code, name in new_cp.items():
+            tn = t_new.get(code)
+            if tn is None:
+                continue
+            to = t_old.get(code)
+            fin_new = tn.act_finish or tn.early_finish
+            fin_old = (to.act_finish or to.early_finish) if to else None
+            slip = (round((fin_new - fin_old).total_seconds() / 86400, 1)
+                    if fin_new and fin_old else None)
+            row.drivers.append(WindowDriver(
+                task_code=code, name=name,
+                membership="retained" if code in old_cp else "joined",
+                finish_old=fin_old, finish_new=fin_new,
+                slip_days=slip,
+                basis_new="actual" if tn.act_finish else "forecast"))
+        # biggest movers first; incomparable rows (new activities) last
+        row.drivers.sort(
+            key=lambda d: (d.slip_days is None,
+                           -(d.slip_days or 0.0), d.task_code))
 
         result.windows.append(row)
 

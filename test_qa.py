@@ -87,6 +87,21 @@ tot = sum(w.movement_days for w in wfix.windows if w.movement_days is not None)
 check("A5 fixtures cumulative movement == sum of windows",
       wfix.total_movement_days == tot)
 
+# A5b-d. Window driver traceback: every movement figure is backed by
+# row-level driving-path activities carrying STORED dates only.
+_w0 = wres.windows[0]
+check("A5b window drivers populated from the later revision's path",
+      len(_w0.drivers) > 0)
+_u_by_code = {t.task_code: t for t in U.tasks}
+_drv_ok = all(
+    (d.finish_new == ((_u_by_code[d.task_code].act_finish
+                       or _u_by_code[d.task_code].early_finish)))
+    for d in _w0.drivers if d.task_code in _u_by_code)
+check("A5c driver finishes are the revision's own stored dates", _drv_ok)
+_slips = [d.slip_days for d in _w0.drivers if d.slip_days is not None]
+check("A5d drivers sorted biggest mover first",
+      _slips == sorted(_slips, reverse=True))
+
 # A6. Longest path is a subset of... no — verify every longest-path link
 # joins two on-path activities and terminal is on path
 cp_l = extract_longest_path(B, "B")
@@ -1368,6 +1383,13 @@ check("J3b delta identity: model - collapsed == delta",
            ).total_seconds() / 86400.0 - _j_res1.delta_days) < 0.1)
 check("J3c unknown extraction codes ignored + disclosed",
       any("ignored" in w for w in _cab(_j_u2, "U", {"NOPE-1"}).warnings))
+check("J3d empty extraction: model chain == collapsed chain (traceback)",
+      [a.task_code for a in _j_res0.model_chain]
+      == [a.task_code for a in _j_res0.critical_chain])
+check("J3e both chains disclosed after a real extraction",
+      len(_j_res1.model_chain) > 0 and len(_j_res1.critical_chain) > 0)
+check("J3f model chain terminal finish == model completion",
+      _j_res1.model_chain[-1].finish == _j_res1.model_completion)
 
 _j_g, _j_d = _pg('{"groups":[{"label":"L","codes":["A1870","FAKE"],'
                  '"rationale":"r"}]}', _gu)

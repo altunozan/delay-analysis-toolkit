@@ -73,6 +73,10 @@ class CollapseResult:
     removed_codes: list[str] = field(default_factory=list)
     n_modelled: int = 0
     n_excluded_unstarted: int = 0
+    # Traceback: the controlling chain of BOTH runs, so the headline
+    # delta is attributable — chain X (with the events) became chain Y
+    # (without them), not just "the number moved".
+    model_chain: list[CabActivity] = field(default_factory=list)
     critical_chain: list[CabActivity] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
@@ -182,7 +186,7 @@ def collapse_asbuilt(
             return EF[anchor_code]
         return max(EF.values()) if EF else None
 
-    _, EF1 = _schedule(dict(nodes), rels, anchor)
+    ES1, EF1 = _schedule(dict(nodes), rels, anchor)
     result.model_completion = _completion(EF1)
     if anchor_code and anchor_code not in nodes:
         result.warnings.append(
@@ -221,30 +225,40 @@ def collapse_asbuilt(
             (result.model_completion
              - result.collapsed_completion).total_seconds() / 86400.0, 1)
 
-    # ---- collapsed model's controlling chain (for realism review) ------
-    if EF2:
-        by_code = {t.task_code: t for t in started}
-        end = max(EF2, key=lambda c: EF2[c])
+    # ---- controlling chains of BOTH runs (traceback) -------------------
+    # Same walk on the model run and the collapsed run: the delta is
+    # only attributable when the reader can see which chain governed
+    # with the events in, and which chain the model collapsed onto.
+    by_code = {t.task_code: t for t in started}
+    preds_of: dict[str, list[tuple[str, str, float]]] = {}
+    for p, s, lt, lag in rels:
+        preds_of.setdefault(s, []).append((p, lt, lag))
+    removed_set = set(result.removed_codes)
+
+    def _controlling_chain(ES: dict, EF: dict,
+                           durations: dict) -> list[CabActivity]:
+        if not EF:
+            return []
         chain, seen = [], set()
-        cur = end
-        preds_of: dict[str, list[tuple[str, str, float]]] = {}
-        for p, s, lt, lag in rels:
-            preds_of.setdefault(s, []).append((p, lt, lag))
+        cur = max(EF, key=lambda c: EF[c])
         while cur and cur not in seen and len(chain) < 200:
             seen.add(cur)
             t = by_code[cur]
             chain.append(CabActivity(
-                cur, t.name, ES2.get(cur), EF2.get(cur),
-                collapsed_nodes.get(cur, 0.0),
-                removed=cur in set(result.removed_codes)))
+                cur, t.name, ES.get(cur), EF.get(cur),
+                durations.get(cur, 0.0),
+                removed=cur in removed_set))
             best, best_gap = None, timedelta(days=0.51)
             for p, lt, lag in preds_of.get(cur, []):
-                bound = (ES2[p] if lt in ("SS", "SF") else EF2[p])
-                gap = ES2[cur] - bound
+                bound = (ES[p] if lt in ("SS", "SF") else EF[p])
+                gap = ES[cur] - bound
                 if timedelta(days=-0.01) <= gap < best_gap:
                     best, best_gap = p, gap
             cur = best
-        result.critical_chain = list(reversed(chain))
+        return list(reversed(chain))
+
+    result.model_chain = _controlling_chain(ES1, EF1, nodes)
+    result.critical_chain = _controlling_chain(ES2, EF2, collapsed_nodes)
     return result
 
 

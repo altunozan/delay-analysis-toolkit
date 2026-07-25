@@ -409,6 +409,27 @@ def build_windows_xlsx(res, narrative: str | None = None) -> bytes:
         _autofit(s2, {1: 8, 2: 10, 3: 20, 4: 56})
         s2.freeze_panes = "A2"
 
+    # Traceback: the rows behind each window's movement figure —
+    # driving-path activities with stored finishes on both sides.
+    drivers = [(w.index, d) for w in res.windows for d in w.drivers]
+    if drivers:
+        s3 = wb.create_sheet("Window Drivers")
+        _header_row(s3, 1, ["Window", "Activity ID", "Activity",
+                            "Membership", "Finish (from)", "Finish (to)",
+                            "Slip (d)", "Basis (to)"])
+        for i, (widx, d) in enumerate(drivers, start=2):
+            vals = [widx, d.task_code, d.name, d.membership,
+                    _fmt(d.finish_old), _fmt(d.finish_new),
+                    d.slip_days, d.basis_new]
+            for col, v in enumerate(vals, start=1):
+                c = s3.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 7 and isinstance(v, (int, float)) and v:
+                    c.fill = SLIP_FILL if v > 0 else GAIN_FILL
+        _autofit(s3, {1: 8, 2: 20, 3: 46, 4: 11, 5: 13, 6: 13,
+                      7: 9, 8: 10})
+        s3.freeze_panes = "A2"
+
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 

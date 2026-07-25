@@ -704,6 +704,12 @@ def build_windows_prompt(
             lines.append(f"  - left path: {s.task_code} '{s.name}'")
         if len(w.left) > 15:
             lines.append(f"  ... (+{len(w.left) - 15} more left)")
+        movers = [d for d in w.drivers if (d.slip_days or 0) != 0][:8]
+        for d in movers:
+            lines.append(
+                f"  * driver: {d.task_code} '{d.name}' finish "
+                f"{fmt(d.finish_old)} -> {fmt(d.finish_new)} "
+                f"({d.slip_days:+.1f}d, {d.basis_new}, {d.membership})")
     lines.append("</windows>\n")
     lines.append("<caveats>")
     lines.extend(f"- {c}" for c in res.caveats)
