@@ -538,7 +538,7 @@ def build_apab_gantt_html(
   .pl::before, .pl::after { content:""; position:absolute; top:-4px;
                             width:1.5px; height:9px; background:#14324A; }
   .pl::before { left:0; } .pl::after { right:0; }
-  .ab  { top:19px; height:7px; border:.5px solid #9B3227; }
+  .ab  { top:19px; height:7px; }
   .dia { position:absolute; width:10px; height:10px; top:11px;
          transform:rotate(45deg); }
   .conn { position:absolute; top:15px; border-top:1.5px dashed #5B7994; }
@@ -564,8 +564,8 @@ def build_apab_gantt_html(
   .tblock b { font-size:10px; letter-spacing:.02em; }
 </style></head><body>""", head, """
 <div class='leg'>
-<span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late
-<span class='sw' style='background:repeating-linear-gradient(45deg,#3F6B4F 0 3px,#8FB39B 3px 6px);border:.5px solid #3F6B4F'></span>as-built on time
+<span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late (45&#176; dense)
+<span class='sw' style='background:repeating-linear-gradient(135deg,#3F6B4F 0 2px,transparent 2px 5px),#E8F0EA;border:.5px solid #3F6B4F'></span>as-built on time (135&#176; open)
 <span class='sw' style='height:0;border-top:1.5px solid #14324A'></span>as-planned
 <span style='color:#14324A'>&#9670;</span> key date actual
 <span style='color:#5B7994'>&#9671;</span> planned</div>
@@ -609,13 +609,21 @@ def build_apab_gantt_html(
                         "</div>")
         if as_:
             ae = af or as_
-            col = ("repeating-linear-gradient(45deg,#9B3227 0 3px,"
-                   "#C9857C 3px 6px)" if (var or 0) > 0 else
-                   "repeating-linear-gradient(45deg,#3F6B4F 0 3px,"
-                   "#8FB39B 3px 6px)")
+            # Hatch DIRECTION carries late/on-time, not colour alone:
+            # 45° dense = late, 135° open = on time — survives greyscale
+            # printing and red-green colour blindness.
+            if (var or 0) > 0:
+                col = ("repeating-linear-gradient(45deg,#9B3227 0 3px,"
+                       "#C9857C 3px 6px)")
+                edge = "#9B3227"
+            else:
+                col = ("repeating-linear-gradient(135deg,#3F6B4F 0 2px,"
+                       "transparent 2px 5px), #E8F0EA")
+                edge = "#3F6B4F"
             kids.append(f"<div class='bar ab' style='left:{x(as_):.0f}px;"
                         f"width:{max(x(ae)-x(as_),3):.0f}px;"
-                        f"background:{col}' title='{code} as-built "
+                        f"background:{col};border:.5px solid {edge}' "
+                        f"title='{code} as-built "
                         f"{f(as_)} → {f(af)}'></div>")
         if is_kd and pf and af:
             xa, xp = x(af), x(pf)

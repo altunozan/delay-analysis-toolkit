@@ -1324,7 +1324,18 @@ def variance_tab() -> None:
             )
             .properties(height=max(140, 26 * len(delta_df)))
         )
-        st.altair_chart(bar, width="stretch")
+        _v_base = alt.Chart(delta_df).encode(
+            y=alt.Y("Group:N", sort="-x", title=None),
+            x=alt.X("Δ finish (days):Q"))
+        _v_lp = (_v_base.transform_filter("datum['Δ finish (days)'] >= 0")
+                 .mark_text(align="left", dx=5, fontSize=10.5)
+                 .encode(text=alt.Text("Δ finish (days):Q",
+                                       format="+.0f")))
+        _v_ln = (_v_base.transform_filter("datum['Δ finish (days)'] < 0")
+                 .mark_text(align="right", dx=-5, fontSize=10.5)
+                 .encode(text=alt.Text("Δ finish (days):Q",
+                                       format="+.0f")))
+        st.altair_chart(bar + _v_lp + _v_ln, width="stretch")
         if multi_dim:
             st.caption(f"Bar colour = {first_dim_name} (first selected "
                        "dimension). Bar direction shows slip (right) vs "
@@ -3955,19 +3966,80 @@ def windows_tab() -> None:
            "Movement (d)": w.movement_days}
           for w in res.windows if w.movement_days is not None]
     if mv:
+        _mv_base = alt.Chart(pd.DataFrame(mv)).encode(
+            x=alt.X("Window:N", sort=None, title=None,
+                    axis=alt.Axis(labelAngle=-20, labelLimit=200)),
+            y=alt.Y("Movement (d):Q"),
+            tooltip=["Window", "Movement (d)"])
+        _mv_bars = _mv_base.mark_bar(cornerRadius=2).encode(
+            color=alt.condition("datum['Movement (d)'] > 0",
+                                alt.value("#9B3227"),
+                                alt.value("#3F6B4F")))
+        # value labels on every bar (AAA rule) — above positive bars,
+        # below negative ones
+        _mv_lp = (_mv_base.transform_filter("datum['Movement (d)'] >= 0")
+                  .mark_text(dy=-7, fontWeight="bold", fontSize=11)
+                  .encode(text=alt.Text("Movement (d):Q", format="+.0f")))
+        _mv_ln = (_mv_base.transform_filter("datum['Movement (d)'] < 0")
+                  .mark_text(dy=13, fontWeight="bold", fontSize=11)
+                  .encode(text=alt.Text("Movement (d):Q", format="+.0f")))
         c2.altair_chart(
-            alt.Chart(pd.DataFrame(mv)).mark_bar(cornerRadius=2)
-            .encode(
-                x=alt.X("Window:N", sort=None, title=None,
-                        axis=alt.Axis(labelAngle=-20, labelLimit=200)),
-                y=alt.Y("Movement (d):Q"),
-                color=alt.condition("datum['Movement (d)'] > 0",
-                                    alt.value("#9B3227"),
-                                    alt.value("#3F6B4F")),
-                tooltip=["Window", "Movement (d)"],
-            ).properties(height=260, title="Movement per window"),
+            (_mv_bars + _mv_lp + _mv_ln)
+            .properties(height=260, title="Movement per window"),
             width="stretch",
         )
+
+    # ---- waterfall: the bifurcation arithmetic made visible ----------- #
+    bif = [w for w in res.windows
+           if w.performance_days is not None
+           and w.replanning_days is not None]
+    if bif:
+        st.subheader("Window decomposition — performance vs replanning")
+        _wlbl = [f"W{w.index}: {w.from_label} → {w.to_label}" for w in bif]
+        _wi = max(range(len(bif)),
+                  key=lambda i: abs(bif[i].movement_days or 0))
+        _pick = st.selectbox("Window to decompose", _wlbl, index=_wi,
+                             key="win_wf_pick")
+        _w = bif[_wlbl.index(_pick)]
+        _perf, _rep = _w.performance_days, _w.replanning_days
+        _net = (_w.engine_window_days
+                if _w.engine_window_days is not None
+                else round(_perf + _rep, 1))
+        _wf = pd.DataFrame([
+            {"Step": "Performance", "start": 0.0, "end": _perf,
+             "kind": "perf", "lbl": f"{_perf:+.1f}"},
+            {"Step": "Replanning", "start": _perf, "end": _perf + _rep,
+             "kind": "replan", "lbl": f"{_rep:+.1f}"},
+            {"Step": "Net movement", "start": 0.0, "end": _net,
+             "kind": "net", "lbl": f"{_net:+.1f}"},
+        ])
+        _wf["top"] = _wf[["start", "end"]].max(axis=1)
+        _wb = alt.Chart(_wf).encode(
+            x=alt.X("Step:N", sort=None, title=None,
+                    axis=alt.Axis(labelAngle=0)))
+        _bars = _wb.mark_bar(size=52).encode(
+            y=alt.Y("start:Q", title="days"), y2="end:Q",
+            color=alt.Color("kind:N", legend=None, scale=alt.Scale(
+                domain=["perf", "replan", "net"],
+                range=["#9B3227", "#3F6B4F", "#14324A"])),
+            tooltip=["Step", "lbl"])
+        # sign carried in the label — the meaning never rests on colour
+        _lbls = _wb.mark_text(dy=-8, fontWeight="bold", fontSize=12).encode(
+            y=alt.Y("top:Q"), text="lbl:N")
+        _zero = alt.Chart(pd.DataFrame({"y": [0.0]})).mark_rule(
+            strokeDash=[4, 3], color="#5B7994").encode(y="y:Q")
+        st.altair_chart(
+            (_bars + _lbls + _zero).properties(
+                height=300, title=f"{_pick} — movement decomposed"),
+            width="stretch")
+        st.caption(
+            f"Execution moved the forecast {_perf:+.1f} d against the "
+            f"prior plan; the update's own edits moved it {_rep:+.1f} d; "
+            f"net engine movement {_net:+.1f} d vs file-scheduled "
+            f"{(_w.movement_days if _w.movement_days is not None else 0):+.0f} d "
+            "(difference = disclosed engine calibration). The components "
+            "sum exactly — the identity is QA-pinned — which is what "
+            "makes a waterfall honest here.")
 
     st.subheader("Windows")
     st.dataframe(pd.DataFrame([{
@@ -4087,17 +4159,19 @@ def comparison_tab() -> None:
         return
     chart_df = pd.DataFrame(
         [{"Category": k, "Count": v} for k, v in counts.items()])
+    _cc_base = alt.Chart(chart_df).encode(
+        x=alt.X("Count:Q", title=None),
+        y=alt.Y("Category:N", sort="-x", title=None,
+                axis=alt.Axis(labelLimit=280)))
     st.altair_chart(
-        alt.Chart(chart_df).mark_bar(cornerRadius=2)
-        .encode(
-            x=alt.X("Count:Q", title=None),
-            y=alt.Y("Category:N", sort="-x", title=None,
-                    axis=alt.Axis(labelLimit=280)),
+        (_cc_base.mark_bar(cornerRadius=2).encode(
             color=alt.condition(
                 "datum.Category == 'Actual dates changed retrospectively'",
                 alt.value("#9B3227"), alt.value("#14324A")),
-            tooltip=["Category", "Count"],
-        ).properties(height=28 * len(chart_df)),
+            tooltip=["Category", "Count"])
+         + _cc_base.mark_text(align="left", dx=5, fontSize=10.5)
+           .encode(text="Count:Q")
+         ).properties(height=28 * len(chart_df)),
         width="stretch",
     )
 
