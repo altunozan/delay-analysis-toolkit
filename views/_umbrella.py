@@ -22,7 +22,7 @@ from programme import (
     UMBRELLA_SYSTEM_PROMPT, build_rollup, build_umbrella_prompt,
     merge_grouping, parse_umbrella_grouping,
 )
-from views._shared import ai_credentials_panel
+from views._shared import ai_credentials_panel, resolve_ai_credentials
 
 
 def _adopt(groups: dict[str, list[str]]) -> None:
@@ -34,11 +34,13 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
                     key_prefix: str = "umb") -> dict[str, list[str]]:
     """Propose → confirm → auto-adopt. Returns the adopted grouping."""
     st.caption(
-        "Group the as-built activities into work packages a reader "
-        "recognises — 'Electrical First Fix' rather than twenty rows of "
-        "containment, trunking and sleeves. Grouping is presentation "
-        "only: an umbrella's MEASURED dates come from its critical-path "
-        "members alone, so grouping can never move the measured delay.")
+        "Group similar activities into the work packages the works were "
+        "actually delivered in — Screed Works, Blockwork, Plastering, "
+        "Electrical First / Second Fix, whatever fits this project — so "
+        "the as-built critical path reads package by package instead of "
+        "row by row. Grouping is presentation only: an umbrella's "
+        "MEASURED dates come from its critical-path members alone, so "
+        "grouping can never move the measured delay.")
 
     saved = dict(st.session_state.get(sk.UMBRELLAS) or {})
     names = {r["task_code"]: r["name"] for r in rows}
@@ -58,14 +60,16 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         st.write(f"{len(pool)} activities in scope for grouping.")
         with st.expander("AI settings (shared across the whole app)"):
             ai_credentials_panel("umbrella")
-        ai_key = st.session_state.get(sk.AI_KEY, "")
+        # Same key resolution as the narrative panels — managed straight
+        # from secrets, never a session-state copy that may not exist.
+        provider, model, ai_key = resolve_ai_credentials()
         if st.button("Propose work packages", key=f"{key_prefix}_go",
                      disabled=not (pool and ai_key)):
             try:
                 out = "".join(stream_narrative(
-                    st.session_state.get(sk.AI_PROVIDER, "nvidia"),
-                    ai_key, build_umbrella_prompt(pool, path_codes),
-                    st.session_state.get(sk.AI_MODEL, ""),
+                    provider, ai_key,
+                    build_umbrella_prompt(pool, path_codes),
+                    model or None,
                     system=UMBRELLA_SYSTEM_PROMPT))
                 proposed, dropped = parse_umbrella_grouping(out, valid)
                 st.session_state[sk.UMBRELLA_PROPOSED] = proposed

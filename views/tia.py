@@ -27,7 +27,8 @@ from programme import (
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
-    ai_credentials_panel, ai_narrative_panel, basis_panel, get_parsed_files,
+    ai_credentials_panel, ai_narrative_panel, basis_panel,
+    get_parsed_files, resolve_ai_credentials,
 )
 from views._submodules import analysis_submodules
 
@@ -137,9 +138,12 @@ def tia_tab() -> None:
         chosen = names[-1]
     data = dict(files)[chosen]
     event = _tia_event_from_state()
-    ai_key = st.session_state.get(sk.AI_KEY, "")
-    ai_provider = st.session_state.get(sk.AI_PROVIDER, "anthropic")
-    ai_model = st.session_state.get(sk.AI_MODEL) or None
+    # Resolved exactly as the narrative panels resolve credentials —
+    # managed key straight from secrets, so jumping directly to a later
+    # step in a fresh session still has working AI (the session-state
+    # copy only exists once a credentials panel has rendered).
+    ai_provider, _ai_model, ai_key = resolve_ai_credentials()
+    ai_model = _ai_model or None
 
     # ---- ① update + AI registration + health gateway --------------------
     if step == _TIA_STEPS[0]:

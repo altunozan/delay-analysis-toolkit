@@ -413,17 +413,23 @@ UMBRELLA_SYSTEM_PROMPT = (
     "You are assisting a forensic delay analyst preparing an as-planned "
     "versus as-built comparison. You will receive as-built activities "
     "(code, name, actual dates, and whether each sits on the as-built "
-    "critical path). Group them into WORK PACKAGES that a reader would "
-    "recognise as one item of work — e.g. 'Electrical First Fix' "
-    "covering containment, trunking, sleeves and conduit; 'Blockwork to "
-    "Level 3'; 'Curtain Wall Installation'. The purpose is READABILITY "
-    "of the as-built critical path, not delay attribution. Rules: use "
-    "ONLY the activity codes supplied, verbatim; never invent a code; "
-    "group by the nature of the work and its location, not by date "
+    "critical path). Group similar activities into WORK PACKAGES that a "
+    "reader would recognise as one item of work — ANY trade or stage of "
+    "the works: screed works, blockwork, plastering, painting, "
+    "electrical first fix, electrical second fix, MEP testing and "
+    "commissioning, joinery, curtain wall, snagging — whatever the "
+    "activity names actually describe (those trades are examples, not a "
+    "menu). The purpose is READABILITY: a simplified as-built critical "
+    "path a reader can walk through package by package. Rules: use ONLY "
+    "the activity codes supplied, verbatim; never invent a code; group "
+    "by the nature of the work and its location, not by date "
     "proximity; keep an activity ungrouped rather than forcing it into "
-    "a poor fit; prefer 6-20 packages. Return STRICT JSON: "
-    "{\"groups\": [{\"label\": str, \"codes\": [str], \"rationale\": "
-    "str}]} and nothing else.")
+    "a poor fit; prefer 6-20 packages; order the groups in as-built "
+    "sequence (earliest actual start first); each rationale is ONE "
+    "short sentence saying what unites the members, so the group list "
+    "reads as a quick walk-through of how the works were delivered. "
+    "Return STRICT JSON: {\"groups\": [{\"label\": str, \"codes\": "
+    "[str], \"rationale\": str}]} and nothing else.")
 
 
 def build_umbrella_prompt(rows: list[dict],

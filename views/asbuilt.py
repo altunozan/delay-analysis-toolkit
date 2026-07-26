@@ -51,8 +51,9 @@ def asbuilt_tab() -> None:
                 else ordered[0][1])
     umb_rows = planned_vs_actual(base_rev, ordered[-1][1], None)
     with st.expander(
-        "Group the path into work packages — one 'Electrical First Fix' "
-        "bar instead of twenty containment rows",
+        "Group the path into work packages — one bar per trade "
+        "(Screed, Blockwork, Plastering, First / Second Fix…) instead "
+        "of a row per activity",
         expanded=False
     ):
         groups = umbrella_editor(umb_rows, path_codes, key_prefix="ab_umb")

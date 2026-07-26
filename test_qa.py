@@ -1828,6 +1828,21 @@ check("N10d renaming moves visible codes to the new umbrella",
 check("N10e blanking every member deletes the umbrella entirely",
       _mg({"X": ["A1"]}, ["A1"], {"A1": ""}) == {})
 
+# N11. Structural rule: no view may read the sk.AI_KEY session copy
+# directly — it only exists once a credentials panel has rendered, which
+# produced 'narratives work but propose does not'. Everything resolves
+# through views._shared.resolve_ai_credentials (managed key straight
+# from secrets).
+import glob as _n_glob
+_n_offenders = []
+for _f in _n_glob.glob("views/*.py"):
+    if _f.endswith("_shared.py"):
+        continue
+    if "st.session_state.get(sk.AI_KEY" in open(_f).read():
+        _n_offenders.append(_f)
+check("N11 no view reads sk.AI_KEY directly (resolver only)",
+      not _n_offenders, str(_n_offenders))
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

@@ -199,6 +199,27 @@ def ai_credentials_panel(page: str) -> None:
         st.rerun()
 
 
+def resolve_ai_credentials() -> tuple[str, str, str]:
+    """(provider, model, key) resolved EXACTLY as the narrative panels
+    resolve them: the managed endpoint straight from secrets while
+    AI_MANAGED is on, else the analyst's own registered credentials.
+
+    Every AI feature must call this rather than reading sk.AI_KEY
+    directly — the session copy only exists once a credentials panel has
+    rendered, which is why 'narratives work but propose does not' was a
+    real bug class.
+    """
+    managed = managed_ai_key()
+    if managed and st.session_state.get(sk.AI_MANAGED, True):
+        return ("nvidia",
+                st.session_state.get(sk.AI_MODEL)
+                or PROVIDERS["nvidia"]["default_model"],
+                managed)
+    return (st.session_state.get(sk.AI_PROVIDER, "nvidia"),
+            st.session_state.get(sk.AI_MODEL, ""),
+            st.session_state.get(sk.AI_KEY, ""))
+
+
 def basis_panel(module: str, data, engine_lines: list[str]) -> None:
     """Scheduling-basis disclosure: what OUR engine did (method, tolerance,
     terminal, statusing rule) plus the settings the FILE's own forecast was
