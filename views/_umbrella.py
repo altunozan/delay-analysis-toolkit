@@ -22,7 +22,7 @@ from programme import (
     UMBRELLA_SYSTEM_PROMPT, build_rollup, build_umbrella_prompt,
     merge_grouping, parse_umbrella_grouping,
 )
-from views._shared import ai_credentials_panel, resolve_ai_credentials
+from views._shared import ai_provider_block
 
 
 def _adopt(groups: dict[str, list[str]]) -> None:
@@ -58,11 +58,10 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         pool = [r for r in rows
                 if not scope_cp or r["task_code"] in path_codes]
         st.write(f"{len(pool)} activities in scope for grouping.")
-        with st.expander("AI settings (shared across the whole app)"):
-            ai_credentials_panel("umbrella")
-        # Same key resolution as the narrative panels — managed straight
-        # from secrets, never a session-state copy that may not exist.
-        provider, model, ai_key = resolve_ai_credentials()
+        # THE provider/model/key block — the very same code the
+        # narrative panels render, model selector and own-key switch
+        # included. Not a copy of the logic: the same function.
+        provider, model, ai_key = ai_provider_block(f"{key_prefix}_ai")
         if st.button("Propose work packages", key=f"{key_prefix}_go",
                      disabled=not (pool and ai_key)):
             try:

@@ -149,6 +149,14 @@ def main() -> int:
             page.wait_for_timeout(3000)
             check("umbrella editor defaults to critical-path rows",
                   page.get_by_text("Show all", exact=False).count() > 0)
+            # the propose area renders THE shared provider block — the
+            # same code path as the narrative panels (model selector +
+            # managed caption + own-key switch, keyed per state_key)
+            check("umbrella propose has the model selector",
+                  page.locator(
+                      '.st-key-ab_umb_ai_nvidia_modelsel').count() == 1)
+            check("umbrella propose has the own-key switch",
+                  page.locator('.st-key-ab_umb_ai_own').count() == 1)
             def type_umbrella_cells() -> None:
                 ed = page.locator('.st-key-ab_umb_editor '
                                   '[data-testid="stDataFrame"]').first

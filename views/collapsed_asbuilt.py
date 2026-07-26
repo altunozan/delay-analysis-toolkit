@@ -12,8 +12,8 @@ from programme import (
     collapse_asbuilt, parse_grouping,
 )
 from views._shared import (
-    _fkey, ai_credentials_panel, basis_panel, cached_oos_flags,
-    get_parsed_files, resolve_ai_credentials,
+    _fkey, ai_provider_block, basis_panel, cached_oos_flags,
+    get_parsed_files,
 )
 from views._submodules import analysis_submodules
 
@@ -45,17 +45,12 @@ def collapsed_asbuilt_tab() -> None:
         st.caption("Group by name / WBS / activity codes — AI proposes, "
                    "the analyst decides. These usually sit on the "
                    "longest path.")
-        # Same key resolution as the narrative panels (managed straight
-        # from secrets) — never a session-state copy that may not exist.
-        provider, model, ai_key = resolve_ai_credentials()
         c1, c2 = st.columns([1, 1])
         with c1:
             st.markdown("**AI-assisted grouping**")
-            if not ai_key:
-                with st.expander("Register your AI (shared across the "
-                                 "whole app)"):
-                    ai_credentials_panel("cab")
-                provider, model, ai_key = resolve_ai_credentials()
+            # The same provider/model/key block the narrative panels
+            # render — one code path for every AI feature.
+            provider, model, ai_key = ai_provider_block("cab_ai")
             if st.button("Propose event groups from activity names",
                          disabled=not ai_key, key="cab_ai_go"):
                 try:

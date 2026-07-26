@@ -211,10 +211,11 @@ def resolve_ai_credentials() -> tuple[str, str, str]:
     """
     managed = managed_ai_key()
     if managed and st.session_state.get(sk.AI_MANAGED, True):
-        return ("nvidia",
-                st.session_state.get(sk.AI_MODEL)
-                or PROVIDERS["nvidia"]["default_model"],
-                managed)
+        nv = PROVIDERS["nvidia"]
+        model = st.session_state.get(sk.AI_MODEL)
+        if model not in nv.get("models", [nv["default_model"]]):
+            model = nv["default_model"]   # never a cross-provider model
+        return ("nvidia", model, managed)
     return (st.session_state.get(sk.AI_PROVIDER, "nvidia"),
             st.session_state.get(sk.AI_MODEL, ""),
             st.session_state.get(sk.AI_KEY, ""))
@@ -273,6 +274,63 @@ def model_selector(container, pinfo: dict, state_key: str) -> str:
     return sel
 
 
+def ai_provider_block(state_key: str) -> tuple[str, str | None, str]:
+    """THE provider/model/key selection block, extracted verbatim from
+    ai_narrative_panel and rendered by every AI feature (narratives,
+    umbrella propose, CAB grouping). One code path — 'the key works in
+    one section but not another' is structurally impossible.
+
+    Returns (provider, model, api_key)."""
+    _managed = managed_ai_key()
+    _use_managed = (st.session_state.get(sk.AI_MANAGED, bool(_managed))
+                    and bool(_managed))
+    if _use_managed:
+        # Managed default: the credential is never rendered. Only the
+        # model is offered — and the own-key switch is RIGHT HERE, in
+        # every panel, not routed through one page. The switch is one
+        # app-wide state: flipping it anywhere flips it everywhere.
+        pcol1, pcol2 = st.columns([1, 1])
+        pcol1.caption("Managed NVIDIA endpoint — no key required.")
+        provider = "nvidia"
+        pinfo = PROVIDERS[provider]
+        model = model_selector(pcol2, pinfo, f"{state_key}_nvidia")
+        api_key = _managed
+        if st.button("Use my own API key instead",
+                     key=f"{state_key}_own"):
+            st.session_state[sk.AI_MANAGED] = False
+            st.rerun()
+    else:
+        pcol1, pcol2 = st.columns(2)
+        _pk = f"{state_key}_provider"
+        if _pk not in st.session_state and st.session_state.get(
+                sk.AI_PROVIDER):
+            st.session_state[_pk] = st.session_state[sk.AI_PROVIDER]
+        provider = pcol1.selectbox(
+            "AI provider",
+            options=list(PROVIDERS.keys()),
+            format_func=lambda p: PROVIDERS[p]["label"],
+            key=_pk,
+        )
+        pinfo = PROVIDERS[provider]
+        model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
+        env_key = os.environ.get(pinfo["env_var"], "")
+        if provider == "gemini" and not env_key:
+            env_key = os.environ.get("GOOGLE_API_KEY", "")
+        api_key = st.text_input(
+            f"{pinfo['label']} API key",
+            type="password",
+            value=st.session_state.get(sk.AI_KEY) or env_key,
+            help=f"Get a key at {pinfo['key_hint']}. Used only for "
+                 "this request; never stored.",
+            key=f"{state_key}_key",
+        )
+        if _managed and st.button("Back to the managed NVIDIA "
+                                  "endpoint", key=f"{state_key}_bk"):
+            st.session_state[sk.AI_MANAGED] = True
+            st.rerun()
+    return provider, model, api_key
+
+
 def ai_narrative_panel(
     state_key: str,
     prompt_builder,
@@ -296,53 +354,7 @@ def ai_narrative_panel(
                  "The objectivity rules (only supplied figures, no blame, "
                  "reproduce all caveats) are fixed and applied regardless.",
         )
-        _managed = managed_ai_key()
-        _use_managed = (st.session_state.get(sk.AI_MANAGED, bool(_managed))
-                        and bool(_managed))
-        if _use_managed:
-            # Managed default: the credential is never rendered. Only the
-            # model is offered — and the own-key switch is RIGHT HERE, in
-            # every panel, not routed through one page. The switch is one
-            # app-wide state: flipping it anywhere flips it everywhere.
-            pcol1, pcol2 = st.columns([1, 1])
-            pcol1.caption("Managed NVIDIA endpoint — no key required.")
-            provider = "nvidia"
-            pinfo = PROVIDERS[provider]
-            model = model_selector(pcol2, pinfo, f"{state_key}_nvidia")
-            api_key = _managed
-            if st.button("Use my own API key instead",
-                         key=f"{state_key}_own"):
-                st.session_state[sk.AI_MANAGED] = False
-                st.rerun()
-        else:
-            pcol1, pcol2 = st.columns(2)
-            _pk = f"{state_key}_provider"
-            if _pk not in st.session_state and st.session_state.get(
-                    sk.AI_PROVIDER):
-                st.session_state[_pk] = st.session_state[sk.AI_PROVIDER]
-            provider = pcol1.selectbox(
-                "AI provider",
-                options=list(PROVIDERS.keys()),
-                format_func=lambda p: PROVIDERS[p]["label"],
-                key=_pk,
-            )
-            pinfo = PROVIDERS[provider]
-            model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
-            env_key = os.environ.get(pinfo["env_var"], "")
-            if provider == "gemini" and not env_key:
-                env_key = os.environ.get("GOOGLE_API_KEY", "")
-            api_key = st.text_input(
-                f"{pinfo['label']} API key",
-                type="password",
-                value=st.session_state.get(sk.AI_KEY) or env_key,
-                help=f"Get a key at {pinfo['key_hint']}. Used only for "
-                     "this request; never stored.",
-                key=f"{state_key}_key",
-            )
-            if _managed and st.button("Back to the managed NVIDIA "
-                                      "endpoint", key=f"{state_key}_bk"):
-                st.session_state[sk.AI_MANAGED] = True
-                st.rerun()
+        provider, model, api_key = ai_provider_block(state_key)
 
         if st.button("Generate narrative", type="primary",
                      disabled=not api_key, key=f"{state_key}_go"):
