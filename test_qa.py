@@ -278,6 +278,66 @@ check("A16l terminal candidates offer the elected milestone first",
       trace_end_candidates([("B", B), ("U", U)], contract_ms="KD15")[0][0]
       == "KD15")
 
+# A16m-s. Analyst-election trace (the step-① adopted path, shared by
+# the As-Built CP page and APvAB). An elected path must be reported
+# no more charitably than a computed one.
+from programme import trace_from_election, build_asbuilt_multi_prompt
+_ad_path = [(a.task_code, a.name) for a in tr_fb.activities]
+_el = trace_from_election([("B", B), ("U", U)], _ad_path,
+                          basis_label="Actual sequence through recorded "
+                                      "dates (test)")
+check("A16m election trace keeps the adopted order and terminal",
+      [a.task_code for a in _el.activities] == [c for c, _ in _ad_path]
+      and _el.terminal_code == _ad_path[-1][0])
+check("A16n election trace discloses the adopted basis in its caveats",
+      any("ELECTION" in c for c in _el.caveats)
+      and any("Actual sequence through recorded dates (test)" in c
+              for c in _el.caveats))
+check("A16o election links agree with the computed trace on logic",
+      {(lk.pred_code, lk.succ_code): lk.had_logic for lk in _el.links}
+      == {(lk.pred_code, lk.succ_code): lk.had_logic
+          for lk in tr_fb.links})
+check("A16p election link scores stay in [0,1]",
+      all(0 <= lk.score <= 1 for lk in _el.links))
+# hand-edit: a pair the records cannot support scores zero temporal
+# evidence (successor starting long before its predecessor began)
+_el_bad = trace_from_election([("B", B), ("U", U)],
+                              [_ad_path[-1], _ad_path[0]])
+_bad_lk = _el_bad.links[0] if _el_bad.links else None
+check("A16q an out-of-order adopted pair is scored weak, not hidden",
+      _bad_lk is not None and _bad_lk.score <= 0.4)
+_el_hy = trace_from_election(
+    [("B", B), ("U", U)],
+    _ad_path + [("KD15", next(t.name for t in U.tasks
+                              if t.task_code == "KD15"))])
+check("A16r a forecast tail in the election is a disclosed hybrid",
+      _el_hy.hybrid and any("HYBRID" in c for c in _el_hy.caveats))
+_mp = build_asbuilt_multi_prompt([_el, _el_hy])
+check("A16s multi-path prompt covers every path and templates once",
+      "PATH 1 of 2" in _mp and "PATH 2 of 2" in _mp
+      and _mp.count("<context>") == 2)
+
+# A16t-v. As-built longest path (the step-① logic candidate) must run
+# THROUGH completed work to the earliest linked activity — not stop at
+# the data date the way a remaining-works longest path does.
+from programme import extract_asbuilt_longest_path
+_lp = extract_asbuilt_longest_path(U, end_task_code="KD15")
+_dd = U.project.data_date
+_lp_starts = [a.act_start for a in _lp.activities if a.act_start]
+check("A16t as-built longest path reaches back past the data date",
+      bool(_lp_starts) and min(_lp_starts) < _dd,
+      f"earliest {min(_lp_starts) if _lp_starts else None} vs dd {_dd}")
+check("A16u as-built longest path: every hand-off is programmed logic "
+      "and the chain is chronological",
+      all(lk.had_logic for lk in _lp.links)
+      and all(a.act_start <= b.act_start
+              for a, b in zip(_lp.activities, _lp.activities[1:])
+              if a.act_start and b.act_start))
+check("A16v unachieved terminal still anchors the logic candidate "
+      "as a disclosed hybrid",
+      _lp.terminal_code == "KD15" and _lp.hybrid
+      and any("HYBRID" in c for c in _lp.caveats))
+
 
 # A17. Sequence coding invariants
 from programme import propose_sequence_mapping, analyse_sequence

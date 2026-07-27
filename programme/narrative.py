@@ -862,15 +862,42 @@ def build_asbuilt_prompt(
     roll=None,
     template: str | None = None,
 ) -> str:
-    """Prompt for the as-built critical path (backward trace)."""
+    """Prompt for the as-built critical path (one adopted/traced path)."""
+    lines = _asbuilt_prompt_body(trace, roll)
+    lines.append(template or DEFAULT_TEMPLATES["asbuilt_path"])
+    return "\n".join(lines)
+
+
+def build_asbuilt_multi_prompt(
+    traces: list,
+    roll=None,
+    template: str | None = None,
+) -> str:
+    """One report across several adopted paths (one per milestone).
+
+    The work-package roll-up is project-wide, so it is presented once
+    with the first path rather than repeated per milestone.
+    """
+    lines: list[str] = []
+    for i, tr in enumerate(traces):
+        if len(traces) > 1:
+            lines.append(f"=== PATH {i + 1} of {len(traces)}: to "
+                         f"{tr.terminal_code or 'unknown'} ===\n")
+        lines.extend(_asbuilt_prompt_body(tr, roll if i == 0 else None))
+    lines.append(template or DEFAULT_TEMPLATES["asbuilt_path"])
+    return "\n".join(lines)
+
+
+def _asbuilt_prompt_body(trace, roll=None) -> list[str]:
     def fmt(d):
         return f"{d:%Y-%m-%d}" if d else "unknown"
-    lines = ["<context>As-built critical path traced BACKWARDS from a "
-             "chosen milestone to the start of the works. At each step "
-             "the predecessor is the activity whose recorded dates most "
-             "tightly precede it; a programmed relationship between the "
-             "pair corroborates the hand-off, and where none exists the "
-             "chain continues on SEQUENCE alone and is flagged. Activity "
+    lines = ["<context>As-built critical path to a chosen milestone — "
+             "either traced BACKWARDS through the recorded dates to the "
+             "start of the works, or the analyst's adopted election "
+             "between computed candidates (the caveats disclose which). "
+             "A programmed relationship between consecutive activities "
+             "corroborates the hand-off; where none exists the chain "
+             "continues on SEQUENCE alone and is flagged. Activity "
              "dates are as recorded; where the milestone was not reached "
              "the tail is the file's own forecast and is labelled "
              "'forecast'.</context>\n"]
@@ -923,8 +950,7 @@ def build_asbuilt_prompt(
     for w in trace.warnings:
         lines.append(f"- WARNING: {w}")
     lines.append("</caveats>\n")
-    lines.append(template or DEFAULT_TEMPLATES["asbuilt_path"])
-    return "\n".join(lines)
+    return lines
 
 def build_sequence_prompt(
     seq: SequenceResult, template: str | None = None

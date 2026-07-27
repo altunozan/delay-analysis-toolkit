@@ -129,24 +129,45 @@ def main() -> int:
 
             goto("As-Built Critical Path")
             page.wait_for_timeout(4000)
-            check("as-built page leads with the milestone dropdown",
-                  page.get_by_text("Trace back from").count() > 0)
-            check("as-built page renders the path gantt",
-                  page.locator("iframe").count() > 0)
-            check("as-built page shows logic links",
-                  page.get_by_text("Logic links along the path").count() > 0)
+            # the page now leads with THE step-① breakdown (the same
+            # shared block APvAB renders): dual candidates, divergence,
+            # hand-edit, adopt.
+            check("as-built page computes both CP candidates",
+                  page.get_by_text("Longest path (programme logic)",
+                                   exact=False).count() > 0
+                  and page.get_by_text("Actual sequence (recorded",
+                                       exact=False).count() > 0)
+            check("as-built milestone multiselect present",
+                  page.get_by_text("Milestone(s) to measure to",
+                                   exact=False).count() > 0)
             check("stitched/persistence jargon is gone",
                   page.get_by_text("persisten", exact=False).count() == 0
                   and page.get_by_text("stitch", exact=False).count() == 0)
-            check("as-built work-package section exception-free",
-                  exc() == 0, f"{exc()} exceptions")
+            ab_adopt = page.get_by_role("button", name="Adopt this path")
+            check("as-built adopt button present", ab_adopt.count() > 0)
+            if ab_adopt.count():
+                ab_adopt.first.click()
+                page.wait_for_timeout(6000)
+                check("as-built adoption exception-free", exc() == 0,
+                      f"{exc()} exceptions")
+                check("as-built umbrella editor appears (CP only)",
+                      page.get_by_text("Group the path into umbrella",
+                                       exact=False).count() > 0)
+                check("as-built linked gantt renders",
+                      page.locator("iframe").count() > 0)
+                check("as-built page shows logic links",
+                      page.get_by_text(
+                          "Logic links along the path").count() > 0)
+                check("as-built report generator present",
+                      page.get_by_text("AI Narrative Report",
+                                       exact=False).count() > 0)
+                check("as-built per-milestone workbook download present",
+                      page.get_by_text("Download as-built path report",
+                                       exact=False).count() > 0)
 
             # ---- umbrella grouping: type a name into the grid and
             # confirm it AUTO-adopts (the old two-button flow shipped
             # with the measurement gate never switching on).
-            page.get_by_text("Group the path into work packages",
-                             exact=False).first.click()
-            page.wait_for_timeout(3000)
             check("umbrella editor defaults to critical-path rows",
                   page.get_by_text("Show all", exact=False).count() > 0)
             # the propose area renders THE shared provider block — the
@@ -182,8 +203,11 @@ def main() -> int:
                 type_umbrella_cells()          # one retry on grid flake
             check("typing in the grid auto-adopts the grouping",
                   page.get_by_text("Adopted — measured span").count() > 0)
-            check("grouped gantt toggle appears",
-                  page.get_by_text("Show as work packages").count() > 0)
+            # no toggle any more: the shared block's gantt always
+            # brackets umbrella groups (▣ headers, members beneath)
+            check("grouped gantt renders with the umbrella legend",
+                  page.get_by_text("umbrella work packages",
+                                   exact=False).count() > 0)
             check("umbrella typing exception-free",
                   exc() == 0, f"{exc()} exceptions")
 

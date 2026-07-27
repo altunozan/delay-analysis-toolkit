@@ -27,7 +27,9 @@ from .asbuilt_path import (
     ActualTraceResult,
     TraceLink,
     extract_actual_trace,
+    extract_asbuilt_longest_path,
     trace_end_candidates,
+    trace_from_election,
 )
 from .comparison import (
     ActivityRef,
@@ -138,6 +140,7 @@ from .milestones import (
 )
 from .narrative import (
     build_asbuilt_prompt,
+    build_asbuilt_multi_prompt,
     build_apab_report_prompt,
     build_comparison_prompt,
     build_critical_path_prompt,
@@ -337,6 +340,8 @@ __all__ = [
     "TraceLink",
     "PathActivity",
     "extract_actual_trace",
+    "extract_asbuilt_longest_path",
+    "trace_from_election",
     "trace_end_candidates",
     # comparison
     "ActivityRef",
@@ -481,6 +486,7 @@ __all__ = [
     "analyse_windows",
     # narrative prompts
     "build_asbuilt_prompt",
+    "build_asbuilt_multi_prompt",
     "build_apab_report_prompt",
     "build_comparison_prompt",
     "build_explain_prompt",

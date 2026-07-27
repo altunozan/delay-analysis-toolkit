@@ -291,12 +291,14 @@ def extract_actual_trace(
             break
         pool = with_logic or cands
         score, gap, kind, logic, best = pool[0]
+        if best.task_code in seen:
+            break        # cycle guard — never link to an off-chain pred
         result.links.append(TraceLink(
             pred_code=best.task_code, pred_name=best.name,
             succ_code=cur.task_code, succ_name=cur.name,
             kind=kind, gap_days=round(gap, 1), had_logic=logic,
             score=round(score, 2), alternatives=len(cands) - 1))
-        cur = best if best.task_code not in seen else None
+        cur = best
 
     chain.reverse()
     result.activities = [PathActivity(
@@ -304,6 +306,14 @@ def extract_actual_trace(
         act_start=_eff_start(t), act_finish=_eff_finish(t),
         forecast_by="actual-date trace", basis=_basis(t)) for t in chain]
 
+    _annotate_trace(result, weak_score)
+    return result
+
+
+def _annotate_trace(result: ActualTraceResult, weak_score: float) -> None:
+    """Composition / weak-link / corroboration warnings — shared by the
+    backward trace and the analyst-election constructor, so an elected
+    path is disclosed exactly as sternly as a computed one."""
     if result.forecast_count or result.in_progress_count:
         result.warnings.append(
             f"Path composition: {result.asbuilt_count} as-built, "
@@ -344,9 +354,222 @@ def extract_actual_trace(
             + ". These are sequential observations, not evidenced "
               "drivers — confirm each against the contemporaneous record."
         )
+
+
+ASBUILT_LP_CAVEATS = [
+    "The longest-path candidate walks BACKWARD from the elected milestone "
+    "over the programme's own relationships, at each step following the "
+    "predecessor whose effective dates — actual where recorded, the "
+    "file's forecast where not — finished last: the relationship that "
+    "governed the successor's start. It runs through completed work to "
+    "the earliest linked activity; it does not stop at the data date.",
+    "Where an activity's linked predecessors carry no usable earlier "
+    "dates the walk stops and the stop is disclosed — missing logic at "
+    "that point breaks the programmed chain, not the tool.",
+]
+
+
+def extract_asbuilt_longest_path(
+    data: XerData,
+    *,
+    end_task_code: str | None = None,
+    max_gap_days: float = 15.0,
+    weak_score: float = 0.5,
+) -> ActualTraceResult:
+    """Longest path of the as-built programme, walked to the earliest
+    linked activity.
+
+    Backward walk from the elected milestone over the programme's OWN
+    relationships, at each step following the predecessor whose
+    effective dates — actual where recorded, the file's early dates
+    where not — finished last: the relationship that governed the
+    successor's start. Unlike a remaining-works longest path it does
+    not stop at the data date; completed work carries the walk back to
+    the start of the works. Completed work is never driven by work
+    that has not started, and the walk only ever steps to an earlier
+    start, so it cannot cycle.
+    """
+    result = ActualTraceResult()
+    result.caveats.extend(ASBUILT_LP_CAVEATS)
+    result.data_date = data.project.data_date if data.project else None
+    by_id = {t.task_id: t for t in data.tasks if not t.is_loe_or_wbs}
+    by_code = {t.task_code: t for t in by_id.values()}
+    preds_by_id: dict[str, list[str]] = {}
+    for r in data.relationships:
+        if r.task_id in by_id and r.pred_task_id in by_id:
+            preds_by_id.setdefault(r.task_id, []).append(r.pred_task_id)
+
+    if end_task_code and end_task_code in by_code:
+        terminal = by_code[end_task_code]
+    else:
+        if end_task_code:
+            result.warnings.append(
+                f"End activity '{end_task_code}' is not in this revision "
+                "— using the latest effective finisher instead.")
+        cands = [t for t in by_id.values() if _eff_finish(t)]
+        if not cands:
+            result.warnings.append("No activities with usable dates.")
+            return result
+        terminal = max(cands,
+                       key=lambda t: (_eff_finish(t), t.is_milestone))
+    result.terminal_code = terminal.task_code
+    if terminal.act_finish is None:
+        result.hybrid = True
+        result.caveats.insert(0, HYBRID_CAVEAT)
+
+    chain: list = []
+    seen: set[str] = set()
+    cur = terminal
+    while cur is not None and cur.task_code not in seen and len(chain) < 500:
+        seen.add(cur.task_code)
+        chain.append(cur)
+        s_start = _eff_start(cur)
+        allow_forecast_pred = _basis(cur) in ("forecast", "in-progress")
+        preds = preds_by_id.get(cur.task_id, [])
+        pool = []
+        for pid in preds:
+            p = by_id[pid]
+            if p.task_code in seen:
+                continue
+            if _basis(p) == "forecast" and not allow_forecast_pred:
+                continue
+            p_fin, p_start = _eff_finish(p), _eff_start(p)
+            if p_fin is None or p_start is None:
+                continue
+            if s_start is not None and p_start >= s_start:
+                continue        # backward progress only — cannot cycle
+            pool.append(p)
+        if not pool:
+            if preds:
+                result.warnings.append(
+                    f"Longest path stopped at {cur.task_code} "
+                    f"('{cur.name}'): none of its {len(preds)} linked "
+                    "predecessor(s) carries usable earlier dates — the "
+                    "programmed chain breaks here.")
+            break
+        best = max(pool, key=lambda p: (_eff_finish(p), _eff_start(p)))
+        p_fin, p_start = _eff_finish(best), _eff_start(best)
+        if (s_start is not None and p_start is not None
+                and p_start <= s_start <= p_fin):
+            kind, gap = "parallel", 0.0
+        else:
+            kind = "finish-start"
+            gap = ((s_start - p_fin).total_seconds() / 86400.0
+                   if s_start is not None else 0.0)
+        t_score = max(0.0, 1.0 - max(gap, 0.0) / max_gap_days)
+        if kind == "parallel":
+            t_score *= 0.6
+        score = 0.6 * t_score + 0.4        # programmed logic throughout
+        result.links.append(TraceLink(
+            pred_code=best.task_code, pred_name=best.name,
+            succ_code=cur.task_code, succ_name=cur.name,
+            kind=kind, gap_days=round(gap, 1), had_logic=True,
+            score=round(score, 2), alternatives=len(pool) - 1))
+        cur = best
+
+    chain.reverse()
+    result.activities = [PathActivity(
+        task_code=t.task_code, name=t.name,
+        act_start=_eff_start(t), act_finish=_eff_finish(t),
+        forecast_by="as-built longest path", basis=_basis(t))
+        for t in chain]
+    _annotate_trace(result, weak_score)
     return result
 
 
+ELECTION_CAVEATS = [
+    "This as-built critical path is the analyst's ELECTION between "
+    "computed candidates — the as-built programme's own longest path and "
+    "the actual recorded sequence — possibly hand-edited; the adopted "
+    "basis is recorded and disclosed with every figure.",
+    "Hand-off evidence is recomputed pair by pair along the adopted "
+    "chain: the recorded gap between consecutive activities, and whether "
+    "a programmed relationship between the pair existed in any revision. "
+    "A date-adjacent hand-off is a sequential observation, not proof "
+    "that one activity drove the other.",
+]
+
+
+def trace_from_election(
+    revisions: list[tuple[str, XerData]],
+    path: list[tuple[str, str]],
+    *,
+    basis_label: str = "analyst election",
+    max_gap_days: float = 15.0,
+    overlap_tolerance_days: float = 2.0,
+    weak_score: float = 0.5,
+) -> ActualTraceResult:
+    """ActualTraceResult for an analyst-ADOPTED path (the step-① election).
+
+    ``path`` is the adopted ``[(task_code, name)]`` in execution order —
+    whichever candidate the analyst picked, plus any hand edits. The
+    evidential annotations (basis per activity, gap/logic/score per
+    hand-off, hybrid disclosure) are recomputed with the same rules as
+    the backward trace, so an elected path is reported no more
+    charitably than a computed one. A pair the records cannot support —
+    a successor starting before its predecessor even began — scores
+    zero temporal evidence and is flagged weak.
+    """
+    result = ActualTraceResult()
+    result.caveats.extend(ELECTION_CAVEATS)
+    result.caveats.append(f"Adopted basis: {basis_label}.")
+    if not revisions or not path:
+        result.warnings.append("No adopted path to report.")
+        return result
+
+    _, latest = revisions[-1]
+    result.data_date = latest.project.data_date if latest.project else None
+    by_code = {t.task_code: t for t in latest.tasks if not t.is_loe_or_wbs}
+
+    logic_pairs: set[tuple[str, str]] = set()
+    for _, data in revisions:
+        id_to_code = {t.task_id: t.task_code for t in data.tasks}
+        for r in data.relationships:
+            p, s = id_to_code.get(r.pred_task_id), id_to_code.get(r.task_id)
+            if p and s:
+                logic_pairs.add((p, s))
+
+    chain = [by_code[c] for c, _ in path if c in by_code]
+    dropped = len(path) - len(chain)
+    if dropped:
+        result.warnings.append(
+            f"{dropped} adopted code(s) are not in the latest revision "
+            "and were dropped from the report.")
+    result.activities = [PathActivity(
+        task_code=t.task_code, name=t.name,
+        act_start=_eff_start(t), act_finish=_eff_finish(t),
+        forecast_by="analyst election", basis=_basis(t)) for t in chain]
+    if result.activities:
+        result.terminal_code = result.activities[-1].task_code
+    result.hybrid = result.forecast_count > 0
+    if result.hybrid:
+        result.caveats.insert(0, HYBRID_CAVEAT)
+
+    for pred, succ in zip(chain, chain[1:]):
+        p_fin, p_start = _eff_finish(pred), _eff_start(pred)
+        s_start = _eff_start(succ)
+        if p_fin is None or s_start is None:
+            continue
+        gap = (s_start - p_fin).total_seconds() / 86400.0
+        if p_start is not None and p_start <= s_start <= p_fin:
+            kind, gap = "parallel", 0.0
+        else:
+            kind = "finish-start"
+        t_score = max(0.0, 1.0 - max(gap, 0.0) / max_gap_days)
+        if kind == "parallel":
+            t_score *= 0.6                # weaker evidence than a hand-off
+        elif gap < -overlap_tolerance_days:
+            t_score = 0.0                 # succ began before pred started
+        logic = (pred.task_code, succ.task_code) in logic_pairs
+        score = 0.6 * t_score + 0.4 * (1.0 if logic else 0.0)
+        result.links.append(TraceLink(
+            pred_code=pred.task_code, pred_name=pred.name,
+            succ_code=succ.task_code, succ_name=succ.name,
+            kind=kind, gap_days=round(gap, 1), had_logic=logic,
+            score=round(score, 2), alternatives=0))
+
+    _annotate_trace(result, weak_score)
+    return result
 
 
 def trace_end_candidates(
