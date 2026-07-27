@@ -107,11 +107,24 @@ def combine_mappings(
     }
 
 
-def _planned_dates(t: Task) -> tuple[datetime | None, datetime | None]:
-    """Baseline planned start/finish (target dates, falling back to early)."""
-    start = t.target_start or t.early_start
-    finish = t.target_finish or t.early_finish
-    return start, finish
+def _planned_dates(t: Task, basis: str = "target",
+                   ) -> tuple[datetime | None, datetime | None]:
+    """Baseline planned start/finish under the elected date basis.
+
+    ``target`` — the plan dates as exported (falling back to early);
+    ``late``   — the baseline's late dates LS/LF (the position with all
+                 float consumed — the contractual backstop);
+    ``early``  — the baseline's early dates ES/EF.
+    Fallback order keeps a usable date when a family is absent.
+    """
+    if basis == "late":
+        return (t.late_start or t.target_start or t.early_start,
+                t.late_finish or t.target_finish or t.early_finish)
+    if basis == "early":
+        return (t.early_start or t.target_start,
+                t.early_finish or t.target_finish)
+    return (t.target_start or t.early_start,
+            t.target_finish or t.early_finish)
 
 
 def _recorded_dates(t: Task) -> tuple[datetime | None, datetime | None]:
@@ -218,13 +231,18 @@ def planned_vs_actual(
     baseline: "XerData",
     latest: "XerData",
     codes: set[str] | None = None,
+    date_basis: str = "target",
 ) -> list[dict]:
     """Per-activity planned (baseline) vs actual (latest) date comparison.
 
     Feeds the As-Planned vs As-Built stepped method: ``codes`` limits the
     comparison to the as-built section under review (e.g. the as-built
-    critical path); None compares every matched activity. Variances are
-    in calendar days, positive = later than planned.
+    critical path); None compares every matched activity. ``date_basis``
+    elects which baseline dates are "planned": target (default),
+    late (LS/LF) or early (ES/EF). Variances are in calendar days,
+    positive = later than planned. The actual side takes recorded
+    actuals where present, else the latest revision's forecast — so
+    the forecast tail beyond the data date still carries a bar.
     """
     base_by = {t.task_code: t for t in baseline.tasks
                if not t.is_loe_or_wbs}
@@ -235,16 +253,19 @@ def planned_vs_actual(
         if codes is not None and t.task_code not in codes:
             continue
         b = base_by.get(t.task_code)
-        ps, pf = _planned_dates(b) if b is not None else (None, None)
+        ps, pf = (_planned_dates(b, date_basis)
+                  if b is not None else (None, None))
         rows.append({
             "task_code": t.task_code,
             "name": t.name,
             "planned_start": ps,
             "planned_finish": pf,
-            "actual_start": t.act_start,
-            "actual_finish": t.act_finish,
-            "start_var_days": _delta_days(ps, t.act_start),
-            "finish_var_days": _delta_days(pf, t.act_finish),
+            "actual_start": t.act_start or t.early_start,
+            "actual_finish": t.act_finish or t.early_finish,
+            "actual_is_forecast": t.act_finish is None,
+            "start_var_days": _delta_days(ps, t.act_start or t.early_start),
+            "finish_var_days": _delta_days(
+                pf, t.act_finish or t.early_finish),
             "in_baseline": b is not None,
         })
     rows.sort(key=lambda r: (r["actual_start"] or datetime.max,

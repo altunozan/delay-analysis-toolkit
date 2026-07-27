@@ -187,47 +187,45 @@ def main() -> int:
             check("umbrella typing exception-free",
                   exc() == 0, f"{exc()} exceptions")
 
-            # APvAB: walk EVERY method step — the step-③ iframe once
-            # shipped broken because the default step hid it.
+            # APvAB: the 4-step method (2026-07-27 spec). Step ① must
+            # offer BOTH candidate paths and adopt one; later steps
+            # depend on the adoption, so walk in order.
             goto("As-Planned vs As-Built")
-            for lbl in ("② As-built critical path",
-                        "③ Planned-dates comparison", "④ Key dates",
-                        "⑤ Windows & delay"):
-                page.get_by_text(lbl, exact=True).first.click()
-                page.wait_for_timeout(5000)
-                check(f"APvAB step '{lbl[0]}' exception-free",
-                      exc() == 0, f"{exc()} exceptions")
-            check("APvAB comparison gantt iframe renders",
-                  page.locator("iframe").count() > 0)
-
-            # Umbrella grouping: only appears once a path is adopted, so
-            # the plain step walk above never reaches it.
-            page.get_by_text("② As-built critical path",
-                             exact=True).first.click()
             page.wait_for_timeout(4000)
-            check("APvAB step ② offers trace-or-define-it-yourself",
-                  page.get_by_text("I define it myself").count() > 0)
-            adopt = page.get_by_role(
-                "button", name="Use this as the as-built critical path →")
+            check("APvAB ① computes both CP candidates",
+                  page.get_by_text("Longest path (programme logic)",
+                                   exact=False).count() > 0
+                  and page.get_by_text("Actual sequence (recorded",
+                                       exact=False).count() > 0)
+            check("APvAB ① milestone multiselect present",
+                  page.get_by_text("Milestone(s) to measure to",
+                                   exact=False).count() > 0)
+            adopt = page.get_by_role("button", name="Adopt this path")
+            check("APvAB ① adopt button present", adopt.count() > 0)
             if adopt.count():
                 adopt.first.click()
-                page.wait_for_timeout(5000)
-                check("umbrella grouping section appears after adoption",
-                      page.get_by_text("Group into umbrella activities",
-                                       exact=False).count() > 0)
-                # the grouping typed on the As-Built page must reach the
-                # APvAB measurement (one shared state, gate ON)
-                page.get_by_text("③ Planned-dates comparison",
-                                 exact=True).first.click()
                 page.wait_for_timeout(6000)
-                check("APvAB measures on the shared umbrella grouping",
-                      page.get_by_text("Measuring on",
+                check("APvAB ① adoption exception-free", exc() == 0,
+                      f"{exc()} exceptions")
+                check("APvAB ① umbrella editor appears (CP only)",
+                      page.get_by_text("Group the path into umbrella",
                                        exact=False).count() > 0)
-                check("umbrella adoption exception-free",
+                check("APvAB ① linked gantt renders",
+                      page.locator("iframe").count() > 0)
+            for lbl, probe in (
+                ("② As-planned vs as-built", "Late dates (LS/LF)"),
+                ("③ Windows", "key dates"),
+                ("④ Gantt & report", "AI Narrative Report"),
+            ):
+                page.get_by_text(lbl, exact=True).first.click()
+                page.wait_for_timeout(6000)
+                check(f"APvAB step '{lbl[0]}' exception-free",
                       exc() == 0, f"{exc()} exceptions")
-            else:
-                check("umbrella grouping section appears after adoption",
-                      False, "adopt button not found")
+                check(f"APvAB step '{lbl[0]}' shows expected content",
+                      page.get_by_text(probe, exact=False).count() > 0,
+                      f"probe '{probe}' missing")
+            check("APvAB ② planned-below/as-built-above gantt renders",
+                  page.locator("iframe").count() > 0)
 
             # TIA stepper gating (Prospective group)
             goto("Time Impact Analysis")

@@ -40,11 +40,13 @@ CONTRACT_MS = "contract_completion_ms"  # analyst-flagged contractual
 #                                         completion milestone code
 
 # --- As-Planned vs As-Built stepped method ------------------------------
-APAB_PATH = "apab_path"              # adopted as-built CP [(code, name)]
-APAB_PATH_BASIS = "apab_path_basis"  # which basis was adopted (disclosed)
+# Multi-milestone: each elected milestone carries its own adopted path,
+# basis election and measurement (Ozan 2026-07-27 spec).
+APAB_MS = "apab_ms"                  # [milestone codes] elected in step ①
+APAB_PATHS = "apab_paths"            # dict[ms, [(code, name)]] adopted CP
+APAB_PATH_BASIS = "apab_path_basis"  # dict[ms, basis label] (disclosed)
 APAB_KEYDATES = "apab_keydates"      # dict[code, why-key note]
-APAB_CMP_ROWS = "apab_cmp_rows"      # planned_vs_actual rows (step ③→⑤)
-APAB_STITCH_FREQ = "apab_stitch_freq"  # persistence threshold chosen
+APAB_DATE_BASIS = "apab_date_basis"  # "late" (default) | "early"
 
 # --- Umbrella activities (work-package roll-up) -------------------------
 # ONE grouping, defined once and reused wherever an as-built activity

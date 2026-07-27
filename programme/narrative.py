@@ -146,6 +146,36 @@ as-built.
 
 ### 7. Limitations
 Every standing caveat and warning provided, in full.""",
+    "apab": """\
+## As-Planned vs As-Built Analysis
+
+### 1. Executive Summary
+2-3 sentences: the milestone(s) measured to, the as-built critical path
+basis adopted, and the headline delay per milestone in calendar days.
+
+### 2. The As-Built Critical Path
+How the path was defined (longest path of the as-built programme, the
+actual recorded sequence, or the analyst's own selection — as stated in
+the data), and the work packages it runs through, in as-built order.
+
+### 3. As-Planned vs As-Built, Package by Package
+For each work package / activity on the path: planned dates (state the
+elected basis — late or early), as-built dates, and the variance in
+days. Tell it as a construction narrative, worst variances called out.
+
+### 4. Analysis Windows
+Per window (bounded by the analyst's key dates): the planned interval,
+the as-built interval, and the window delay. State which windows carry
+the delay and which recovered time. Resequenced windows are excluded
+from the cumulative total and must be reported as such.
+
+### 5. Delay to Each Milestone
+Per measured milestone: planned completion, as-built (or forecast)
+completion, and the measured delay. Where the milestone is not yet
+achieved, say the figure rests on the programme's own forecast.
+
+### 6. Limitations
+Every caveat and warning provided, in full.""",
     "comparison": """\
 ## Programme Revision Comparison
 
@@ -1042,4 +1072,74 @@ def build_explain_prompt(res: ExplainResult,
     lines.extend(f"- {w}" for w in res.warnings)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["explain"]))
+    return "\n".join(lines)
+
+
+def build_apab_report_prompt(
+    sections: list[dict],
+    date_basis: str,
+    windows_by_ms: dict[str, list[dict]] | None = None,
+    caveats: list[str] | None = None,
+    template: str | None = None,
+) -> str:
+    """Prompt for the 4-step As-Planned vs As-Built method.
+
+    ``sections`` — one dict per measured milestone:
+      {"ms", "ms_name", "basis", "delay_days", "achieved",
+       "rows": [planned_vs_actual-shaped dicts incl. row_kind]}.
+    """
+    def fmt(d):
+        return f"{d:%Y-%m-%d}" if d else "unknown"
+    lines = ["<context>As-planned vs as-built analysis. The as-built "
+             "critical path per milestone was elected by the analyst "
+             "from computed candidates (longest path of the as-built "
+             "programme vs the actual recorded sequence) and may carry "
+             "analyst edits; the basis is stated per milestone. Planned "
+             "dates come from the contract baseline under the stated "
+             "date basis. Variances in calendar days, positive = later "
+             "than planned. Rows marked [umbrella] are analyst-confirmed "
+             "work packages; their members follow marked [member]. "
+             "Activities beyond the data date carry the programme's own "
+             "forecast, flagged [forecast].</context>\n"]
+    lines.append(f"<date_basis>Planned dates = the baseline's "
+                 f"{'LATE (LS/LF)' if date_basis == 'late' else 'EARLY (ES/EF)'}"
+                 " dates.</date_basis>\n")
+    for sec in sections:
+        d = sec.get("delay_days")
+        lines.append(
+            f"<milestone code='{sec['ms']}' name='{sec.get('ms_name', '')}' "
+            f"basis='{sec.get('basis', '')}' "
+            f"achieved='{str(bool(sec.get('achieved'))).lower()}' "
+            f"delay_days='{d if d is not None else 'n/a'}'>")
+        for r in sec.get("rows", []):
+            kind = r.get("row_kind") or "activity"
+            if kind == "section":
+                continue
+            tag = ("[umbrella]" if kind == "umbrella"
+                   else "[member]" if kind == "member" else "")
+            fc = "[forecast]" if r.get("actual_is_forecast") else ""
+            var = r.get("finish_var_days")
+            lines.append(
+                f"- {tag}{fc} {r['task_code']} '{r['name']}': planned "
+                f"{fmt(r.get('planned_start'))} -> "
+                f"{fmt(r.get('planned_finish'))}, as-built "
+                f"{fmt(r.get('actual_start'))} -> "
+                f"{fmt(r.get('actual_finish'))}"
+                + (f", variance {var:+.0f}d" if var is not None else ""))
+        for w in (windows_by_ms or {}).get(sec["ms"], []):
+            lines.append(
+                f"  window {w.get('from_code')} -> {w.get('to_code')}: "
+                f"planned interval {w.get('planned_interval_days')}d, "
+                f"as-built {w.get('actual_interval_days')}d, delay "
+                f"{w.get('window_delay_days')}d"
+                + (", RESEQUENCED (excluded from cumulative)"
+                   if w.get("resequenced") else "")
+                + f", cumulative {w.get('cumulative_delay_days')}d")
+        lines.append("</milestone>\n")
+    lines.append("<caveats>")
+    for c in (caveats or []):
+        lines.append(f"- {c}")
+    lines.append("</caveats>\n")
+    lines.append(_HARD_RULES + "\n")
+    lines.append(template or DEFAULT_TEMPLATES["apab"])
     return "\n".join(lines)

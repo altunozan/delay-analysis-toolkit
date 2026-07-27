@@ -514,19 +514,28 @@ def build_apab_gantt_html(
     overall_delay_days: float | None = None,
     title: str = "As-Planned vs As-Built",
     max_rows: int = 250,
+    windows: list[dict] | None = None,
+    data_date=None,
 ) -> str:
     """Comparison gantt: as-built bar ABOVE, as-planned bar BELOW, per
     activity — with data columns, key-date markers (planned vs actual
     finish) and the per-activity / overall delay measurement.
 
-    ``rows`` come from programme.variance.planned_vs_actual.
-    Dark-themed to match the app; server-rendered static HTML.
+    ``rows`` come from programme.variance.planned_vs_actual, optionally
+    carrying ``row_kind`` ("section" | "umbrella" | "member") so a
+    milestone's path renders as its own section and umbrella members sit
+    indented beneath their group header. ``windows`` draws analysis
+    windows as shaded CURTAINS: [{"label", "start", "end",
+    "delay_days"}] with datetime bounds. ``data_date`` draws the dashed
+    marker separating recorded work from forecast.
     """
     from datetime import datetime as _dt
 
     keydates = keydates or {}
+    windows = windows or []
     use = [r for r in rows
-           if r.get("planned_start") or r.get("actual_start")][:max_rows]
+           if r.get("planned_start") or r.get("actual_start")
+           or r.get("row_kind") == "section"][:max_rows]
     dates = [d for r in use for d in (
         r.get("planned_start"), r.get("planned_finish"),
         r.get("actual_start"), r.get("actual_finish")) if d]
@@ -626,6 +635,22 @@ def build_apab_gantt_html(
   .tblock span { display:block; color:#5B7994; letter-spacing:.11em;
                  font-size:7.5px; text-transform:uppercase; }
   .tblock b { font-size:10px; letter-spacing:.02em; }
+  .curt { position:absolute; top:0; bottom:0;
+          background:rgba(20,50,74,.05);
+          border-left:1.5px dashed #5B7994; }
+  .curt.alt { background:rgba(155,50,39,.045); }
+  .wlab { position:absolute; top:1px; font-size:9px; font-weight:700;
+          color:#14324A; white-space:nowrap; padding-left:4px;
+          font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  .ddl { position:absolute; top:0; bottom:0; border-left:2px dashed
+         #9B3227; z-index:5; }
+  tr.sec td { background:#14324A !important; color:#FCFCFA;
+              font-size:10.5px; font-weight:700; letter-spacing:.08em;
+              text-transform:uppercase; padding:3px 10px;
+              font-family:ui-monospace,"SF Mono",Menlo,monospace; }
+  tr.umb td.lbl div { font-weight:700; }
+  tr.umb td { background:rgba(20,50,74,.07) !important; }
+  .memnm { padding-left:18px; color:#3d5a75; }
 </style></head><body>""", head, """
 <div class='leg'>
 <span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late (45&#176; dense)
@@ -646,24 +671,70 @@ def build_apab_gantt_html(
                   for mx, lbl in grid)
     mon_body = "".join(f"<div class='mon' style='left:{mx:.0f}px'></div>"
                        for mx, _ in grid)
+    # curtains + data-date overlays, reused in every lane
+    over = []
+    for i, w in enumerate(windows):
+        ws_, we_ = w.get("start"), w.get("end")
+        if not (ws_ and we_):
+            continue
+        lo, wd = x(ws_), max(x(we_) - x(ws_), 2)
+        _wt = w.get("label", "")
+        over.append(f"<div class='curt{' alt' if i % 2 else ''}' "
+                    f"style='left:{lo:.0f}px;width:{wd:.0f}px' "
+                    f"title='{_wt}'></div>")
+    if data_date is not None:
+        over.append(f"<div class='ddl' style='left:{x(data_date):.0f}px'"
+                    " title='data date'></div>")
+    overlay = "".join(over)
     parts.append(f"<tr class='hdr'>{hdr_cells}"
                  f"<td class='lane' style='min-width:{W:.0f}px;"
                  f"height:26px'>{mon}</td></tr>")
+    if windows:
+        wl = []
+        for i, w in enumerate(windows):
+            ws_, we_ = w.get("start"), w.get("end")
+            if not (ws_ and we_):
+                continue
+            d = w.get("delay_days")
+            lab = w.get("label", f"W{i + 1}")
+            txt = (f"{lab}: {d:+.0f}d" if d is not None else lab)
+            wl.append(f"<div class='curt{' alt' if i % 2 else ''}' "
+                      f"style='left:{x(ws_):.0f}px;"
+                      f"width:{max(x(we_) - x(ws_), 2):.0f}px'></div>"
+                      f"<div class='wlab' style='left:{x(ws_):.0f}px'>"
+                      f"{txt}</div>")
+        parts.append("<tr class='r' style='height:16px'>"
+                     "<td class='lbl'><div><span class='aid'></span>"
+                     "<span class='anm' style='font-size:9.5px;"
+                     "color:#5B7994'>ANALYSIS WINDOWS "
+                     "(delay = as-built vs as-planned interval)</span>"
+                     "</div></td>"
+                     f"<td class='lane' style='min-width:{W:.0f}px'>"
+                     + "".join(wl) + "</td></tr>")
 
     for r in use:
         code = r["task_code"]
+        kind = r.get("row_kind") or ""
+        if kind == "section":
+            parts.append(f"<tr class='sec'><td class='lbl'><div>"
+                         f"{r['name']}</div></td>"
+                         f"<td style='min-width:{W:.0f}px'></td></tr>")
+            continue
         is_kd = code in keydates
         var = r.get("finish_var_days")
         var_cls = "late" if (var or 0) > 0 else "early"
         var_txt = f"{var:+.0f}" if var is not None else ""
+        _nm_cls = "anm memnm" if kind == "member" else "anm"
+        _nm = (("▣ " if kind == "umbrella" else
+                "↳ " if kind == "member" else "") + r["name"][:58])
         lbl = (f"<td class='lbl'><div><span class='aid'>{code}</span>"
-               f"<span class='anm'>{r['name'][:60]}</span>"
+               f"<span class='{_nm_cls}'>{_nm}</span>"
                f"<span class='adt'>{f(r.get('planned_start'))}</span>"
                f"<span class='adt'>{f(r.get('planned_finish'))}</span>"
                f"<span class='adt'>{f(r.get('actual_start'))}</span>"
                f"<span class='adt'>{f(r.get('actual_finish'))}</span>"
                f"<span class='var {var_cls}'>{var_txt}</span></div></td>")
-        kids = [mon_body]
+        kids = [mon_body, overlay]
         ps, pf = r.get("planned_start"), r.get("planned_finish")
         as_, af = r.get("actual_start"), r.get("actual_finish")
         if ps and pf:
@@ -701,7 +772,9 @@ def build_apab_gantt_html(
                             f"width:{hi-lo:.0f}px'></div>")
             kids.append(f"<div class='dlab {var_cls}' "
                         f"style='left:{hi+8:.0f}px'>{var_txt}d</div>")
-        parts.append(f"<tr class='r{' kd' if is_kd else ''}'>{lbl}"
+        _cls = "r" + (" kd" if is_kd else "") + \
+            (" umb" if kind == "umbrella" else "")
+        parts.append(f"<tr class='{_cls}'>{lbl}"
                      f"<td class='lane' style='min-width:{W:.0f}px'>"
                      + "".join(kids) + "</td></tr>")
 

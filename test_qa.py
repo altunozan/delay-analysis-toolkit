@@ -1843,6 +1843,29 @@ for _f in _n_glob.glob("views/*.py"):
 check("N11 no view reads sk.AI_KEY directly (resolver only)",
       not _n_offenders, str(_n_offenders))
 
+# N12. planned_vs_actual date basis (APvAB step ②: late default).
+_n_late = {r["task_code"]: r for r in
+           planned_vs_actual(B, U, None, date_basis="late")}
+_n_early = {r["task_code"]: r for r in
+            planned_vs_actual(B, U, None, date_basis="early")}
+_n_b_by = {t.task_code: t for t in B.tasks if not t.is_loe_or_wbs}
+_n_probe = [c for c, t in _n_b_by.items()
+            if t.late_finish and t.early_finish
+            and t.late_finish != t.early_finish and c in _n_late][:50]
+check("N12 late basis reads the baseline's LS/LF",
+      _n_probe and all(
+          _n_late[c]["planned_finish"] == _n_b_by[c].late_finish
+          for c in _n_probe))
+check("N12b early basis reads the baseline's ES/EF",
+      all(_n_early[c]["planned_finish"] == _n_b_by[c].early_finish
+          for c in _n_probe))
+check("N12c late finish never earlier than early finish",
+      all(_n_late[c]["planned_finish"] >= _n_early[c]["planned_finish"]
+          for c in _n_probe))
+check("N12d forecast tail carried on the as-built side, flagged",
+      any(r.get("actual_is_forecast") and r["actual_finish"]
+          for r in _n_late.values()))
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

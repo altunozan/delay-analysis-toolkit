@@ -138,6 +138,7 @@ from .milestones import (
 )
 from .narrative import (
     build_asbuilt_prompt,
+    build_apab_report_prompt,
     build_comparison_prompt,
     build_critical_path_prompt,
     build_explain_prompt,
@@ -480,6 +481,7 @@ __all__ = [
     "analyse_windows",
     # narrative prompts
     "build_asbuilt_prompt",
+    "build_apab_report_prompt",
     "build_comparison_prompt",
     "build_explain_prompt",
     "build_float_erosion_prompt",
