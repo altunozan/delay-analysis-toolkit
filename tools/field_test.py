@@ -1,6 +1,18 @@
 """Field test: every engine against every project family, timed,
-tracebacks captured. Usage: python3 field_test.py <PROJECT_DIR> [files...]"""
-import glob, sys, time, traceback
+tracebacks captured.
+
+Usage (either form works — the path bootstrap below makes the direct
+invocation find the repo packages even though this file lives in
+tools/, audit F-09):
+
+    python3 tools/field_test.py <PROJECT_DIR> [files...]
+    python3 -m tools.field_test <PROJECT_DIR> [files...]
+"""
+import glob, os, sys, time, traceback
+
+# Direct invocation puts tools/ at sys.path[0]; the repo root (where
+# dcma/ and programme/ live) is one level up.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dcma.xer_parser import parse_xer
 from dcma.config import DCMAConfig

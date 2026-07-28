@@ -16,5 +16,9 @@ google-genai>=1.0.0,<2
 python-dateutil>=2.8.0,<3
 requests>=2.31.0,<3
 typing_extensions>=4.12
-# openpyxl image embedding (the final-gantt figure sheets)
-pillow>=10,<12
+# openpyxl image embedding + the gantt_png rasteriser. Floor 12.1:
+# pip-audit reported 25 advisories against the 11.x line (fixes land
+# in 12.1.1+), and the <12 cap that blocked them was arbitrary —
+# gantt_png (write-only PIL surface) and openpyxl embedding verified
+# against 12.3.0 on 2026-07-28.
+pillow>=12.1,<13

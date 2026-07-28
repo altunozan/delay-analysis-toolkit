@@ -7,6 +7,15 @@ export **native, editable PowerPoint** — no manual chart assembly.
 Separate from the delay-analysis toolkit in the parent folder; it only
 *optionally* reuses the toolkit's XER parser for the P6 → Gantt importer.
 
+## Install
+
+DeckForge has its own dependencies (plotly, python-pptx, kaleido) on
+top of the toolkit's — install both manifests first:
+
+```bash
+pip install -r requirements.txt -r deckforge/requirements.txt
+```
+
 ## Run
 
 ```bash

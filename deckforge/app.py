@@ -10,7 +10,6 @@ Run with:  streamlit run deckforge/app.py --server.port 8502
 from __future__ import annotations
 
 import os
-import pickle
 import sys
 from datetime import datetime
 
@@ -22,6 +21,7 @@ sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 import streamlit as st
 
+import autosave
 import render_plotly
 import samples
 from data_io import (
@@ -72,26 +72,22 @@ UNITS = {"(none)": "", "thousands (k)": "k", "millions (m)": "m",
 
 # The deck survives page reloads / app restarts: specs are plain dataclasses,
 # autosaved to disk on every mutation.
+# JSON, never pickle: a replaced pickle autosave would execute code at
+# startup (Bandit B301); a replaced JSON is at worst an empty deck. A
+# legacy .pkl left by an old build is deliberately NOT read.
 AUTOSAVE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        ".deckforge_autosave.pkl")
+                        ".deckforge_autosave.json")
 
 
 def _deck() -> list:
     if "deck" not in st.session_state:
-        deck = []
-        try:
-            with open(AUTOSAVE, "rb") as fh:
-                deck = pickle.load(fh)
-        except Exception:  # noqa: BLE001 — missing/stale autosave is fine
-            pass
-        st.session_state["deck"] = deck
+        st.session_state["deck"] = autosave.load_deck(AUTOSAVE)
     return st.session_state["deck"]
 
 
 def _save_deck() -> None:
     try:
-        with open(AUTOSAVE, "wb") as fh:
-            pickle.dump(st.session_state.get("deck", []), fh)
+        autosave.save_deck(AUTOSAVE, st.session_state.get("deck", []))
     except OSError:
         pass
 

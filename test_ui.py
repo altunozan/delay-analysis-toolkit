@@ -40,6 +40,28 @@ PROSPECTIVE = ["Time Impact Analysis"]
 ALL_PAGES = TOOLS + RETRO + PROSPECTIVE
 
 
+def managed_key_configured() -> bool:
+    """Whether the app under test has a managed NVIDIA key — resolved
+    the same two ways the app resolves it (secrets file, then env).
+    The credential-UI assertions are parameterised on this (audit
+    F-08): with a managed key the panels show the own-key SWITCH;
+    without one they ask for a key DIRECTLY, and asserting the switch
+    unconditionally reported a false failure on unmanaged hosts."""
+    import os
+    import re
+    try:
+        with open(".streamlit/secrets.toml", encoding="utf-8") as fh:
+            if re.search(r'^\s*NVIDIA_API_KEY\s*=\s*"[^"]+"',
+                         fh.read(), re.M):
+                return True
+    except OSError:
+        pass
+    return bool(os.environ.get("NVIDIA_API_KEY", "").strip())
+
+
+MANAGED = managed_key_configured()
+
+
 def check(name: str, cond: bool, detail: str = "") -> None:
     (PASS if cond else FAIL).append(name)
     print(f"  [{'PASS' if cond else 'FAIL'}] {name}"
@@ -198,13 +220,23 @@ def main() -> int:
             if _consent.count():
                 _consent.first.click()
                 page.wait_for_timeout(3000)
-            # the same code path as the narrative panels (model selector +
-            # managed caption + own-key switch, keyed per state_key)
-            check("umbrella propose has the model selector",
-                  page.locator(
-                      '.st-key-ab_umb_ai_nvidia_modelsel').count() == 1)
-            check("umbrella propose has the own-key switch",
-                  page.locator('.st-key-ab_umb_ai_own').count() == 1)
+            # the same code path as the narrative panels — but WHICH
+            # credential UI renders depends on the deployment (F-08):
+            # managed key -> model selector + own-key switch; no
+            # managed key -> provider picker + direct key input.
+            if MANAGED:
+                check("umbrella propose has the model selector (managed)",
+                      page.locator(
+                          '.st-key-ab_umb_ai_nvidia_modelsel').count() == 1)
+                check("umbrella propose has the own-key switch (managed)",
+                      page.locator('.st-key-ab_umb_ai_own').count() == 1)
+            else:
+                check("umbrella propose asks for a key directly "
+                      "(no managed secret)",
+                      page.locator('.st-key-ab_umb_ai_key').count() == 1)
+                check("umbrella propose has the provider picker "
+                      "(no managed secret)",
+                      page.locator('.st-key-ab_umb_ai_provider').count() == 1)
             check("consent gate offers revoke once permitted",
                   page.locator('.st-key-ab_umb_ai_revoke').count() == 1)
             def type_umbrella_cells() -> None:

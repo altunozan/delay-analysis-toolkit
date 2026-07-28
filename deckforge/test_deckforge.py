@@ -161,6 +161,29 @@ def check_extended_maths(specs) -> None:
     print("Extended spec maths: OK")
 
 
+def check_autosave(all_specs) -> None:
+    """JSON autosave round-trips every spec kind; tampering loads as
+    an empty deck, never as code execution (the pickle it replaced)."""
+    import tempfile
+    import autosave
+    with tempfile.TemporaryDirectory() as td:
+        p = os.path.join(td, "deck.json")
+        autosave.save_deck(p, all_specs)
+        back = autosave.load_deck(p)
+        assert len(back) == len(all_specs)
+        assert all(a == b for a, b in zip(back, all_specs)), \
+            "autosave round-trip is not identity"
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write('{"version":1,"slides":'
+                     '[{"__type__":"os.system","fields":{}}]}')
+        assert autosave.load_deck(p) == [], "unknown type must be refused"
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write("not json")
+        assert autosave.load_deck(p) == [], "garbage must load as empty"
+    print(f"Autosave: {len(all_specs)} specs JSON round-trip OK, "
+          "tampered files refused")
+
+
 def main() -> None:
     core = build_core_specs()
     extended = build_extended_specs()
@@ -168,6 +191,7 @@ def main() -> None:
 
     check_core_maths(core)
     check_extended_maths(extended)
+    check_autosave(all_specs)
 
     # --- plotly renderer for every spec ---------------------------------
     for spec in all_specs:
