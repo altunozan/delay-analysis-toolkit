@@ -165,95 +165,6 @@ def managed_ai_key() -> str:
     return (v or os.environ.get("NVIDIA_API_KEY", "")).strip()
 
 
-def _record_ai_governance() -> None:
-    """AI-governance disclosure for the Basis of Analysis.
-
-    Refreshed every time an AI surface renders or credentials resolve,
-    so the Report Assembler always prints the CURRENT election: whether
-    external AI was permitted for this matter, which provider, what data
-    categories prompts carry, and how many generations actually ran.
-    The log never contains prompt content or credentials.
-    """
-    consent = bool(st.session_state.get(sk.AI_CONSENT, False))
-    if not consent:
-        lines = [
-            "External AI: NOT permitted for this matter (the default "
-            "election). Every calculation in this analysis is "
-            "deterministic and ran locally; this app sent no programme "
-            "data to any AI provider.",
-        ]
-    else:
-        managed = (bool(managed_ai_key())
-                   and st.session_state.get(sk.AI_MANAGED, True))
-        prov = ("nvidia" if managed
-                else st.session_state.get(sk.AI_PROVIDER, "nvidia"))
-        plabel = PROVIDERS.get(prov, {}).get("label", prov)
-        lines = [
-            "External AI: permitted by analyst election this session "
-            "(off by default; the election gates every AI feature "
-            "app-wide).",
-            f"Provider: {plabel}"
-            + (" — managed endpoint, credential held server-side."
-               if managed else " — analyst-supplied credential, held in "
-               "session only."),
-            "Data categories sent in prompts: computed figures, activity "
-            "codes and names, dates and module caveats from the loaded "
-            "programmes — never the raw XER files, never credentials.",
-        ]
-        uses = st.session_state.get(sk.AI_LOG, [])
-        if uses:
-            mods = sorted({u["module"] for u in uses})
-            lines.append(f"AI generations this session: {len(uses)} — "
-                         + ", ".join(mods) + ".")
-        else:
-            lines.append("AI generations this session: none.")
-    st.session_state.setdefault(sk.ANALYSIS_BASIS, {})[
-        "AI governance"] = lines
-
-
-def log_ai_use(module: str, provider: str, model: str | None) -> None:
-    """Record one outbound AI use — module and provider, never content."""
-    import datetime as _dt
-    st.session_state.setdefault(sk.AI_LOG, []).append({
-        "utc": _dt.datetime.now(_dt.timezone.utc)
-        .strftime("%Y-%m-%d %H:%M:%SZ"),
-        "module": module, "provider": provider, "model": model or ""})
-    _record_ai_governance()
-
-
-def ai_consent_gate(state_key: str) -> bool:
-    """The per-matter external-AI election. DEFAULT OFF.
-
-    Rendered by every AI surface through ai_provider_block /
-    ai_credentials_panel, and enforced again in resolve_ai_credentials
-    for features that resolve without rendering a panel — so no prompt
-    can leave this machine until the analyst permits it. ONE app-wide
-    state: permitting (or revoking) anywhere applies everywhere, and
-    the election is recorded in the Basis of Analysis either way.
-    """
-    consent = bool(st.session_state.get(sk.AI_CONSENT, False))
-    if not consent:
-        st.info(
-            "**External AI is off for this matter — the default.** AI "
-            "drafting sends computed figures and activity names to the "
-            "selected provider; everything else on this page is "
-            "deterministic and needs no AI. Permit it only if this "
-            "matter allows third-party processing.")
-        if st.button("Permit external AI for this matter (this session)",
-                     key=f"{state_key}_consent"):
-            st.session_state[sk.AI_CONSENT] = True
-            st.rerun()
-    else:
-        if st.button("Revoke external-AI permission (app-wide)",
-                     key=f"{state_key}_revoke",
-                     help="Deterministic analysis is unaffected; only "
-                          "AI drafting stops."):
-            st.session_state[sk.AI_CONSENT] = False
-            st.rerun()
-    _record_ai_governance()
-    return consent
-
-
 def ai_credentials_panel(page: str) -> None:
     """THE one AI-credentials component.
 
@@ -264,8 +175,6 @@ def ai_credentials_panel(page: str) -> None:
     when its page is not rendered); values are copied into the plain
     shared keys so the choice survives navigation.
     """
-    if not ai_consent_gate(f"aic_{page}"):
-        return
     managed = managed_ai_key()
 
     if managed and st.session_state.get(sk.AI_MANAGED, True):
@@ -336,12 +245,6 @@ def resolve_ai_credentials() -> tuple[str, str, str]:
     rendered, which is why 'narratives work but propose does not' was a
     real bug class.
     """
-    _record_ai_governance()
-    if not st.session_state.get(sk.AI_CONSENT, False):
-        # The matter-level election gates EVERY outbound call — including
-        # features that resolve credentials without rendering a panel.
-        # Empty key = every AI action stays disabled (they all gate on it).
-        return ("nvidia", "", "")
     managed = managed_ai_key()
     if managed and st.session_state.get(sk.AI_MANAGED, True):
         nv = PROVIDERS["nvidia"]
@@ -464,10 +367,6 @@ def ai_provider_block(state_key: str) -> tuple[str, str | None, str]:
     one section but not another' is structurally impossible.
 
     Returns (provider, model, api_key)."""
-    if not ai_consent_gate(state_key):
-        # No consent, no key: every caller's action button gates on a
-        # truthy key, so AI stays structurally disabled matter-wide.
-        return ("nvidia", None, "")
     _managed = managed_ai_key()
     _use_managed = (st.session_state.get(sk.AI_MANAGED, bool(_managed))
                     and bool(_managed))
@@ -559,7 +458,6 @@ def ai_narrative_panel(
                         stream_narrative(provider, api_key, prompt, model or None)
                     )
                 st.session_state[state_key] = text
-                log_ai_use(file_stub.replace("_", " "), provider, model)
             except NarrativeError as exc:
                 st.error(exc.message)
         elif state_key in st.session_state:

@@ -12,7 +12,7 @@ from programme import (
     collapse_asbuilt, parse_grouping,
 )
 from views._shared import (
-    _fkey, ai_provider_block, basis_panel, cached_oos_flags, log_ai_use,
+    _fkey, ai_provider_block, basis_panel, cached_oos_flags,
     get_parsed_files,
 )
 from views._submodules import analysis_submodules
@@ -60,7 +60,6 @@ def collapsed_asbuilt_tab() -> None:
                         system=GROUPING_SYSTEM_PROMPT))
                     groups, dropped = parse_grouping(text, data)
                     st.session_state[sk.CAB_GROUPS] = groups
-                    log_ai_use("CAB grouping", provider, model)
                     if dropped:
                         st.warning(f"{dropped} proposed code(s) were "
                                    "not verbatim in the file and were "

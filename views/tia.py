@@ -29,7 +29,7 @@ from programme import (
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
     ai_credentials_panel, ai_narrative_panel, basis_panel,
-    fetch_raw, get_parsed_files, log_ai_use, resolve_ai_credentials,
+    fetch_raw, get_parsed_files, resolve_ai_credentials,
 )
 from views._submodules import analysis_submodules
 
@@ -272,8 +272,6 @@ def tia_tab() -> None:
                         build_event_extraction_prompt(docs),
                         ai_model, system=EXTRACTION_SYSTEM_PROMPT))
                     cands, dropped = parse_event_candidates(text, docs)
-                    log_ai_use("TIA event extraction", ai_provider,
-                               ai_model)
                 except NarrativeError as exc:
                     cands, dropped = [], 0
                     st.error(exc.message)
@@ -371,8 +369,6 @@ def tia_tab() -> None:
                         ai_model, system=CLAUSE_SYSTEM_PROMPT))
                     st.session_state["tia_clauses"] = (
                         parse_clause_extraction(txt, ct))
-                    log_ai_use("TIA clause extraction", ai_provider,
-                               ai_model)
                 except NarrativeError as exc:
                     st.error(exc.message)
             cl = st.session_state.get("tia_clauses")
@@ -456,7 +452,6 @@ def tia_tab() -> None:
                             event, templates, data, variant),
                         ai_model, system=FRAGNET_SYSTEM_PROMPT))
                     draft = parse_fragnet_json(text, data)
-                    log_ai_use("TIA fragnet draft", ai_provider, ai_model)
                 except NarrativeError as exc:
                     draft = []
                     st.error(exc.message)
@@ -569,8 +564,6 @@ def tia_tab() -> None:
                         ai_model, system=LOGIC_SYSTEM_PROMPT))
                     st.session_state["tia_logic_rec"] = (
                         parse_logic_recommendation_json(text, data))
-                    log_ai_use("TIA logic recommendation", ai_provider,
-                               ai_model)
                 except NarrativeError as exc:
                     st.error(exc.message)
             if not ai_key:

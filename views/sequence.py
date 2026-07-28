@@ -18,7 +18,7 @@ from programme import (
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (ai_narrative_panel, ai_provider_block,
-                           get_parsed_files, log_ai_use)
+                           get_parsed_files)
 
 
 def sequence_tab() -> None:
@@ -114,7 +114,6 @@ def sequence_tab() -> None:
             if failures:
                 st.error("AI review stopped: " + failures[0])
             else:
-                log_ai_use("sequence coding review", r_provider, r_model)
                 # New proposals invalidate any previous confirmation and
                 # need a fresh editor to show through.
                 st.session_state.pop(f"{map_key}_confirmed", None)
@@ -212,7 +211,6 @@ def sequence_tab() -> None:
                 advice = None
                 st.error(exc.message)
             if advice:
-                log_ai_use("sequence view advisor", s_provider, s_model)
                 inv_modes = {v: k for k, v in VIEW_MODES.items()}
                 # staged: the live widget keys cannot be written after
                 # their widgets rendered this run
