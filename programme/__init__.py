@@ -114,6 +114,7 @@ from .float_erosion import (
     WindowErosion,
     analyse_float_erosion,
 )
+from .gantt_png import build_apab_gantt_png
 from .gantt_html import (ASBUILT_CATEGORIES, asbuilt_path_tree,
                          build_apab_gantt_html, build_gantt_html,
                          group_tree)
@@ -335,6 +336,7 @@ __all__ = [
     "build_hierarchy",
     "build_gantt_html",
     "asbuilt_path_tree",
+    "build_apab_gantt_png",
     "ASBUILT_CATEGORIES",
     "group_tree",
     "config_from_json",

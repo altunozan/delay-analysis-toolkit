@@ -335,16 +335,16 @@ def apab_tab() -> None:
             "gap.")
         gantt_fullscreen_button(_g4, "apab_final_gantt", "apab_fs4")
 
-        # the FINAL gantt as a print figure — embedded in the workbook
-        # and the Word narrative (a figure failure never blocks either)
-        def _final_gantt_png():
-            from programme.report_charts import apab_gantt_chart, \
-                chart_png
-            ch = apab_gantt_chart(display, windows=all_windows,
-                                  data_date=dd, keydates=kd)
-            return chart_png(ch) if ch is not None else None
+        # the FINAL gantt — the EXACT step-④ chart rasterised from the
+        # same rows (banner, curtains, key-date markers, data date),
+        # embedded in the workbook and leading the Word narrative. A
+        # figure failure never blocks either.
         try:
-            _png4 = _final_gantt_png()
+            from programme import build_apab_gantt_png
+            _png4 = build_apab_gantt_png(
+                display, keydates=kd, overall_delay_days=_first,
+                title=f"As-planned ({date_basis} dates) vs as-built",
+                windows=all_windows, data_date=dd)
         except Exception:
             _png4 = None
 

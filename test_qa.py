@@ -2080,16 +2080,31 @@ check("N14d comparison gantt frozen columns painted OPAQUE",
       "td.lbl { background:#FCFCFA !important; }" in _n14cmp
       and "tr.kd td.lbl" in _n14cmp and "id='fs'" in _n14cmp)
 
-# the final gantt travels WITH the report (workbook + Word)
+# the final gantt travels WITH the report (workbook + Word). The
+# step-④ figure is the EXACT chart rasterised (gantt_png, PIL — no
+# browser), same inputs as the HTML renderer.
+from programme import build_apab_gantt_png as _n14bapg
+_n14kd = {_n14rows[2]["task_code"]: "why", _n14rows[4]["task_code"]: ""}
+_n14kwin = _kw(_n14rows, list(_n14kd))
+_n14png = _n14bapg(
+    [{"task_code": "", "row_kind": "section", "name": "PATH — test"}]
+    + _n14rows,
+    keydates=_n14kd, overall_delay_days=455,
+    windows=[{"label": f"W{i}", "start": w["window_start"],
+              "end": w["window_end"],
+              "delay_days": w["window_delay_days"]}
+             for i, w in enumerate(_n14kwin, 1)],
+    data_date=U.project.data_date)
+check("N14o the exact step-④ chart rasterises with every feature "
+      "(sections, key dates, curtains, data date) and guards empties",
+      _n14png is not None and _n14png.startswith(b"\x89PNG")
+      and _n14bapg([]) is None)
 try:
-    from programme.report_charts import (apab_gantt_chart as _n14agc,
-                                         asbuilt_gantt_chart as _n14abc,
+    from programme.report_charts import (asbuilt_gantt_chart as _n14abc,
                                          chart_png as _n14cp)
-    _n14png = _n14cp(_n14agc(_n14rows))
     _n14png2 = _n14cp(_n14abc(_n14tr))
-    check("N14e final-gantt figures render to PNG",
-          _n14png.startswith(b"\x89PNG")
-          and _n14png2.startswith(b"\x89PNG"))
+    check("N14e as-built path figure renders to PNG",
+          _n14png2.startswith(b"\x89PNG"))
     import zipfile as _n14zf
     _n14wb = _n14bsx("t", {"Comparison": [{"a": 1}]},
                      images={"Final Gantt": _n14png})
@@ -2115,6 +2130,14 @@ try:
     check("N14j markdown tables render as Word tables (no dash walls)",
           "<w:tbl>" in _n14doc_xml and "|---|" not in _n14doc_xml
           and "W1" in _n14doc_xml)
+    # the figure LEADS the Word report — the gantt tells the delay
+    # story, the narrative follows it
+    _n14dx3 = _n14doc("t", "## Section\nNarrBody123",
+                      images=[("Final gantt", _n14png)])
+    _n14xml3 = _n14zf.ZipFile(io.BytesIO(_n14dx3)).read(
+        "word/document.xml").decode("utf-8")
+    check("N14p the figure sits BEFORE the narrative body",
+          0 < _n14xml3.find("<w:drawing") < _n14xml3.find("NarrBody123"))
 except ImportError as _n14exc:
     print(f"  [SKIP] N14e-h figure pipeline ({_n14exc})")
 
