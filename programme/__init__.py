@@ -150,8 +150,10 @@ from .hierarchy import (
     config_to_json,
     tree_to_dict,
 )
-from .inventory import (ProgrammeInventory, RevisionInfo,
-                        assign_upload_identity, build_inventory)
+from .inventory import (CLOUD_BUDGET_MB, CLOUD_PARSE_FACTOR,
+                        ProgrammeInventory, RevisionInfo,
+                        assign_upload_identity, build_inventory,
+                        cloud_memory_verdict)
 from .milestones import (
     MilestoneMatch,
     MilestoneSeries,
@@ -334,6 +336,9 @@ __all__ = [
     "RevisionInfo",
     "build_inventory",
     "assign_upload_identity",
+    "CLOUD_BUDGET_MB",
+    "CLOUD_PARSE_FACTOR",
+    "cloud_memory_verdict",
     # milestones
     "MilestoneMatch",
     "MilestoneSeries",

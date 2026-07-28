@@ -2812,6 +2812,33 @@ _n20_run("milestone shifts", lambda: track_milestone_shifts(
     [("a", _n20.project.data_date, _n20),
      ("b", _n20.project.data_date, _n20)]))
 
+# ---------------------------------------------------------------------------
+# N21. Cloud memory budget (audit F-03, scoped): refuse BEFORE
+# allocating, never warn-and-crash. A ceiling, not a fix — the fix is
+# running large matters locally, and the refusal says so.
+print("\n--- Layer N21: cloud memory budget ---")
+from programme import (CLOUD_BUDGET_MB, CLOUD_PARSE_FACTOR,
+                       cloud_memory_verdict)
+_n21_agg, _n21_est, _n21_ok = cloud_memory_verdict(
+    [20_580_000] * 4)   # four SPML-sized revisions
+check("N21 four 20 MB revisions exceed the Cloud budget "
+      "(three parse to ~470 MB and are allowed)",
+      not _n21_ok and _n21_est > CLOUD_BUDGET_MB
+      and cloud_memory_verdict([20_580_000] * 3)[2],
+      f"est {_n21_est:.0f} MB")
+check("N21b a normal matter (8 x 2 MB) passes",
+      cloud_memory_verdict([2_000_000] * 8)[2])
+check("N21c the factor is grounded in the measured 7.6x, rounded up",
+      7.6 <= CLOUD_PARSE_FACTOR <= 10.0)
+# STRUCTURAL: the intake must refuse (st.error + return) before the
+# parse loop, using the shared verdict — not a bare warning.
+_n21src = open("views/intake.py").read()
+check("N21d intake refuses before allocating on an unsafe estimate",
+      "cloud_memory_verdict" in _n21src
+      and "Refusing to parse this set" in _n21src
+      and _n21src.index("Refusing to parse")
+      < _n21src.index("Parsing programmes"))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

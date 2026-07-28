@@ -12,9 +12,9 @@ import state as sk
 from dcma import DCMAConfig, parse_xer
 from programme import (
     inventory_appendix,
-    ProjectStore, STORE_CAVEATS, assign_upload_identity,
-    build_custody_xlsx, build_inventory,
-    build_inventory_prompt, build_inventory_xlsx,
+    CLOUD_BUDGET_MB, CLOUD_PARSE_FACTOR, ProjectStore, STORE_CAVEATS,
+    assign_upload_identity, build_custody_xlsx, build_inventory,
+    build_inventory_prompt, build_inventory_xlsx, cloud_memory_verdict,
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (ai_narrative_panel, fetch_raw,
@@ -69,17 +69,42 @@ def intake_tab() -> None:
     else:
         sources = [(u.name, u, u.size) for u in uploads or []]
 
+    # ---- Cloud memory budget (audit F-03, scoped honestly) -----------
+    # This host gives ~1 GB to a single process holding every parsed
+    # revision in session; exceeding it is a silent reload with nothing
+    # loaded — indistinguishable from a bug. A measured 20.6 MB XER
+    # peaked at ~157 MB parsed (~7.6x), so refuse BEFORE allocating
+    # when the aggregate estimate is unsafe, and say exactly why and
+    # what to do instead. This is a ceiling, not a fix: truly large
+    # matters belong on a local machine, where no budget applies.
     _on_cloud = os.path.exists("/mount/src")
-    _big = [(n, s) for n, _, s in sources if s > 15 * 1024 * 1024]
-    if _on_cloud and _big:
-        st.warning(
-            "Large file(s): "
-            + ", ".join(f"{n} ({s / 1048576:.0f} MB)" for n, s in _big)
-            + ". This Cloud host has ~1 GB of memory; a programme this "
-            "size can exhaust it mid-parse, which shows as the app "
-            "reloading with nothing loaded. If that happens, run the "
-            "toolkit locally — the parser itself has no size limit "
-            "(uploads accepted to 400 MB).")
+    if _on_cloud and sources:
+        _agg_mb, _est_mb, _safe = cloud_memory_verdict(
+            [s for _, _, s in sources])
+        if not _safe:
+            st.error(
+                f"**Refusing to parse this set on the Cloud host.** "
+                f"{len(sources)} file(s), {_agg_mb:.0f} MB uploaded — "
+                f"an estimated ~{_est_mb:.0f} MB parsed (measured "
+                f"~{CLOUD_PARSE_FACTOR:.0f}× on real XERs) against "
+                f"roughly {CLOUD_BUDGET_MB:.0f} MB of usable memory. "
+                "Proceeding "
+                "would crash the host mid-parse and lose the session "
+                "with no error shown. Options: remove some revisions "
+                "and load the matter in stages, or run the toolkit "
+                "locally (`streamlit run app.py`), where there is no "
+                "memory budget and the parser has no size limit.")
+            return
+        _big = [(n, s) for n, _, s in sources if s > 15 * 1024 * 1024]
+        if _big:
+            st.warning(
+                "Large file(s): "
+                + ", ".join(f"{n} ({s / 1048576:.0f} MB)"
+                            for n, s in _big)
+                + f". Within the Cloud budget (est. ~{_est_mb:.0f} of "
+                f"~{CLOUD_BUDGET_MB:.0f} MB) but close watch applies — if "
+                "the app reloads with nothing loaded, the host ran out "
+                "of memory: run the toolkit locally.")
 
     def _read_bytes(src) -> bytes:
         if isinstance(src, str):

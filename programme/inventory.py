@@ -188,6 +188,31 @@ def build_inventory(
 
 
 # --------------------------------------------------------------------------- #
+# Cloud memory budget (F-03, scoped honestly)
+# --------------------------------------------------------------------------- #
+
+# A measured 20.58 MB XER peaked at ~157 MB parsed (~7.6x) — round up.
+CLOUD_PARSE_FACTOR = 8.0
+# ~1 GB host minus Streamlit + app overhead: what parsing may claim.
+CLOUD_BUDGET_MB = 600.0
+
+
+def cloud_memory_verdict(
+    sizes_bytes: list[int],
+) -> tuple[float, float, bool]:
+    """(aggregate_mb, estimated_parsed_mb, safe?) for one upload set.
+
+    A ceiling, not a fix: exceeding the host's memory mid-parse is a
+    silent reload with the session lost, so the intake refuses BEFORE
+    allocating rather than warning and hoping. Local runs never call
+    this — there is no budget off the Cloud host.
+    """
+    agg_mb = sum(sizes_bytes) / 1048576
+    est_mb = agg_mb * CLOUD_PARSE_FACTOR
+    return agg_mb, est_mb, est_mb <= CLOUD_BUDGET_MB
+
+
+# --------------------------------------------------------------------------- #
 # Forensic source identity (F-01)
 # --------------------------------------------------------------------------- #
 
