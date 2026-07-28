@@ -44,6 +44,9 @@ from .comparison_impact import (
     ProvenanceWindow,
     RankedChange,
     assess_comparison_impact,
+    attribute_completion_impact,
+    AttributedChange,
+    CompletionAttribution,
     build_provenance,
 )
 from .basis import (
@@ -365,6 +368,9 @@ __all__ = [
     "ProvenanceWindow",
     "RankedChange",
     "assess_comparison_impact",
+    "attribute_completion_impact",
+    "AttributedChange",
+    "CompletionAttribution",
     "build_provenance",
     "out_of_sequence_flags",
     "oos_evolution",

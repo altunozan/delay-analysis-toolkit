@@ -105,6 +105,11 @@ class ComparisonImpact:
     ranked: list[RankedChange] = field(default_factory=list)
     oos_flags: list[OutOfSequenceFlag] = field(default_factory=list)
     band_counts: dict[str, int] = field(default_factory=dict)
+    # the two driving longest paths, for the summary comparison gantt
+    lp_old: list[tuple[str, str]] = field(default_factory=list)
+    lp_new: list[tuple[str, str]] = field(default_factory=list)
+    lp_old_links: list[tuple[str, str]] = field(default_factory=list)
+    lp_new_links: list[tuple[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
 
@@ -146,8 +151,8 @@ def _bands(
     end_task_code: str | None,
     near_critical_days: float,
     config: DCMAConfig,
-) -> tuple[dict[str, str], dict[str, float], str | None]:
-    """code -> band, code -> total float, trace terminal for one revision."""
+):
+    """(code -> band, code -> total float, lp result) for one revision."""
     lp = extract_longest_path(
         data, label, end_task_code=end_task_code,
         near_critical_days=near_critical_days, config=config)
@@ -161,7 +166,7 @@ def _bands(
         if t.is_loe_or_wbs or t.task_code in bands:
             continue
         bands[t.task_code] = "completed" if t.is_complete else "off-path"
-    return bands, floats, lp.end_choice
+    return bands, floats, lp
 
 
 def _band_of(code: str, bands: dict[str, str]) -> str:
@@ -206,12 +211,19 @@ def assess_comparison_impact(
     result = ComparisonImpact(old_label=old_label, new_label=new_label)
     result.caveats.extend(IMPACT_CAVEATS + OOS_CAVEATS)
 
-    bands_old, _fl_old, result.end_old = _bands(
+    bands_old, _fl_old, _lp_old = _bands(
         old, old_label, end_task_code=end_task_code,
         near_critical_days=near_critical_days, config=config)
-    bands_new, floats_new, result.end_new = _bands(
+    bands_new, floats_new, _lp_new = _bands(
         new, new_label, end_task_code=end_task_code,
         near_critical_days=near_critical_days, config=config)
+    result.end_old, result.end_new = _lp_old.end_choice, _lp_new.end_choice
+    result.lp_old = [(a.task_code, a.name) for a in _lp_old.critical]
+    result.lp_new = [(a.task_code, a.name) for a in _lp_new.critical]
+    result.lp_old_links = [(lk.pred_code, lk.succ_code)
+                           for lk in _lp_old.links]
+    result.lp_new_links = [(lk.pred_code, lk.succ_code)
+                           for lk in _lp_new.links]
 
     if cmp.old_finish and cmp.new_finish:
         result.completion_moved_days = round(
@@ -406,4 +418,272 @@ def build_provenance(
             f"{flagged[0].old_label} -> {flagged[0].new_label} and occur "
             f"in {len(flagged)} of {len(result.windows)} window(s) — "
             "these windows deserve the closest scrutiny.")
+    return result
+
+
+# --------------------------------------------------------------------------- #
+# Completion impact attribution — one change at a time, re-scheduled
+# --------------------------------------------------------------------------- #
+
+ATTRIBUTION_CAVEATS = [
+    "Each change is tested ONE AT A TIME: the later revision is "
+    "re-scheduled by the toolkit's simplified CPM kernel with that "
+    "single change reverted, and the completion delta is that change's "
+    "contribution. Every OTHER change stays in place during the test, "
+    "so contributions interact and need not sum to the total movement.",
+    "Contributions are KERNEL-vs-KERNEL deltas (the same simplified "
+    "engine schedules both runs). Never compare a kernel date with a "
+    "P6 file date — the kernel's own baseline completion is disclosed "
+    "so every figure is a like-for-like delta.",
+    "Revertible categories: lag changes, logic added / removed, and "
+    "duration changes (remaining-duration approximation for "
+    "in-progress work). Constraint, calendar, scope (added / deleted) "
+    "and retrospective actual-date changes are ranked by the screening "
+    "but are NOT re-scheduled here — their influence is screened, not "
+    "measured.",
+    "Completion is measured at the elected contractual milestone where "
+    "it exists in the remaining network, otherwise at the network's "
+    "latest early finish.",
+]
+
+
+@dataclass
+class AttributedChange:
+    """One change with its measured completion contribution."""
+
+    category: str
+    ref: str
+    name: str
+    detail: str
+    band: str
+    screen_score: float | None
+    completion_with: datetime | None      # kernel, change in place
+    completion_without: datetime | None   # kernel, change reverted
+    contribution_days: float | None       # with - without; +ve = pushed later
+    tested: bool = True
+    note: str = ""
+
+
+@dataclass
+class CompletionAttribution:
+    old_label: str
+    new_label: str
+    anchor_code: str | None = None
+    kernel_completion_old: datetime | None = None
+    kernel_completion_new: datetime | None = None
+    kernel_moved_days: float | None = None
+    changes: list[AttributedChange] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    caveats: list[str] = field(default_factory=list)
+
+    @property
+    def tested_changes(self) -> list[AttributedChange]:
+        return [c for c in self.changes if c.tested]
+
+
+def attribute_completion_impact(
+    old: XerData,
+    new: XerData,
+    old_label: str,
+    new_label: str,
+    *,
+    comparison: ComparisonResult | None = None,
+    impact: ComparisonImpact | None = None,
+    end_task_code: str | None = None,
+    max_tests: int = 25,
+    config: DCMAConfig | None = None,
+) -> CompletionAttribution:
+    """Which changes actually moved completion, measured by reversion.
+
+    For each revertible change the later revision's remaining network is
+    re-scheduled with that single change undone; the completion delta is
+    the change's contribution (+ve = the change pushed completion later,
+    -ve = it pulled completion earlier). Candidates are taken in the
+    screening's materiality order and capped at ``max_tests``.
+    """
+    from .cpm import build_network, forward_pass
+
+    config = config or DCMAConfig()
+    cmp = comparison or compare_revisions(old, new, old_label, new_label,
+                                          config=config)
+    result = CompletionAttribution(old_label=old_label,
+                                   new_label=new_label)
+    result.caveats.extend(ATTRIBUTION_CAVEATS)
+
+    dd_new = (new.project.data_date if new.project
+              and new.project.data_date else datetime.now())
+    dd_old = (old.project.data_date if old.project
+              and old.project.data_date else dd_new)
+    inc, nodes, preds, started, _masks, warns = build_network(
+        new, config, dd_new)
+    result.warnings.extend(warns)
+    if not nodes:
+        result.warnings.append(
+            "No remaining (incomplete) activities in the later revision "
+            "— nothing to re-schedule.")
+        return result
+
+    def completion(EF: dict) -> datetime | None:
+        if end_task_code and end_task_code in EF:
+            return EF[end_task_code]
+        return max(EF.values()) if EF else None
+
+    result.anchor_code = (end_task_code
+                          if end_task_code and end_task_code in nodes
+                          else None)
+    _, EF0, _, _ = forward_pass(nodes, preds, dd_new, started)
+    base = completion(EF0)
+    result.kernel_completion_new = base
+
+    o_inc, o_nodes, o_preds, o_started, _m, _w = build_network(
+        old, config, dd_old)
+    if o_nodes:
+        _, o_EF, _, _ = forward_pass(o_nodes, o_preds, dd_old, o_started)
+        result.kernel_completion_old = completion(o_EF)
+    if result.kernel_completion_old and base:
+        result.kernel_moved_days = round(
+            (base - result.kernel_completion_old).total_seconds() / 86400,
+            1)
+
+    # screening order decides which changes are worth a kernel run
+    score_of: dict[tuple[str, str], float] = {}
+    band_of: dict[tuple[str, str], str] = {}
+    for rc in (impact.ranked if impact is not None else []):
+        score_of[(rc.category, rc.ref)] = rc.score
+        band_of[(rc.category, rc.ref)] = rc.band
+
+    # ---- candidate build: (category, ref, name, detail, apply, undo) --
+    cands: list[tuple] = []
+
+    def _find_pred(succ: str, pred: str) -> int | None:
+        for i, (p, _lt, _lg) in enumerate(preds.get(succ, [])):
+            if p == pred:
+                return i
+        return None
+
+    for c in cmp.lag_changes:
+        pair = _split_lag_ref(c.task_code)
+        if not pair or c.delta_days is None:
+            continue
+        s_, p_ = pair[1], pair[0]
+
+        def mk_lag(s=s_, p=p_, delta=c.delta_days):
+            idx = _find_pred(s, p)
+            if idx is None:
+                return None
+            cur = preds[s][idx]
+            old_t = cur
+            preds[s][idx] = (cur[0], cur[1], cur[2] - delta)
+
+            def undo():
+                preds[s][idx] = old_t
+            return undo
+        cands.append(("Lag changes", c.task_code, c.name,
+                      f"{c.old_value} -> {c.new_value}", mk_lag))
+
+    for lk in cmp.logic_added:
+        ref = f"{lk.pred_code} -{lk.link_type}-> {lk.succ_code}"
+
+        def mk_del(s=lk.succ_code, p=lk.pred_code):
+            idx = _find_pred(s, p)
+            if idx is None:
+                return None
+            old_t = preds[s][idx]
+            del preds[s][idx]
+
+            def undo():
+                preds[s].insert(idx, old_t)
+            return undo
+        cands.append(("Logic added", ref, lk.succ_name,
+                      f"revert = remove the new {lk.link_type} link",
+                      mk_del))
+
+    for lk in cmp.logic_removed:
+        ref = f"{lk.pred_code} -{lk.link_type}-> {lk.succ_code}"
+
+        def mk_add(s=lk.succ_code, p=lk.pred_code, lt=lk.link_type,
+                   lg=lk.lag_days):
+            if s not in preds or p not in nodes:
+                return None
+            preds[s].append((p, lt, lg))
+
+            def undo():
+                preds[s].pop()
+            return undo
+        cands.append(("Logic removed", ref, lk.succ_name,
+                      f"revert = reinstate the {lk.link_type} link",
+                      mk_add))
+
+    for c in cmp.duration_changes:
+        if c.delta_days is None:
+            continue
+
+        def mk_dur(code=c.task_code, delta=c.delta_days):
+            if code not in nodes:
+                return None
+            old_t = nodes[code]
+            nodes[code] = (max(old_t[0] - delta, 0.0), old_t[1])
+
+            def undo():
+                nodes[code] = old_t
+            return undo
+        cands.append(("Duration changes", c.task_code, c.name,
+                      f"{c.old_value} -> {c.new_value}", mk_dur))
+
+    cands.sort(key=lambda x: -(score_of.get((x[0], x[1]), 0.0)))
+
+    tested = 0
+    for category, ref, name, detail, mk in cands:
+        key = (category, ref)
+        ac = AttributedChange(
+            category=category, ref=ref, name=name, detail=detail,
+            band=band_of.get(key, "?"),
+            screen_score=score_of.get(key),
+            completion_with=base, completion_without=None,
+            contribution_days=None)
+        if tested >= max_tests:
+            ac.tested = False
+            ac.note = f"beyond the {max_tests}-test cap (raise it to test)"
+            result.changes.append(ac)
+            continue
+        undo = mk()
+        if undo is None:
+            ac.tested = False
+            ac.note = ("not in the remaining network (completed side or "
+                       "absent) — no re-schedule possible")
+            result.changes.append(ac)
+            continue
+        try:
+            _, EF1, _, _ = forward_pass(nodes, preds, dd_new, started)
+            comp1 = completion(EF1)
+        finally:
+            undo()
+        tested += 1
+        ac.completion_without = comp1
+        if base and comp1:
+            ac.contribution_days = round(
+                (base - comp1).total_seconds() / 86400, 1)
+        result.changes.append(ac)
+
+    result.changes.sort(
+        key=lambda a: -abs(a.contribution_days or 0.0))
+
+    movers = [a for a in result.tested_changes
+              if abs(a.contribution_days or 0) >= 0.5]
+    if movers:
+        top = movers[0]
+        result.warnings.append(
+            f"{len(movers)} of {tested} tested change(s) move the "
+            "kernel completion when individually reverted. Largest: "
+            f"{top.ref} ({top.category.lower()}, {top.detail}) — "
+            f"completion {top.completion_with:%d %b %Y} with the "
+            f"change vs {top.completion_without:%d %b %Y} without it "
+            f"({top.contribution_days:+.0f}d contribution).")
+    elif tested:
+        result.warnings.append(
+            f"None of the {tested} tested change(s) moves the kernel "
+            "completion by half a day or more when individually "
+            "reverted — the movement this window is likely progress "
+            "slippage or untested categories (constraints, calendars, "
+            "scope), not the tested edits.")
     return result

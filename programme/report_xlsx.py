@@ -267,8 +267,13 @@ def build_critical_path_xlsx(cp, narrative: str | None = None) -> bytes:
 # --------------------------------------------------------------------------- #
 # Module 6 — Revision comparison / change log
 # --------------------------------------------------------------------------- #
-def build_comparison_xlsx(cmp, narrative: str | None = None) -> bytes:
-    """cmp: programme.comparison.ComparisonResult"""
+def build_comparison_xlsx(cmp, narrative: str | None = None,
+                          impact=None, attribution=None,
+                          provenance=None) -> bytes:
+    """cmp: ComparisonResult. When the page ran the impact screening,
+    the completion attribution or the provenance timeline, their
+    tables ship in the same workbook — the report carries everything
+    the page shows."""
     wb = Workbook()
     ws = wb.active
     ws.title = "Summary"
@@ -355,7 +360,76 @@ def build_comparison_xlsx(cmp, narrative: str | None = None) -> bytes:
     _logic_sheet("Logic Added", cmp.logic_added)
     _logic_sheet("Logic Removed", cmp.logic_removed)
 
-    _notes_sheet(wb, cmp.warnings + cmp.caveats, "Warnings & Caveats")
+    if impact is not None and impact.ranked:
+        s = wb.create_sheet("Materiality Rank")
+        _header_row(s, 1, ["Score", "Band", "Category", "Activity / Link",
+                           "Name", "Change", "Delta (d)", "TF now (d)",
+                           "Red flag"])
+        for i, rc in enumerate(impact.ranked, start=2):
+            vals = [rc.score, rc.band, rc.category, rc.ref, rc.name,
+                    rc.detail, rc.delta_days, rc.total_float_new,
+                    "RED FLAG" if rc.red_flag else ""]
+            for col, v in enumerate(vals, start=1):
+                c = s.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 9 and rc.red_flag:
+                    c.fill = SLIP_FILL
+        _autofit(s, {1: 8, 2: 14, 3: 26, 4: 26, 5: 38, 6: 40, 7: 10,
+                     8: 10, 9: 11})
+        s.freeze_panes = "A2"
+
+    if attribution is not None and attribution.changes:
+        s = wb.create_sheet("Completion Attribution")
+        s["A1"] = ("One change at a time: the later revision "
+                   "re-scheduled with that single change reverted. "
+                   "Contribution +ve = the change pushed completion "
+                   "later. Kernel-vs-kernel; contributions interact "
+                   "and need not sum to the total movement.")
+        s["A1"].font = Font(bold=True)
+        _header_row(s, 3, ["Category", "Change", "Name", "Detail",
+                           "Band", "Completion WITH change",
+                           "Completion WITHOUT", "Contribution (d)",
+                           "Tested", "Note"])
+        for i, a in enumerate(attribution.changes, start=4):
+            vals = [a.category, a.ref, a.name, a.detail, a.band,
+                    _fmt(a.completion_with), _fmt(a.completion_without),
+                    a.contribution_days,
+                    "yes" if a.tested else "no", a.note]
+            for col, v in enumerate(vals, start=1):
+                c = s.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 8 and (a.contribution_days or 0) > 0:
+                    c.fill = SLIP_FILL
+                elif col == 8 and (a.contribution_days or 0) < 0:
+                    c.fill = GAIN_FILL
+        _autofit(s, {1: 22, 2: 26, 3: 34, 4: 34, 5: 13, 6: 20, 7: 20,
+                     8: 15, 9: 8, 10: 34})
+        s.freeze_panes = "A4"
+
+    if provenance is not None and provenance.windows:
+        s = wb.create_sheet("Provenance")
+        _header_row(s, 1, ["Window", "Completion moved (d)",
+                           "Retro actual changes"]
+                    + provenance.categories)
+        for i, w in enumerate(provenance.windows, start=2):
+            vals = [f"{w.old_label} -> {w.new_label}",
+                    w.completion_moved_days, w.red_flag_count] + \
+                   [w.counts.get(cat, 0) for cat in provenance.categories]
+            for col, v in enumerate(vals, start=1):
+                c = s.cell(row=i, column=col, value=v)
+                c.border = THIN_BORDER
+                if col == 3 and w.red_flag_count:
+                    c.fill = SLIP_FILL
+        _autofit(s, {1: 40, 2: 18, 3: 18})
+        s.freeze_panes = "A2"
+
+    _notes_sheet(wb, cmp.warnings + cmp.caveats
+                 + (list(impact.caveats) + list(impact.warnings)
+                    if impact is not None else [])
+                 + (list(attribution.caveats)
+                    + list(attribution.warnings)
+                    if attribution is not None else []),
+                 "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
     buf = io.BytesIO()

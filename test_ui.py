@@ -123,6 +123,23 @@ def main() -> int:
             check("DCMA traceback section renders",
                   page.get_by_text("Forensic Traceback").count() > 0)
 
+            # Revision Comparison: screening, attribution and the
+            # driving-path gantt all run by DEFAULT (no toggles to find)
+            goto("Revision Comparison")
+            page.wait_for_timeout(8000)
+            check("comparison: materiality rank renders by default",
+                  page.get_by_text("Materiality rank",
+                                   exact=False).count() > 0)
+            check("comparison: completion attribution renders by default",
+                  page.get_by_text("Which changes moved completion",
+                                   exact=False).count() > 0)
+            check("comparison: driving-path summary gantt renders",
+                  page.get_by_text("Driving longest path",
+                                   exact=False).count() > 0
+                  and page.locator("iframe").count() > 0)
+            check("comparison walk exception-free", exc() == 0,
+                  f"{exc()} exceptions")
+
             goto("Out-of-Sequence Repair")
             check("OOS repair plan renders",
                   page.get_by_text("As-built repair plan").count() > 0)

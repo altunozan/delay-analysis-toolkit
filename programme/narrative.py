@@ -214,7 +214,25 @@ between the revisions, exactly as provided. If there are none, state
 explicitly that no actualised dates were altered — a positive indicator for
 the contemporaneity of the records.
 
-### 6. Limitations
+### 6. What Moved Completion
+Where completion-attribution data is provided: state the kernel completion
+of each revision and the movement, then present the tested changes as a
+markdown table with EXACTLY these columns:
+| Change | Category | Completion with | Completion without | Contribution (d) |
+one row per tested change, figures verbatim. Explain the top contributors
+in a sentence each — e.g. "reverting this lag change pulls completion from
+X back to Y, so the change contributed +Nd". State plainly that each change
+was tested one at a time against a programme where every other change
+remains, so contributions interact and need not sum to the total. Where the
+driving longest path changed between revisions, name the activities that
+left and joined it.
+
+### 7. Change Provenance
+Where provenance data is provided: which update window introduced the bulk
+of the editing, which window moved completion most, and where retrospective
+actual-date changes first appear.
+
+### 8. Limitations
 Every standing caveat and warning provided, in full.""",
     "explain": """\
 ## Explain This Delay
@@ -619,8 +637,13 @@ def build_critical_path_prompt(
     return "\n".join(lines)
 
 def build_comparison_prompt(
-    cmp: ComparisonResult, template: str | None = None
+    cmp: ComparisonResult, template: str | None = None,
+    impact=None, attribution=None, provenance=None,
 ) -> str:
+    """The revision-comparison narrative prompt. When the page ran the
+    impact screening, the completion attribution or the provenance
+    timeline, their results ride along so the report covers EVERYTHING
+    the page shows."""
     def fmt(d):
         return f"{d:%Y-%m-%d}" if d else "unknown"
     lines = ["<context>Change log between two programme revisions: "
@@ -690,9 +713,93 @@ def build_comparison_prompt(
     _logic("logic_added", cmp.logic_added)
     _logic("logic_removed", cmp.logic_removed)
 
+    if impact is not None:
+        lines.append("<impact_screening note='deterministic materiality "
+                     "rank: path position + magnitude + red-flag bonus; "
+                     "a screening for attention, not causation'>")
+        for rc in impact.ranked[:30]:
+            lines.append(f"- score {rc.score} [{rc.band}] {rc.category}: "
+                         f"{rc.ref} '{rc.name}' — {rc.detail}")
+        if len(impact.ranked) > 30:
+            lines.append(f"... (+{len(impact.ranked) - 30} more)")
+        lines.append("</impact_screening>\n")
+        lp_old_only = [c for c, _ in impact.lp_old
+                       if c not in {x for x, _ in impact.lp_new}]
+        lp_new_only = [c for c, _ in impact.lp_new
+                       if c not in {x for x, _ in impact.lp_old}]
+        lines.append("<longest_path_comparison>")
+        lines.append(f"- earlier revision driving path: "
+                     f"{len(impact.lp_old)} activities to "
+                     f"{impact.end_old}")
+        lines.append(f"- later revision driving path: "
+                     f"{len(impact.lp_new)} activities to "
+                     f"{impact.end_new}")
+        lines.append("- left the driving path: "
+                     + (", ".join(lp_old_only[:20]) or "none"))
+        lines.append("- joined the driving path: "
+                     + (", ".join(lp_new_only[:20]) or "none"))
+        lines.append("</longest_path_comparison>\n")
+
+    if attribution is not None:
+        def fmtd(d):
+            return f"{d:%Y-%m-%d}" if d else "n/a"
+        lines.append(
+            "<completion_attribution note='each change tested ONE AT A "
+            "TIME: the later revision re-scheduled with that single "
+            "change reverted; contribution +ve = the change pushed "
+            "completion later. Kernel-vs-kernel deltas; contributions "
+            "interact and need not sum to the total movement'>")
+        lines.append(f"- kernel completion, earlier revision: "
+                     f"{fmtd(attribution.kernel_completion_old)}")
+        lines.append(f"- kernel completion, later revision: "
+                     f"{fmtd(attribution.kernel_completion_new)}"
+                     + (f" (moved {attribution.kernel_moved_days:+.0f}d)"
+                        if attribution.kernel_moved_days is not None
+                        else ""))
+        for a in attribution.tested_changes[:25]:
+            lines.append(
+                f"- {a.category}: {a.ref} '{a.name}' ({a.detail}): "
+                f"completion {fmtd(a.completion_with)} with the change "
+                f"-> {fmtd(a.completion_without)} without it, "
+                f"contribution {a.contribution_days:+.1f}d"
+                if a.contribution_days is not None else
+                f"- {a.category}: {a.ref} '{a.name}': tested, no "
+                "completion figure")
+        untested = [a for a in attribution.changes if not a.tested]
+        if untested:
+            lines.append(f"- {len(untested)} change(s) not re-scheduled "
+                         "(completed side, absent, or beyond the test "
+                         "cap)")
+        lines.append("</completion_attribution>\n")
+
+    if provenance is not None and provenance.windows:
+        lines.append("<provenance note='each change category attributed "
+                     "to the update window that introduced it'>")
+        for w in provenance.windows:
+            top = sorted(((k, v) for k, v in w.counts.items() if v),
+                         key=lambda x: -x[1])[:4]
+            lines.append(
+                f"- window {w.old_label} -> {w.new_label}: completion "
+                f"moved {w.completion_moved_days:+.0f}d, "
+                f"{w.red_flag_count} retrospective actual change(s); "
+                "top edits: "
+                + (", ".join(f"{k} x{v}" for k, v in top) or "none")
+                if w.completion_moved_days is not None else
+                f"- window {w.old_label} -> {w.new_label}: completion "
+                "movement unknown")
+        lines.append("</provenance>\n")
+
     lines.append("<caveats>")
     lines.extend(f"- {c}" for c in cmp.caveats)
     lines.extend(f"- {w}" for w in cmp.warnings)
+    if impact is not None:
+        lines.extend(f"- {c}" for c in impact.caveats)
+        lines.extend(f"- {w}" for w in impact.warnings)
+    if attribution is not None:
+        lines.extend(f"- {c}" for c in attribution.caveats)
+        lines.extend(f"- {w}" for w in attribution.warnings)
+    if provenance is not None:
+        lines.extend(f"- {c}" for c in provenance.caveats)
     lines.append("</caveats>\n")
     lines.append(_instructions(template or DEFAULT_TEMPLATES["comparison"]))
     return "\n".join(lines)

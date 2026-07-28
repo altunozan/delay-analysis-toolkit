@@ -2164,6 +2164,61 @@ check("N14m no overlap with the catalogue keeps the curated list",
 check("N14n the static list is never mutated in place",
       _n14prov["nvidia"]["models"] == _n14nv)
 
+# N15. Completion impact attribution — which changes actually moved
+# completion, measured by one-at-a-time reversion + kernel re-schedule.
+from programme import (assess_comparison_impact as _n15imp,
+                       attribute_completion_impact as _n15attr,
+                       compare_revisions as _n15cmp,
+                       build_comparison_prompt as _n15bp,
+                       build_comparison_xlsx as _n15bx,
+                       build_provenance as _n15prov)
+_n15c = _n15cmp(B, U, "B", "U")
+_n15i = _n15imp(B, U, "B", "U", comparison=_n15c, end_task_code="KD15")
+check("N15 impact carries both driving paths for the summary gantt",
+      len(_n15i.lp_old) > 0 and len(_n15i.lp_new) > 0
+      and all(len(x) == 2 for x in _n15i.lp_new_links[:5]))
+_n15a = _n15attr(B, U, "B", "U", comparison=_n15c, impact=_n15i,
+                 end_task_code="KD15")
+check("N15b kernel completions computed for both revisions, "
+      "movement kernel-vs-kernel",
+      _n15a.kernel_completion_old is not None
+      and _n15a.kernel_completion_new is not None
+      and _n15a.kernel_moved_days is not None
+      and 400 < _n15a.kernel_moved_days < 700)
+_n15t = _n15a.tested_changes
+check("N15c every tested change carries both completions and the "
+      "contribution identity (with - without)",
+      _n15t and all(
+          a.completion_without is not None
+          and abs(a.contribution_days
+                  - round((a.completion_with - a.completion_without
+                           ).total_seconds() / 86400, 1)) < 0.05
+          for a in _n15t))
+check("N15d untested changes say WHY (completed side / cap)",
+      all(a.note for a in _n15a.changes if not a.tested))
+check("N15e changes ranked by absolute contribution",
+      [abs(a.contribution_days or 0) for a in _n15a.changes]
+      == sorted([abs(a.contribution_days or 0)
+                 for a in _n15a.changes], reverse=True))
+_n15a2 = _n15attr(B, U, "B", "U", comparison=_n15c, max_tests=2)
+check("N15f the test cap is honoured and disclosed",
+      len(_n15a2.tested_changes) <= 2
+      and any("cap" in a.note for a in _n15a2.changes if not a.tested))
+_n15pv = _n15prov([("B", B)] + fix[:1] + [("U", U)])
+_n15p = _n15bp(_n15c, None, impact=_n15i, attribution=_n15a,
+               provenance=_n15pv)
+check("N15g the narrative prompt carries screening, attribution, "
+      "path comparison and provenance",
+      all(t in _n15p for t in ("<impact_screening",
+                               "<completion_attribution",
+                               "<longest_path_comparison>",
+                               "<provenance")))
+_n15wb = load_workbook(io.BytesIO(_n15bx(
+    _n15c, None, impact=_n15i, attribution=_n15a, provenance=_n15pv)))
+check("N15h the workbook ships every table the page shows",
+      {"Materiality Rank", "Completion Attribution",
+       "Provenance"} <= set(_n15wb.sheetnames))
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this
