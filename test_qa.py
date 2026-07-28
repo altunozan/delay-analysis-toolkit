@@ -2442,6 +2442,51 @@ for _f in _n16glob.glob("views/*.py"):
             _n16_direct.append(f"{_f}:{_wk}")
 check("N16j advisor writes to live widget keys are staged via _next",
       not _n16_direct, str(_n16_direct))
+
+# N17. Forensic source identity (audit F-01). The intake cache and the
+# raw-byte/custody stores key on CONTENT, never (filename, size).
+print("\n--- Layer N17: forensic source identity ---")
+from programme import assign_upload_identity as _n17id
+import hashlib as _n17hl
+
+_n17a = (b"ERMHDR\t8.0\n%T\tTASK\n%F\ttask_id\ttask_code\n"
+         b"%R\tT1\tAAA\n%E\n")
+_n17b = _n17a.replace(b"AAA", b"BBB")          # same length, new content
+_n17sa = _n17hl.sha256(_n17a).hexdigest()
+_n17sb = _n17hl.sha256(_n17b).hexdigest()
+check("N17 same name + same byte size + different content yields "
+      "DIFFERENT signatures (the stale-programme hole)",
+      len(_n17a) == len(_n17b)
+      and (("prog.xer", _n17sa),) != (("prog.xer", _n17sb),))
+
+_n17seen: dict = {}
+_u1, _w1 = _n17id("prog.xer", _n17sa, _n17seen)
+_u2, _w2 = _n17id("prog.xer", _n17sb, _n17seen)
+check("N17b duplicate filename with different content is kept under a "
+      "disclosed unique identity, never overwritten",
+      _u1 == "prog.xer" and _u2 == "prog.xer (2)"
+      and _w2 and "DIFFERENT" in _w2
+      and _n17seen[_u1] != _n17seen[_u2])
+
+_u3, _w3 = _n17id("prog.xer", _n17sa, _n17seen)
+check("N17c exact duplicate (same name AND same content) is dropped "
+      "with a warning, not double-registered",
+      _u3 is None and _w3 and "identical" in _w3)
+_u4, _w4 = _n17id("prog.xer", _n17sb, _n17seen)
+check("N17c2 a duplicate of the RENAMED variant is also recognised",
+      _u4 is None and _w4 and "prog.xer (2)" in _w4)
+_u5, _w5 = _n17id("prog.xer", "third-different-hash", _n17seen)
+check("N17d a third distinct file under the same name gets the next "
+      "free identity", _u5 == "prog.xer (3)")
+
+# STRUCTURAL: intake must never regress to a (name, size) signature.
+_n17src = open("views/intake.py").read()
+check("N17e intake signature is content-hash based, raw bytes keyed by "
+      "the unique identity",
+      "signature = tuple(sorted((u, s)" in _n17src
+      and "signature = tuple(sorted((name, size)" not in _n17src
+      and "assign_upload_identity" in _n17src
+      and "stash_raw(uname, raw)" in _n17src)
 _n16_wb = load_workbook(io.BytesIO(
     _n15bapx("Float Erosion", _n16_built["float"])))
 check("N16e a module appendix builds a navigable workbook",

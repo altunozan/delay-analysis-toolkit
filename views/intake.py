@@ -12,7 +12,8 @@ import state as sk
 from dcma import DCMAConfig, parse_xer
 from programme import (
     inventory_appendix,
-    ProjectStore, STORE_CAVEATS, build_custody_xlsx, build_inventory,
+    ProjectStore, STORE_CAVEATS, assign_upload_identity,
+    build_custody_xlsx, build_inventory,
     build_inventory_prompt, build_inventory_xlsx,
 )
 from programme.narrative import DEFAULT_TEMPLATES
@@ -80,31 +81,57 @@ def intake_tab() -> None:
             "toolkit locally — the parser itself has no size limit "
             "(uploads accepted to 400 MB).")
 
-    signature = tuple(sorted((name, size) for name, _, size in sources))
+    def _read_bytes(src) -> bytes:
+        if isinstance(src, str):
+            with open(src, "rb") as fh:
+                return fh.read()
+        return src.getvalue()
+
+    # ---- forensic source identity (F-01) -----------------------------
+    # The cache signature is CONTENT (SHA-256), never (filename, size):
+    # a changed XER with the same name and byte count must re-parse, and
+    # two different files sharing a name must never overwrite each
+    # other's raw bytes or custody hashes. Hashing every source on each
+    # rerun of this page costs ~25 ms per 10 MB — correctness is worth
+    # far more than that.
+    identified = []                   # (unique_name, sha256, src)
+    _seen: dict[str, str] = {}
+    for name, src, _ in sources:
+        try:
+            _raw = _read_bytes(src)
+        except Exception as exc:  # noqa: BLE001 - per-file errors
+            st.warning(f"Skipped '{name}': {exc}")
+            continue
+        _sha = hashlib.sha256(_raw).hexdigest()
+        del _raw
+        uname, id_warn = assign_upload_identity(name, _sha, _seen)
+        if id_warn:
+            st.warning(id_warn)
+        if uname is None:
+            continue                  # exact duplicate content — ignored
+        identified.append((uname, _sha, src))
+
+    signature = tuple(sorted((u, s) for u, s, _ in identified))
     if signature != st.session_state.get(sk.XER_POOL_SIG):
         files = []
         hashes: dict[str, str] = {}
         with st.spinner("Parsing programmes…"):
-            for name, src, _ in sources:
+            for uname, sha, src in identified:
                 try:
-                    if isinstance(src, str):
-                        with open(src, "rb") as fh:
-                            raw = fh.read()
-                    else:
-                        raw = src.getvalue()
-                    hashes[name] = hashlib.sha256(raw).hexdigest()
+                    raw = _read_bytes(src)
+                    hashes[uname] = sha
                     # compressed session copy (~8x smaller) — the raw
                     # bytes are only needed on demand, never per-render
-                    stash_raw(name, raw)
+                    stash_raw(uname, raw)
                     data = parse_xer(raw, DCMAConfig())
                     del raw
                 except Exception as exc:  # noqa: BLE001 - per-file errors
-                    st.warning(f"Skipped '{name}': {exc}")
+                    st.warning(f"Skipped '{uname}': {exc}")
                     continue
                 if not data.tasks:
-                    st.warning(f"Skipped '{name}': no TASK table found.")
+                    st.warning(f"Skipped '{uname}': no TASK table found.")
                     continue
-                files.append((name, data))
+                files.append((uname, data))
         st.session_state[sk.XER_POOL] = files
         st.session_state[sk.XER_HASHES] = hashes
         st.session_state[sk.XER_POOL_SIG] = signature

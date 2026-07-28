@@ -185,3 +185,45 @@ def build_inventory(
         )
 
     return inv
+
+
+# --------------------------------------------------------------------------- #
+# Forensic source identity (F-01)
+# --------------------------------------------------------------------------- #
+
+def assign_upload_identity(
+    name: str, sha256: str, seen: dict[str, str],
+) -> tuple[str | None, str | None]:
+    """Canonical identity for one uploaded file: (unique_name, warning).
+
+    The intake cache and the raw-byte/custody stores must key on
+    CONTENT, never on (filename, size): a changed XER with the same
+    name and byte count would otherwise leave the previous programme
+    silently active, and duplicate filenames would overwrite each
+    other's raw bytes — the wrong source behind an export.
+
+    ``seen`` maps unique display name -> sha256 and is mutated.
+    Returns (None, warning) for an exact duplicate (same name AND same
+    content — nothing new to register), or a disambiguated display
+    name ("name (2)") with a disclosed warning when the same filename
+    arrives with different content.
+    """
+    if name not in seen:
+        seen[name] = sha256
+        return name, None
+    if seen[name] == sha256:
+        return None, (f"'{name}' was supplied twice with identical "
+                      "content — the second copy is ignored.")
+    n = 2
+    while f"{name} ({n})" in seen:
+        if seen[f"{name} ({n})"] == sha256:
+            return None, (f"'{name}' was supplied twice with identical "
+                          f"content (already registered as "
+                          f"'{name} ({n})') — the extra copy is ignored.")
+        n += 1
+    unique = f"{name} ({n})"
+    seen[unique] = sha256
+    return unique, (
+        f"Two DIFFERENT files are both named '{name}' — the second is "
+        f"registered as '{unique}' (SHA-256 …{sha256[-12:]}). Rename "
+        "the files at source if this is unintended.")

@@ -150,7 +150,8 @@ from .hierarchy import (
     config_to_json,
     tree_to_dict,
 )
-from .inventory import ProgrammeInventory, RevisionInfo, build_inventory
+from .inventory import (ProgrammeInventory, RevisionInfo,
+                        assign_upload_identity, build_inventory)
 from .milestones import (
     MilestoneMatch,
     MilestoneSeries,
@@ -332,6 +333,7 @@ __all__ = [
     "ProgrammeInventory",
     "RevisionInfo",
     "build_inventory",
+    "assign_upload_identity",
     # milestones
     "MilestoneMatch",
     "MilestoneSeries",
