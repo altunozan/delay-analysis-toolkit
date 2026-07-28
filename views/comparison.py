@@ -18,14 +18,24 @@ from views._shared import (
 )
 
 
+# Bump when the RESULT SHAPE changes: Streamlit Cloud hot-reloads the
+# source on push without clearing st.cache_data, so a cached object
+# pickled under the old dataclass can reach new code that reads fields
+# the old shape never had (AttributeError in production, invisible in
+# any fresh-process test run).
+_RESULT_SCHEMA = 2
+
+
 @st.cache_data(show_spinner=False, max_entries=8)
-def _cached_impact(k0: str, k1: str, ms, _old, _new, l0, l1, _cmp):
+def _cached_impact(k0: str, k1: str, ms, _old, _new, l0, l1, _cmp,
+                   ver: int = _RESULT_SCHEMA):
     return assess_comparison_impact(
         _old, _new, l0, l1, comparison=_cmp, end_task_code=ms)
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
-def _cached_attr(k0: str, k1: str, ms, _old, _new, l0, l1, _cmp, _imp):
+def _cached_attr(k0: str, k1: str, ms, _old, _new, l0, l1, _cmp, _imp,
+                 ver: int = _RESULT_SCHEMA):
     return attribute_completion_impact(
         _old, _new, l0, l1, comparison=_cmp, impact=_imp,
         end_task_code=ms)
@@ -62,7 +72,7 @@ def _strip_chart(cmp, attr):
     # remainder — progress performance plus the un-modelled categories.
     # Individual contributions interact and must never be summed, so
     # they are reported beneath, never as bridge steps.
-    editing = attr.editing_effect_days
+    editing = getattr(attr, "editing_effect_days", None)
     if editing is None:
         editing = 0.0
     residual = round(total - editing, 1)
@@ -162,13 +172,17 @@ def _completion_strip(cmp, attr) -> None:
     st.altair_chart(chart, width="stretch")
 
     # ---- the verdict, stated outright ------------------------------
-    edit = attr.editing_effect_days
+    # getattr throughout: a hot-reload can hand this function an attr
+    # cached under an older dataclass shape (belt to the schema-version
+    # braces on the cache key above)
+    edit = getattr(attr, "editing_effect_days", None)
+    chain = getattr(attr, "driving_chain", None) or []
     if edit is not None:
-        chain_clean = (attr.chain_root_at_data_date
-                       and attr.driving_chain
+        chain_clean = (getattr(attr, "chain_root_at_data_date", False)
+                       and chain
                        and not any(c["duration_changed"]
                                    or c["logic_changed"]
-                                   for c in attr.driving_chain))
+                                   for c in chain))
         if abs(edit) >= 0.5 and abs(edit) >= abs(residual):
             st.error(
                 f"**The programme edits moved it.** Reverting every "
@@ -180,7 +194,7 @@ def _completion_strip(cmp, attr) -> None:
         elif chain_clean:
             st.warning(
                 f"**Nothing progressed on the driving chain.** The "
-                f"{len(attr.driving_chain)} activities governing "
+                f"{len(chain)} activities governing "
                 f"completion are UNCHANGED between the revisions — no "
                 "duration, no logic edited — and the chain is rooted "
                 "at an activity sitting on the data date. It simply "
@@ -207,11 +221,11 @@ def _completion_strip(cmp, attr) -> None:
            if movers else ""))
 
     # ---- what actually governs completion --------------------------
-    if attr.driving_chain:
+    if chain:
         with st.expander(
                 f"What governs completion — the driving chain to "
                 f"{attr.anchor_code or 'the latest finisher'} "
-                f"({len(attr.driving_chain)} activities)"):
+                f"({len(chain)} activities)"):
             st.dataframe(pd.DataFrame([{
                 "#": i,
                 "Activity ID": c["code"],
@@ -222,7 +236,7 @@ def _completion_strip(cmp, attr) -> None:
                                        else "logic"
                                        if c["logic_changed"] else ""),
                 "On the data date": "◆" if c["at_data_date"] else "",
-            } for i, c in enumerate(attr.driving_chain, start=1)]),
+            } for i, c in enumerate(chain, start=1)]),
                 width="stretch", hide_index=True, height=300)
             st.caption(
                 "Read top-down: the completion anchor, then the "

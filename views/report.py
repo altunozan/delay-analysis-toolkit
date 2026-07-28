@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 
 import streamlit as st
 
@@ -10,7 +9,7 @@ import state as sk
 from dcma import DCMAConfig, run_all_checks
 from dcma.checks import CheckStatus
 from dcma.narrative import (
-    DEFAULT_TEMPLATE as DCMA_DEFAULT_TEMPLATE, NarrativeError, PROVIDERS,
+    DEFAULT_TEMPLATE as DCMA_DEFAULT_TEMPLATE, NarrativeError,
     build_report_prompt, stream_narrative,
 )
 from programme import (
@@ -27,8 +26,8 @@ from programme import (
     task_wbs_assignments,
 )
 from views._shared import (
-    _fkey, cached_compare, cached_longest_path, cached_milestone_shifts,
-    cached_windows, get_parsed_files, model_selector,
+    _fkey, ai_provider_block, cached_compare, cached_longest_path,
+    cached_milestone_shifts, cached_windows, get_parsed_files,
 )
 
 
@@ -472,17 +471,10 @@ def report_tab() -> None:
         f"({len(missing)} section(s) without one)",
         expanded=bool(missing),
     ):
-        pcol1, pcol2 = st.columns(2)
-        provider = pcol1.selectbox(
-            "AI provider", options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"], key="rep_provider")
-        pinfo = PROVIDERS[provider]
-        model = model_selector(pcol2, pinfo, f"rep_{provider}")
-        env_key = os.environ.get(pinfo["env_var"], "")
-        if provider == "gemini" and not env_key:
-            env_key = os.environ.get("GOOGLE_API_KEY", "")
-        api_key = st.text_input(f"{pinfo['label']} API key", type="password",
-                                value=env_key, key="rep_key")
+        # THE shared provider block — managed key, model dropdown,
+        # own-key switch; the env-only block it replaces never saw the
+        # managed key on Cloud
+        provider, model, api_key = ai_provider_block("rep_ai")
         regen = st.checkbox("Regenerate sections that already have a "
                             "narrative", value=False, key="rep_regen")
         targets = selected if regen else missing

@@ -2417,6 +2417,31 @@ for _f in sorted(_n16glob.glob("views/*.py")):
 check("N16h no view indexes a data-editor column unguarded "
       "(empty frame => KeyError)",
       not _n16_unguarded, "; ".join(_n16_unguarded))
+
+# N16i. STRUCTURAL: AI credentials render through the ONE shared block.
+# A page-local key input reads only environment variables, so the
+# managed key never reaches it on Cloud — sequence coding's AI review
+# and the report assembler both shipped that way ('the AI recommend
+# option is not working'). No view outside _shared may render its own
+# password input.
+_n16_bespoke = [f for f in _n16glob.glob("views/*.py")
+                if not f.endswith("_shared.py")
+                and 'type="password"' in open(f).read()]
+check("N16i no bespoke API-key inputs outside the shared provider "
+      "block", not _n16_bespoke, str(_n16_bespoke))
+
+# N16j. STRUCTURAL: writing st.session_state[key] for a widget key
+# already instantiated this run raises StreamlitAPIException. The safe
+# pattern stages into '<key>_next' and applies before widget creation.
+_n16_direct = []
+for _f in _n16glob.glob("views/*.py"):
+    _src = open(_f).read()
+    for _wk in ("seq_view", "seq_colour", "seq_maxfronts"):
+        if (f'st.session_state["{_wk}"] =' in _src
+                and f'"{_wk}_next"' not in _src):
+            _n16_direct.append(f"{_f}:{_wk}")
+check("N16j advisor writes to live widget keys are staged via _next",
+      not _n16_direct, str(_n16_direct))
 _n16_wb = load_workbook(io.BytesIO(
     _n15bapx("Float Erosion", _n16_built["float"])))
 check("N16e a module appendix builds a navigable workbook",
@@ -2475,8 +2500,31 @@ if _os.path.isdir(_FIELD):
                           f"{type(_exc).__name__}")
     check("M1 every field file parses or raises controlled ValueError",
           not _m_bad and _m_ok >= 15, str(_m_bad))
-    check("M1b the structure-only NCC export is REFUSED (zero tasks)",
-          _m_val >= 1)
+    # M1b's original fixture was a client file (the 27MB structure-only
+    # NCC export) and client files come and go — the refusal behaviour
+    # itself is pinned deterministically by M1c below, so this corpus
+    # check only runs when such a file is present.
+    if _m_val:
+        check("M1b structure-only exports in the corpus are REFUSED",
+              _m_val >= 1)
+    else:
+        print("  [SKIP] M1b no structure-only file in the corpus "
+              "(behaviour pinned by M1c)")
+    # M1c. DETERMINISTIC: a file with project structure but zero TASK
+    # rows must be refused loudly, never returned as a silently empty
+    # programme.
+    _m1c_txt = ("ERMHDR\t8.0\n"
+                "%T\tPROJECT\n%F\tproj_id\tproj_short_name\t"
+                "last_recalc_date\n%R\tP1\tSTRUCT\t2018-01-01 00:00\n"
+                "%T\tCALENDAR\n%F\tclndr_id\tclndr_name\n%R\tC1\tStd\n"
+                "%E\n")
+    try:
+        parse_xer(_m1c_txt.encode())
+        _m1c_ok = False
+    except ValueError as _exc:
+        _m1c_ok = "activities" in str(_exc).lower()
+    check("M1c zero-task export is refused with a controlled "
+          "ValueError naming the problem", _m1c_ok)
 
     def _m_series(sub):
         out = [(f.split("/")[-1], d) for f, d in _m_parsed.items()

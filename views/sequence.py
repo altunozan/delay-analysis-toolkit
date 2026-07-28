@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import os
-
 import altair as alt
 import pandas as pd
 import streamlit as st
 
 import state as sk
-from dcma.narrative import NarrativeError, PROVIDERS, stream_narrative
+from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
     sequence_appendix,
     REVIEW_SYSTEM_PROMPT, STAGE_ORDER, UNCLASSIFIED,
@@ -19,7 +17,8 @@ from programme import (
     parse_view_advice, propose_sequence_mapping, report_charts,
 )
 from programme.narrative import DEFAULT_TEMPLATES
-from views._shared import ai_narrative_panel, get_parsed_files, model_selector
+from views._shared import (ai_narrative_panel, ai_provider_block,
+                           get_parsed_files)
 
 
 def sequence_tab() -> None:
@@ -71,18 +70,11 @@ def sequence_tab() -> None:
                     "every activity and proposes corrections; they land "
                     "in the table below marked *AI review* and still "
                     "require your confirmation.")
-        rc1, rc2 = st.columns(2)
-        r_provider = rc1.selectbox(
-            "AI provider", options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"],
-            key="seq_ai_provider")
-        r_info = PROVIDERS[r_provider]
-        r_model = model_selector(rc2, r_info, f"seq_ai_{r_provider}")
-        r_env = os.environ.get(r_info["env_var"], "")
-        if r_provider == "gemini" and not r_env:
-            r_env = os.environ.get("GOOGLE_API_KEY", "")
-        r_key = st.text_input(f"{r_info['label']} API key", type="password",
-                              value=r_env, key="seq_ai_key")
+        # THE shared provider block — managed NVIDIA default, model
+        # dropdown, own-key switch. The same function every other AI
+        # feature renders; the page-local block it replaces read only
+        # environment variables, so the managed key never reached it.
+        r_provider, r_model, r_key = ai_provider_block("seq_rev_ai")
         scope = st.radio(
             "Rows to review", ["Unclassified / General only",
                                "All activities"],
@@ -191,6 +183,12 @@ def sequence_tab() -> None:
         "Stage timeline": "stage_timeline",
         "Sequence gantt (Front › Stage)": "sequence_gantt",
     }
+    # the AI advisor sets these AFTER its own widgets rendered, which
+    # Streamlit forbids for an instantiated widget key — stage the
+    # values and apply them here, before the widgets are created
+    for _k in ("seq_view", "seq_colour", "seq_maxfronts"):
+        if f"{_k}_next" in st.session_state:
+            st.session_state[_k] = st.session_state.pop(f"{_k}_next")
     vc1, vc2, vc3 = st.columns([2, 1, 1])
     view_label = vc1.radio("View", list(VIEW_MODES.keys()),
                            horizontal=True, key="seq_view")
@@ -200,30 +198,27 @@ def sequence_tab() -> None:
     max_fronts = vc3.slider("Fronts shown", 5, 40, 20, key="seq_maxfronts",
                             help="Last-finishing work fronts included.")
     with st.expander("🤖 Let the AI recommend the clearest view"):
-        s_provider = st.selectbox(
-            "Provider", options=list(PROVIDERS.keys()),
-            format_func=lambda p: PROVIDERS[p]["label"], key="seq_vp")
-        s_env = os.environ.get(PROVIDERS[s_provider]["env_var"], "")
-        if s_provider == "gemini" and not s_env:
-            s_env = os.environ.get("GOOGLE_API_KEY", "")
-        s_key = st.text_input("API key", type="password", value=s_env,
-                              key="seq_vk")
+        s_provider, s_model, s_key = ai_provider_block("seq_view_ai")
         if st.button("Recommend the best view", key="seq_vgo",
                      disabled=not s_key):
             try:
                 text = "".join(stream_narrative(
                     s_provider, s_key,
                     build_view_advice_prompt(seq, len(prop.fronts)),
-                    None, system=VIEW_ADVISOR_SYSTEM_PROMPT))
+                    s_model or None, system=VIEW_ADVISOR_SYSTEM_PROMPT))
                 advice = parse_view_advice(text)
             except NarrativeError as exc:
                 advice = None
                 st.error(exc.message)
             if advice:
                 inv_modes = {v: k for k, v in VIEW_MODES.items()}
-                st.session_state["seq_view"] = inv_modes[advice["mode"]]
-                st.session_state["seq_colour"] = advice["colour"]
-                st.session_state["seq_maxfronts"] = advice["max_fronts"]
+                # staged: the live widget keys cannot be written after
+                # their widgets rendered this run
+                st.session_state["seq_view_next"] = inv_modes[
+                    advice["mode"]]
+                st.session_state["seq_colour_next"] = advice["colour"]
+                st.session_state["seq_maxfronts_next"] = \
+                    advice["max_fronts"]
                 st.session_state["seq_view_rationale"] = advice["rationale"]
                 st.rerun()
             elif advice is None and s_key:
