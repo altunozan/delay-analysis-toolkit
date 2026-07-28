@@ -95,10 +95,15 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
                  if t.act_finish else "  ⚠ not achieved")
               for t in ms_opts}
     # a saved election can outlive the corpus that made it (new files
-    # loaded mid-session) — a default that is not among the options is
-    # a hard StreamlitAPIException, so sanitise before rendering
+    # loaded mid-session) — a default OR STORED WIDGET STATE that is
+    # not among the options is a hard StreamlitAPIException, so
+    # sanitise both before rendering
     saved_ms = [c for c in (st.session_state.get(sk.APAB_MS) or [])
                 if c in labels]
+    wkey = f"{key_prefix}_ms_pick"
+    if wkey in st.session_state:
+        st.session_state[wkey] = [
+            c for c in st.session_state[wkey] if c in labels]
     chosen_ms = st.multiselect(
         "Milestone(s) to measure to — each gets its own path, "
         "grouped separately in the gantt",
@@ -153,6 +158,10 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
         cand_key = "lp" if pick.startswith("Longest") else "sq"
         all_labels = {c: f"{c} — {t.name[:52]}"
                       for c, t in by_code.items()}
+        ekey = f"{key_prefix}_edit_{ms}_{cand_key}"
+        if ekey in st.session_state:
+            st.session_state[ekey] = [
+                c for c in st.session_state[ekey] if c in all_labels]
         edited = st.multiselect(
             f"Hand-edit the path for {ms} (add or remove "
             "activities; edits are disclosed)",

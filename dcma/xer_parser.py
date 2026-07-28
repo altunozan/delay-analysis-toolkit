@@ -16,6 +16,7 @@ tables for any check that needs extra columns.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 
 from .config import DCMAConfig
@@ -101,7 +102,15 @@ def parse_xer(path_or_text: str | bytes, config: DCMAConfig | None = None) -> Xe
             # Pad/truncate to the field count to stay positionally aligned.
             if len(values) < len(current_fields):
                 values = values + [""] * (len(current_fields) - len(values))
-            row = dict(zip(current_fields, values))
+            # Memory: XER rows are mostly empty cells and massively
+            # repeated short strings (statuses, ids, dates). Dropping
+            # empty cells is safe — every consumer reads via
+            # row.get(col, default) — and interning short values makes
+            # repeats share one object. On a 20 MB field export this
+            # halves the parsed footprint; without it, Cloud's ~1 GB
+            # host dies mid-parse on multi-revision uploads.
+            row = {f: sys.intern(v) if len(v) <= 40 else v
+                   for f, v in zip(current_fields, values) if v}
             data.raw_tables[current_table].append(row)
         elif marker == "%E":
             break

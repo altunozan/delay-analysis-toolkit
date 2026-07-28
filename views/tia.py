@@ -28,7 +28,7 @@ from programme import (
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
     ai_credentials_panel, ai_narrative_panel, basis_panel,
-    get_parsed_files, resolve_ai_credentials,
+    fetch_raw, get_parsed_files, resolve_ai_credentials,
 )
 from views._submodules import analysis_submodules
 
@@ -852,7 +852,7 @@ def tia_tab() -> None:
         st.session_state.setdefault(sk.EVENT_REGISTER, {})[
             event.event_id] = event_to_dict(event, fragnet, res)
         st.success(f"Saved '{event.event_id}'.")
-    raw = st.session_state.get(sk.XER_RAW, {}).get(chosen)
+    raw = fetch_raw(chosen)
     if raw is not None:
         try:
             impacted = build_impacted_xer(

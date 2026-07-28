@@ -20,3 +20,7 @@ level = "info"
 headless = true
 port = 8501
 enableXsrfProtection = true
+# Big field programmes: the default 200 MB is fine, but be explicit —
+# upload size is never the parse bottleneck; host MEMORY is (Cloud has
+# ~1 GB; run locally for very large XER sets).
+maxUploadSize = 400

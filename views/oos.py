@@ -11,7 +11,7 @@ from programme import (
 )
 from views._shared import (
     _fkey, cached_oos_evolution, cached_oos_flags, cached_repair_plan,
-    get_parsed_files,
+    fetch_raw, get_parsed_files,
 )
 
 
@@ -95,7 +95,7 @@ def oos_tab() -> None:
         r.apply = bool(apply_sel) and not r.blocked
     n_sel = sum(1 for r in plan if r.apply)
 
-    raw = st.session_state.get(sk.XER_RAW, {}).get(chosen)
+    raw = fetch_raw(chosen)
     report = None
     if raw is None:
         st.warning("Raw file text unavailable for this file — reload it "

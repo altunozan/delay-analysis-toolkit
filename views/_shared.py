@@ -45,6 +45,31 @@ def get_parsed_files() -> list[tuple[str, object]]:
     return st.session_state.get(sk.XER_POOL, [])
 
 
+def stash_raw(name: str, raw: bytes) -> None:
+    """Keep an original XER in session, zlib-compressed.
+
+    XER is tab-separated text — ~8x smaller compressed, so a 20 MB
+    upload pins ~2.5 MB instead of 20. The raw bytes are only ever
+    needed on demand (OOS repair export, TIA impacted-XER export,
+    custody register), never per-render.
+    """
+    import zlib
+    st.session_state.setdefault(sk.XER_RAW, {})[name] = \
+        zlib.compress(raw, 6)
+
+
+def fetch_raw(name: str) -> bytes | None:
+    """Original XER bytes back from the compressed session pool."""
+    import zlib
+    z = st.session_state.get(sk.XER_RAW, {}).get(name)
+    if z is None:
+        return None
+    try:
+        return zlib.decompress(z)
+    except zlib.error:
+        return z          # a pre-compression session copy
+
+
 def _fkey(name: str) -> str:
     """Cache key for an uploaded file: its intake SHA-256 (name fallback)."""
     return st.session_state.get(sk.XER_HASHES, {}).get(name, name)

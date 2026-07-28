@@ -15,7 +15,8 @@ from programme import (
     build_inventory_prompt, build_inventory_xlsx,
 )
 from programme.narrative import DEFAULT_TEMPLATES
-from views._shared import ai_narrative_panel, get_parsed_files
+from views._shared import (ai_narrative_panel, fetch_raw,
+                           get_parsed_files, stash_raw)
 
 
 def intake_tab() -> None:
@@ -66,27 +67,43 @@ def intake_tab() -> None:
     else:
         sources = [(u.name, u, u.size) for u in uploads or []]
 
+    _on_cloud = os.path.exists("/mount/src")
+    _big = [(n, s) for n, _, s in sources if s > 15 * 1024 * 1024]
+    if _on_cloud and _big:
+        st.warning(
+            "Large file(s): "
+            + ", ".join(f"{n} ({s / 1048576:.0f} MB)" for n, s in _big)
+            + ". This Cloud host has ~1 GB of memory; a programme this "
+            "size can exhaust it mid-parse, which shows as the app "
+            "reloading with nothing loaded. If that happens, run the "
+            "toolkit locally — the parser itself has no size limit "
+            "(uploads accepted to 400 MB).")
+
     signature = tuple(sorted((name, size) for name, _, size in sources))
     if signature != st.session_state.get(sk.XER_POOL_SIG):
         files = []
         hashes: dict[str, str] = {}
-        for name, src, _ in sources:
-            try:
-                if isinstance(src, str):
-                    with open(src, "rb") as fh:
-                        raw = fh.read()
-                else:
-                    raw = src.getvalue()
-                hashes[name] = hashlib.sha256(raw).hexdigest()
-                st.session_state.setdefault(sk.XER_RAW, {})[name] = raw
-                data = parse_xer(raw, DCMAConfig())
-            except Exception as exc:  # noqa: BLE001 - surface per-file errors
-                st.warning(f"Skipped '{name}': {exc}")
-                continue
-            if not data.tasks:
-                st.warning(f"Skipped '{name}': no TASK table found.")
-                continue
-            files.append((name, data))
+        with st.spinner("Parsing programmes…"):
+            for name, src, _ in sources:
+                try:
+                    if isinstance(src, str):
+                        with open(src, "rb") as fh:
+                            raw = fh.read()
+                    else:
+                        raw = src.getvalue()
+                    hashes[name] = hashlib.sha256(raw).hexdigest()
+                    # compressed session copy (~8x smaller) — the raw
+                    # bytes are only needed on demand, never per-render
+                    stash_raw(name, raw)
+                    data = parse_xer(raw, DCMAConfig())
+                    del raw
+                except Exception as exc:  # noqa: BLE001 - per-file errors
+                    st.warning(f"Skipped '{name}': {exc}")
+                    continue
+                if not data.tasks:
+                    st.warning(f"Skipped '{name}': no TASK table found.")
+                    continue
+                files.append((name, data))
         st.session_state[sk.XER_POOL] = files
         st.session_state[sk.XER_HASHES] = hashes
         st.session_state[sk.XER_POOL_SIG] = signature
@@ -206,13 +223,12 @@ def intake_tab() -> None:
                                     key="lib_project")
         if st.button("Register uploaded files in the library",
                      disabled=not lib_project.strip()):
-            raw_pool = st.session_state.get(sk.XER_RAW, {})
             try:
                 store = ProjectStore()
                 added, dups = 0, 0
                 by_name = {r.file_name: r for r in inv.revisions}
                 for name, _data in files:
-                    raw = raw_pool.get(name)
+                    raw = fetch_raw(name)
                     if raw is None:
                         continue
                     r = by_name.get(name)

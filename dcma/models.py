@@ -68,7 +68,7 @@ def _to_float(value: str | None) -> float | None:
         return None
 
 
-@dataclass
+@dataclass(slots=True)
 class Calendar:
     clndr_id: str
     name: str
@@ -86,7 +86,7 @@ class Calendar:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class Project:
     proj_id: str
     short_name: str
@@ -107,7 +107,7 @@ class Project:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class Relationship:
     pred_task_id: str
     task_id: str            # successor
@@ -124,7 +124,7 @@ class Relationship:
         )
 
 
-@dataclass
+@dataclass(slots=True)
 class Task:
     task_id: str            # internal id (join key)
     task_code: str          # user-facing Activity ID
