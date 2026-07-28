@@ -42,126 +42,183 @@ _HARD_RULES = (
     "</rules>"
 )
 
+# Presentation rules shared by every template. Written once here but
+# CONCATENATED into each template string, so the analyst sees and can
+# edit them in the panel like any other part of the section draft.
+_BODY_RULES = """\
+PRESENTATION RULES (apply to every section below)
+- Tabulate first, narrate after. Markdown tables render as real tables in
+  the Word export, so every section that has row data carries its table
+  with the columns specified, then 2-3 sentences reading it.
+- Show at most the FIVE most material rows per table — the data is
+  supplied in that order. Where a category has more, state its TOTAL
+  count in the sentence beneath and add: "the complete table is in the
+  accompanying Excel workbook" (and at Appendix A where this report
+  carries an appendix). Never imply the five shown are all of them.
+- Figures verbatim from the data. Never invent, extrapolate or round
+  beyond what is supplied; where a figure is absent say so rather than
+  estimating it.
+- Charts are attached to this document as figures. Refer to them by
+  name; never attempt to redraw a chart in text or ASCII.
+- Report favourable findings with the same weight as adverse ones.
+
+"""
+
 # Default report-section templates per module. These mirror how the sections
 # would sit in a preliminary delay analysis report and are user-editable in
 # the UI before generation (structure only — the rules above still apply).
 DEFAULT_TEMPLATES: dict[str, str] = {
-    "inventory": """\
+    "inventory": _BODY_RULES + """\
 ## Information Relied Upon
 
 ### 1. Programme Revisions Received
-For each revision: file, data date, role (baseline/update/current), size, and
-what it contains. Present as a short paragraph per revision or a compact list.
+The revision register as a table:
+| File | Data date | Role | Activities | Relationships | Milestones | Activity codes |
+one row per revision in data-date order, then 2-3 sentences on what the
+set comprises.
 
 ### 2. Revision Timeline
-One paragraph: the period the revisions span and the update cadence
-(regular/irregular, gaps).
+One paragraph: the period the revisions span, the update cadence
+(regular/irregular), and any gap long enough to leave a window
+unevidenced.
 
 ### 3. Missing Information & Its Consequences
-For each missing input, state which analysis it constrains.
+A table:
+| Missing input | Analysis it constrains |
+then a sentence on the overall effect on reliance. If nothing is
+missing, state that plainly as a positive indicator.
 
 ### 4. Limitations
-All data-quality warnings and caveats.""",
-    "milestones": """\
+All data-quality warnings and caveats provided, in full.""",
+    "milestones": _BODY_RULES + """\
 ## Milestone Slippage Analysis
 
 ### 1. Executive Summary
-2-3 sentences: the overall slippage picture across the tracked milestones,
-naming the worst-affected milestone and its total shift.
+2-3 sentences: the overall slippage picture across the tracked
+milestones, naming the worst-affected milestone and its total shift.
 
-### 2. Milestones On or Ahead of Programme
-Milestones achieved on/before their original forecast, held stable across
-revisions, or showing negative (favourable) shift — with figures. If none,
-state that.
+### 2. Milestone Movement
+The tracked milestones as a table, worst shift first:
+| Milestone | Name | First forecast | Latest forecast / actual | Total shift (d) | Achieved? |
+then 2-3 sentences reading it.
 
-### 3. Key Milestone Movements
-One bullet per milestone: total shift in days, the revisions between which
-the largest movement occurred, and whether it is achieved or still forecast.
+### 3. Milestones On or Ahead of Programme
+Milestones achieved on/before their original forecast, held stable, or
+showing negative (favourable) shift — with figures. If none, state that.
 
-### 4. Observations on Trajectory
+### 4. Where the Movement Occurred
+Per milestone with material shift, the revision pair carrying the
+largest single movement:
+| Milestone | Between revisions | Movement (d) |
+then a sentence per row on what that window represents.
+
+### 5. Observations on Trajectory
 Only what the revision-by-revision dates show: is slippage accelerating,
 stabilising, or recovering between data dates?
 
-### 5. Unconfirmed Milestone Matches
-List any proposed renamed/re-IDed milestones pending analyst confirmation.
+### 6. Unconfirmed Milestone Matches
+Any proposed renamed/re-IDed milestones pending analyst confirmation, as
+a table:
+| Earlier ID | Later ID | Basis of the proposed match |
 
-### 6. Limitations
-All caveats provided, plus the standing note that shifts describe programme
-forecasts, not proven delay causation.""",
-    "variance": """\
+### 7. Limitations
+All caveats provided, plus the standing note that shifts describe
+programme forecasts, not proven delay causation.""",
+    "variance": _BODY_RULES + """\
 ## Preliminary As-Planned vs As-Recorded Review
 
 ### 1. Executive Summary
-2-3 sentences: where slippage clusters across the breakdown groups, naming
-the worst groups with figures.
+2-3 sentences: where slippage clusters across the breakdown groups,
+naming the worst groups with figures.
 
-### 2. Groups On or Ahead of Plan
-Groups whose recorded dates are at or better than planned (zero or negative
-deltas) — with figures. If none, state that.
+### 2. Variance by Group
+A table, worst finish delta first:
+| Group | Planned start | Planned finish | Recorded start | Recorded finish | Start delta (d) | Finish delta (d) |
+then 2-3 sentences reading it.
 
-### 3. Group-by-Group Variance
-For each group with a computable delta: planned window, recorded window,
-start and finish deltas in days. Order by finish delta, worst first.
+### 3. Groups On or Ahead of Plan
+Groups whose recorded dates are at or better than planned (zero or
+negative deltas) — with figures. If none, state that.
 
 ### 4. Pattern Observations
-Only patterns visible in the figures: do delays concentrate in particular
-groups, do starts slip more than finishes, is any part of the works
-recovering between the two programmes?
+Only patterns visible in the figures: do delays concentrate in
+particular groups, do starts slip more than finishes, is any part of the
+works recovering between the two programmes?
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
-    "asbuilt_path": """\
+    "asbuilt_path": _BODY_RULES + """\
 ## As-Built Critical Path
 
 ### 1. Executive Summary
-2-3 sentences: the milestone traced to, whether the works reached it, the
-period the path spans, and how far the chain is corroborated by programmed
-logic rather than sequence alone.
+2-3 sentences: the milestone traced to, whether the works reached it,
+the period the path spans, the basis adopted, and how far the chain is
+corroborated by programmed logic rather than sequence alone.
 
-### 2. The Driving Chain
-Walk the path from the start of the works to the terminal milestone as a
-construction story — stages of work, not an activity list. Give the dates
-of the significant hand-offs.
+### 2. How the Path Was Determined
+State the adopted basis exactly as given (longest path of the as-built
+programme, the actual recorded sequence, or an analyst election with
+edits), and the composition:
+| | Count |
+|---|---|
+| Activities on the path | |
+| As-built (recorded) | |
+| In progress at the data date | |
+| Forecast (not yet performed) | |
+The path gantt is attached as a figure — refer to it here.
 
-### 3. Work Packages
-Where a work-package grouping is provided: each package, its span, and the
-activity that drove its finish. State plainly that grouping is presentation
-and that each package's dates come from its critical-path members only.
+### 3. The Driving Chain
+The path as a table, in execution order:
+| # | Activity ID | Activity | Start | Finish | Basis |
+then walk it as a construction story — stages of work, not an activity
+list — giving the dates of the significant hand-offs.
 
-### 4. Evidence Behind the Hand-Offs
-How many hand-offs follow a programmed relationship and how many continue on
-sequence alone. Name the sequence-only hand-offs — they are the points where
-the records show one activity followed another without the programme ever
-linking them, and they need contemporaneous corroboration.
+### 4. Work Packages
+Where a work-package grouping is provided:
+| Work package | Members | On CP | Measured start | Measured finish | Driving member |
+then state plainly that grouping is presentation and that each package's
+dates come from its critical-path members only, so grouping cannot move
+the measured delay.
 
-### 5. Stalls and Long Gaps
-Hand-offs with large gaps: work that stopped between one activity finishing
-and the next starting. Report the periods and their length; do not attribute
-them to either party.
+### 5. Evidence Behind the Hand-Offs
+State how many hand-offs follow a programmed relationship and how many
+continue on sequence alone, then the weakest:
+| Predecessor | → Successor | Type | Gap (d) | Basis | Confidence |
+Name the sequence-only hand-offs — the records show one activity
+followed another without the programme ever linking them, and they need
+contemporaneous corroboration.
 
-### 6. As-Built versus Forecast
-Where the milestone was NOT achieved: state exactly where the recorded work
-ends and the forecast begins, and never describe the forecast tail as
-as-built.
+### 6. Stalls and Long Gaps
+Hand-offs with large gaps: work that stopped between one activity
+finishing and the next starting. Report the periods and their length; do
+not attribute them to either party.
 
-### 7. Limitations
+### 7. As-Built versus Forecast
+Where the milestone was NOT achieved: state exactly where the recorded
+work ends and the forecast begins, and never describe the forecast tail
+as as-built.
+
+### 8. Limitations
 Every standing caveat and warning provided, in full.""",
-    "apab": """\
+    "apab": _BODY_RULES + """\
 ## As-Planned vs As-Built Analysis
 
 ### 1. Executive Summary
 2-3 sentences: the milestone(s) measured to, the as-built critical path
 basis adopted, and the headline delay per milestone in calendar days.
+The final gantt is attached as the leading figure — refer to it.
 
 ### 2. The As-Built Critical Path
 How the path was defined (longest path of the as-built programme, the
 actual recorded sequence, or the analyst's own selection — as stated in
-the data), and the work packages it runs through, in as-built order.
+the data, including any analyst edits), and the work packages it runs
+through, in as-built order.
 
 ### 3. As-Planned vs As-Built, Package by Package
-For each work package / activity on the path: planned dates (state the
-elected basis — late or early), as-built dates, and the variance in
-days. Tell it as a construction narrative, worst variances called out.
+The comparison as a table, worst finish variance first:
+| Activity / Package | Planned start | Planned finish | As-built start | As-built finish | Variance (d) |
+stating the elected planned basis (late LS/LF or early ES/EF) above it,
+then the construction narrative with the worst variances called out.
 
 ### 4. Key Dates & Analysis Windows
 First state the measurement in one sentence: the delay at a key date is
@@ -180,24 +237,16 @@ than planned: report its direct delay normally but state that its
 accrued-in-window figure carries a sequencing artefact.
 
 ### 5. Delay to Each Milestone
-Per measured milestone: planned completion, as-built (or forecast)
-completion, and the measured delay. Where the milestone is not yet
-achieved, say the figure rests on the programme's own forecast.
+A table:
+| Milestone | Planned completion | As-built / forecast completion | Delay (d) | Achieved? |
+then a sentence per milestone. Where a milestone is not yet achieved,
+say plainly that the figure rests on the programme's own forecast, not
+on a record of what happened.
 
 ### 6. Limitations
 Every caveat and warning provided, in full.""",
-    "comparison": """\
+    "comparison": _BODY_RULES + """\
 ## Programme Revision Comparison
-
-Every section that has data MUST carry its table — markdown tables render
-as real tables in the Word export, so tabulate first, then narrate. Figures
-verbatim from the data; never invent or round beyond what is supplied.
-
-TABLE LENGTH: show at most the FIVE most material rows per table (the data
-is already supplied in that order). Where a category has more, state the
-TOTAL count in the sentence beneath and add: "the complete table is at
-Appendix A". Never imply the five shown are all of them. The complete
-tables are appended to this same document, so the reader loses nothing.
 
 ### 1. Executive Summary
 3-4 sentences: the two revisions compared (with data dates), the movement
@@ -291,104 +340,114 @@ Every standing caveat and warning provided, in full. Note that the
 completion-at-a-glance chart and the change-mix chart are attached to this
 document as leading figures — refer to them; do not attempt to redraw
 them in text.""",
-    "explain": """\
+    "explain": _BODY_RULES + """\
 ## Explain This Delay
 
 ### 1. The Question
 Which milestone is examined, its date in the earliest revision, its date
-(or actual) in the latest, and the total movement.
+(or actual) in the latest, and the total movement in days.
 
 ### 2. What the Records Show (FACTS)
-Window by window: the milestone's recorded forecast at each data date and
-the movement. These are facts from the programme files — state them as
-such. Windows where the milestone held stable deserve equal mention.
+The milestone's trajectory as a table:
+| Data date | Revision | Milestone forecast / actual | Movement in window (d) |
+then 2-3 sentences. These are facts from the programme files — state
+them as such. Windows where the milestone held stable deserve equal
+mention.
 
 ### 3. The Inferred Drivers (INFERENCE)
-Per window with movement: the activities that joined the driving path to
-the milestone — the candidate drivers — and the work that left it. Label
-this section explicitly as inference from forecast logic, to be
-corroborated against contemporaneous records.
+Label this section explicitly as INFERENCE from forecast logic, to be
+corroborated against contemporaneous records. Per window with movement:
+| Window | Movement (d) | Joined the driving path | Left the driving path |
+then a sentence per material window naming the candidate drivers.
 
 ### 4. Alternative Explanations & Contrary Indications
 Where the driving path switched substantially, say the attribution is
 uncertain and name what else could explain the movement (re-logic,
-re-planning, progress elsewhere). Reproduce the reliability flags.
+re-planning, progress elsewhere). Reproduce the reliability flags in
+full.
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
-    "tia": """\
+    "tia": _BODY_RULES + """\
 ## Time Impact Analysis
 
 ### 1. Executive Summary
-2-3 sentences: the event, the programme it was assessed against (with data
-date), and the forecast effect on completion in days.
+2-3 sentences: the event, the programme it was assessed against (with
+data date), and the forecast effect on completion in days.
 
 ### 2. The Event
 What the event is, when it arose, the responsibility asserted (as an
 assertion, not a conclusion), and the evidence noted.
 
 ### 3. The Fragnet
-Each fragnet activity with its duration, logic, the source/rationale for
-the duration, and every stated assumption — reproduce the assumptions
-verbatim.
+The inserted fragnet as a table:
+| Activity | Duration (d) | Logic (pred → succ, type, lag) | Source of the duration |
+then reproduce EVERY stated assumption verbatim as a bulleted list —
+assumptions are not summarised.
 
 ### 4. Forecast Impact
-Completion movement and the affected milestones with pre- and post-impact
-dates. State plainly where milestones are NOT affected. Note the
-calibration figure and what it means for reliance on absolute dates.
+The milestone effects as a table:
+| Milestone | Pre-impact date | Post-impact date | Movement (d) |
+then state plainly which milestones are NOT affected, and give the
+calibration figure with what it means for reliance on absolute dates
+(judge the delta between the two runs, never the absolute dates).
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full — including that the
 forecast is not an entitlement conclusion.""",
-    "sequence": """\
+    "sequence": _BODY_RULES + """\
 ## Construction Sequence Review (Analyst Coding)
 
 ### 1. Executive Summary
-2-3 sentences: the work fronts and stages the programme was recoded into,
-the coverage of the coding, and which fronts finished last as recorded.
+2-3 sentences: the work fronts and stages the programme was recoded
+into, the coverage of the coding, and which fronts finished last as
+recorded.
 
 ### 2. Basis of the Coding
 State plainly how the coding was derived (activity-ID tokens, WBS, name
-keywords), its coverage figures, and whether the analyst confirmed it. The
-full mapping is disclosed with the report.
+keywords), its coverage figures, and whether the analyst confirmed it.
+An unconfirmed mapping must be described as auto-proposed.
 
 ### 3. Sequence by Work Front
-The story the actual-date bands tell: how the stages ran within and across
-the fronts — which fronts progressed steadily, which stalled, where stages
-overlapped. Group into a readable account, not a band list.
+The recorded bands as a table, latest finish first:
+| Work front | Stage | Recorded start | Recorded finish | Activities | Complete |
+then the story the bands tell: which fronts progressed steadily, which
+stalled, where stages overlapped. A readable account, not a band list.
 
 ### 4. Late-Running Fronts
-The fronts finishing last as recorded, with dates — the candidates for the
-works that drove completion. Fronts that finished early deserve equal
-mention.
+The fronts finishing last as recorded, with dates — the candidates for
+the works that drove completion. Fronts that finished early deserve
+equal mention.
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
-    "resources": """\
+    "resources": _BODY_RULES + """\
 ## Planned Resource Loading Review
 
 ### 1. Executive Summary
-2-3 sentences: which resources the programme is loaded with, the dominant
-resources by planned quantity, and the period the loading spans.
+2-3 sentences: which resources the programme is loaded with, the
+dominant resources by planned quantity, and the period the loading
+spans.
 
-### 2. Resource-by-Resource Profile
-One bullet per resource: type (labour/equipment/material), total planned
-quantity, number of assignments, and when its loading peaks (from the
-monthly figures).
+### 2. Resource Profile
+A table, largest planned quantity first:
+| Resource | Type | Total planned qty | Assignments | Peak month |
+then 2-3 sentences reading it. The loading histogram is attached as a
+figure — refer to it.
 
 ### 3. Loading Pattern Observations
 Only what the monthly figures show: where loading concentrates, whether
-peaks coincide across resources, and any months with little or no planned
-loading.
+peaks coincide across resources, and any months with little or no
+planned loading.
 
 ### 4. Coverage
 How much of the programme carries no resource assignment, and what that
 means for reliance on the histogram.
 
 ### 5. Limitations
-Every standing caveat and warning provided, in full — including that this
-is planned loading, not actual expenditure.""",
-    "float_erosion": """\
+Every standing caveat and warning provided, in full — including that
+this is planned loading, not actual expenditure.""",
+    "float_erosion": _BODY_RULES + """\
 ## Float Erosion Review
 
 ### 1. Executive Summary
@@ -397,14 +456,15 @@ revisions — median float, and the count of critical/negative-float
 activities at the latest revision.
 
 ### 2. Float Profile by Revision
-One bullet per revision: incomplete activities, how many are critical
-(TF <= 0), near-critical, or negative, and the median float. Where the
-profile is healthy, say so.
+A table, one row per revision in data-date order:
+| Revision | Data date | Incomplete activities | Critical (TF ≤ 0) | Negative float | Median TF (d) |
+then 2-3 sentences. Where the profile is healthy, say so.
 
 ### 3. Float Consumption per Window
-Per window: the median float change on matched activities, how many eroded
-vs gained, and the worst-affected activities with figures. Report gains with
-the same weight as losses.
+A table, one row per window:
+| Window | Matched activities | Median TF change (d) | Eroded | Gained |
+then the worst-affected activities with figures. Report gains with the
+same weight as losses.
 
 ### 4. Observations
 Only what the figures show: is erosion broad-based or concentrated, and
@@ -412,29 +472,33 @@ does any revision show recovery of float?
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
-    "progress": """\
+    "progress": _BODY_RULES + """\
 ## Progress S-Curve Review (Planned vs As-Recorded)
 
 ### 1. Executive Summary
 2-3 sentences: recorded progress vs the planned profile as at the latest
 data date, in percentage points and in time (days), under the stated
-weighting scheme.
+weighting scheme. The S-curve is attached as a figure — refer to it.
 
-### 2. Planned Profile
+### 2. Progress at Each Data Date
+A table:
+| Data date | Revision | Planned complete (%) | Recorded complete (%) | Gap (pp) |
+then 2-3 sentences reading it.
+
+### 3. Planned Profile
 The shape of the baseline curve: the period it spans and when the plan
 expected the works to be substantially complete.
 
-### 3. Recorded Progress
-The recorded curve and each revision's as-at point. Where progress tracked
-the plan, say so with the same weight as where it fell behind.
-
 ### 4. Divergence
 When the recorded curve departed from the planned curve, and how the gap
-evolved (widening, stable, or narrowing) — only as visible in the figures.
+evolved (widening, stable, or narrowing) — only as visible in the
+figures. Where progress tracked the plan, say so with the same weight as
+where it fell behind.
 
 ### 5. Limitations
-Every standing caveat and warning provided, in full.""",
-    "windows": """\
+Every standing caveat and warning provided, in full — including the
+weighting scheme's effect on the percentages.""",
+    "windows": _BODY_RULES + """\
 ## Windows / Period Movement Analysis
 
 ### 1. Executive Summary
@@ -442,14 +506,16 @@ Every standing caveat and warning provided, in full.""",
 completion movement, and which window contributed the largest movement.
 
 ### 2. Window-by-Window Movement
-One bullet per window: the two revisions, the period between data dates, and
-the completion movement in days (state favourable movements as plainly as
-adverse ones).
+A table, in chronological order:
+| Window | Revisions | Data dates | Completion before | Completion after | Movement (d) |
+then 2-3 sentences. State favourable movements as plainly as adverse
+ones.
 
 ### 3. Critical Path Evolution
-Per window: how much of the driving path carried over, and what areas of
-work joined or left it (from the activity names). Flag windows where the
-path substantially switched.
+A table:
+| Window | Path carried over (%) | Joined the path | Left the path |
+then flag the windows where the driving path substantially switched —
+those are the windows where the delay mechanism changed.
 
 ### 4. Periods of Stability or Recovery
 Windows with little or favourable movement, or a stable driving path —
@@ -457,30 +523,37 @@ stated with the same weight as the adverse windows. If none, state that.
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",
-    "critical_path": """\
+    "critical_path": _BODY_RULES + """\
 ## Baseline Planned Critical Path Review
 
 ### 1. Executive Summary
 2-3 sentences: what the planned critical path runs through (from first
-critical activity to completion), how many activities sit on it, and whether
-it is continuous.
+critical activity to completion), how many activities sit on it, and
+whether it is continuous. The path gantt is attached as a figure — refer
+to it.
 
-### 2. Path Narrative
-Walk the critical chain in early-start order as a readable story: the
-sequence of work fronts/disciplines it passes through, naming the key
-activities and milestones with their planned dates. Group consecutive
-activities into stages rather than listing every activity.
+### 2. The Critical Chain
+A table, in early-start order:
+| # | Activity ID | Activity | Early start | Early finish | Total float (d) |
+then walk the chain as a readable story: the sequence of work fronts and
+disciplines it passes through, naming the key activities and milestones
+with their planned dates. Group consecutive activities into stages
+rather than listing every one.
 
 ### 3. Path Integrity
-Is the path continuous or broken into segments? Note any critical activities
-with no logic ties to the rest of the path, and negative-float activities if
-present. Where the path is sound, state that its continuity supports reliance
-on the programme's critical-path logic.
+Is the path continuous or broken into segments? Give the segment count,
+then a table of any critical activities with no logic tie to the rest of
+the path:
+| Activity ID | Activity | Issue |
+Where the path is sound, state that its continuity supports reliance on
+the programme's critical-path logic.
 
 ### 4. Near-Critical Paths
-The near-critical band: how many activities, which areas of work, and the
-float margin separating them from the critical path — these are the paths
-most likely to become critical if the plan moves.
+The near-critical band as a table, tightest float first:
+| Activity ID | Activity | Total float (d) | Work front |
+then how many activities, which areas of work, and the float margin
+separating them from the critical path — these are the paths most likely
+to become critical if the plan moves.
 
 ### 5. Limitations
 Every standing caveat and warning provided, in full.""",

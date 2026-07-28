@@ -2282,6 +2282,26 @@ check("N15r the Word document appends the tables as REAL tables",
       and _n15axml.count("<w:tbl>") >= len(_n15ap)
       and "A1." in _n15axml)
 
+# N15s-v. STRUCTURAL: every report draft — not just comparison —
+# carries the shared presentation rules and specifies its tables, so a
+# new module cannot ship a prose-only draft by omission.
+from programme.narrative import _BODY_RULES as _n15br
+_n15_no_rules = [k for k, v in _n15tmpl.items()
+                 if not v.startswith(_n15br)]
+check("N15s every report draft carries the shared presentation rules",
+      not _n15_no_rules, str(_n15_no_rules))
+_n15_no_tbl = [k for k, v in _n15tmpl.items() if "\n| " not in v]
+check("N15t every report draft specifies at least one table",
+      not _n15_no_tbl, str(_n15_no_tbl))
+check("N15u the rules state the 5-row cap, the total disclosure and "
+      "the appendix/workbook fallback",
+      all(t in _n15br for t in (
+          "FIVE most material rows", "state its TOTAL",
+          "accompanying Excel workbook", "Appendix A",
+          "Never imply the five shown are all of them")))
+check("N15v the rules forbid redrawing attached charts in text",
+      "never attempt to redraw a chart in text" in _n15br)
+
 check("N15n the report draft leads with the editing-vs-progress "
       "question and its table",
       all(t in _n15tmpl["comparison"] for t in (
