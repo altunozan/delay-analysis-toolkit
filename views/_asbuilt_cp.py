@@ -94,12 +94,17 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
               + (f"  (achieved {t.act_finish:%d %b %Y})"
                  if t.act_finish else "  ⚠ not achieved")
               for t in ms_opts}
+    # a saved election can outlive the corpus that made it (new files
+    # loaded mid-session) — a default that is not among the options is
+    # a hard StreamlitAPIException, so sanitise before rendering
+    saved_ms = [c for c in (st.session_state.get(sk.APAB_MS) or [])
+                if c in labels]
     chosen_ms = st.multiselect(
         "Milestone(s) to measure to — each gets its own path, "
         "grouped separately in the gantt",
-        options=list(labels), default=st.session_state.get(
-            sk.APAB_MS, [cms] if cms in labels else
-            list(labels)[:1]),
+        options=list(labels),
+        default=saved_ms or ([cms] if cms in labels
+                             else list(labels)[:1]),
         format_func=lambda c: labels[c], key=f"{key_prefix}_ms_pick")
     st.session_state[sk.APAB_MS] = chosen_ms
 
@@ -198,7 +203,9 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
             # a path adopted on the other page still links correctly
             links_src = (lp_links if str(basis_by.get(
                 ms, "")).startswith("Longest") else sq_links)
-            codes = {c for c, _ in paths[ms]}
+            # stale codes from a previous corpus never reach the gantt
+            members = [(c, n) for c, n in paths[ms] if c in by_code]
+            codes = {c for c, _ in members}
             succs: dict[str, list[str]] = {}
             for p_, s_ in links_src:
                 if p_ in codes and s_ in codes:
@@ -217,7 +224,7 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
 
             owner = {c: nm for nm, cs in groups.items() for c in cs}
             buckets, order = {}, []
-            for c, n in paths[ms]:
+            for c, n in members:
                 k = owner.get(c) or c
                 if k not in buckets:
                     buckets[k] = []

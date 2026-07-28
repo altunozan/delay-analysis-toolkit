@@ -133,8 +133,8 @@ def apab_tab() -> None:
         """(ms, display_rows, roll, delay, achieved) per adopted path."""
         out = []
         for ms in st.session_state.get(sk.APAB_MS, []):
-            if ms not in paths:
-                continue
+            if ms not in paths or ms not in by_code:
+                continue        # elections can outlive their corpus
             codes = {c for c, _ in paths[ms]}
             disp, roll = _display_rows(_rows_for(ms), groups, codes)
             t = by_code.get(ms)
