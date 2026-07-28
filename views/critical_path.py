@@ -7,6 +7,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    critical_path_appendix,
     build_critical_path_prompt, build_critical_path_xlsx, build_gantt_html,
     end_activity_candidates, group_tree,
 )
@@ -208,6 +209,7 @@ def critical_path_tab() -> None:
         lambda tmpl: build_critical_path_prompt(cp, tmpl),
         "critical_path",
         DEFAULT_TEMPLATES["critical_path"],
+        appendix_builder=lambda: critical_path_appendix(cp),
     )
     st.download_button(
         "⬇️ Download critical path report (Excel)",

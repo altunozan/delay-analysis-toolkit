@@ -11,6 +11,7 @@ import streamlit as st
 import state as sk
 from dcma.narrative import NarrativeError, PROVIDERS, stream_narrative
 from programme import (
+    sequence_appendix,
     REVIEW_SYSTEM_PROMPT, STAGE_ORDER, UNCLASSIFIED,
     VIEW_ADVISOR_SYSTEM_PROMPT, analyse_sequence, build_gantt_html,
     build_mapping_review_prompt, build_sequence_prompt, build_sequence_xlsx,
@@ -380,6 +381,8 @@ def sequence_tab() -> None:
         lambda tmpl, s=seq: build_sequence_prompt(s, tmpl),
         "sequence",
         DEFAULT_TEMPLATES["sequence"],
+        appendix_builder=lambda s=seq, r=prop.rows: sequence_appendix(
+            s, mapping_rows=r),
     )
     st.download_button(
         "⬇️ Download sequence report (Excel, incl. disclosed mapping)",

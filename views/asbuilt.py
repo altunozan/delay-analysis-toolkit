@@ -17,6 +17,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    asbuilt_appendix,
     build_asbuilt_multi_prompt, build_asbuilt_xlsx, build_rollup,
     internal_links, planned_vs_actual, trace_from_election,
     umbrella_links,
@@ -148,6 +149,12 @@ def asbuilt_tab() -> None:
         "asbuilt_path",
         DEFAULT_TEMPLATES["asbuilt_path"],
         chart_png_builder=lambda: (list(_pngs.items()) or None),
+        appendix_builder=lambda: [
+            t for ms in adopted
+            for t in asbuilt_appendix(
+                traces[ms], roll=roll,
+                links=(umbrella_links(traces[ms].links, groups)
+                       if groups else None))],
     )
     for ms in adopted:
         st.download_button(

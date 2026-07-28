@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 import state as sk
+from programme import milestone_appendix
 from programme import build_milestone_prompt, build_milestone_xlsx
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
@@ -182,6 +183,7 @@ def milestone_tab() -> None:
         lambda tmpl: build_milestone_prompt(result, selected, tmpl),
         "milestone_shifts",
         DEFAULT_TEMPLATES["milestones"],
+        appendix_builder=lambda: milestone_appendix(result),
     )
     st.download_button(
         "⬇️ Download milestone report (Excel)",

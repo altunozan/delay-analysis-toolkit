@@ -2302,6 +2302,104 @@ check("N15u the rules state the 5-row cap, the total disclosure and "
 check("N15v the rules forbid redrawing attached charts in text",
       "never attempt to redraw a chart in text" in _n15br)
 
+# N16. The Word appendix is wired for EVERY module, not just
+# comparison: a builder per result type, and every narrative panel
+# passing one. Each builder must return (title, rows) pairs, drop
+# empty tables, and survive an empty result without raising.
+print("\n--- Layer N16: per-module report appendices ---")
+import programme as _P
+import glob as _n16glob
+
+_n16_shapes_ok = True
+
+
+def _n16_check_shape(name, tables):
+    global _n16_shapes_ok
+    ok = (isinstance(tables, list)
+          and all(isinstance(t, tuple) and len(t) == 2
+                  and isinstance(t[0], str) and isinstance(t[1], list)
+                  and all(isinstance(r, dict) for r in t[1])
+                  and t[1]                      # no empty tables
+                  for t in tables))
+    if not ok:
+        _n16_shapes_ok = False
+        print(f"      bad shape from {name}")
+    return ok
+
+
+_n16_built = {}
+_n16_built["inventory"] = _P.inventory_appendix(
+    _P.build_inventory([("B", B), ("U", U)]))
+_n16_built["milestones"] = _P.milestone_appendix(
+    _P.track_milestone_shifts(
+        [("B", B.project.data_date, B), ("U", U.project.data_date, U)]))
+_n16_built["asbuilt"] = _P.asbuilt_appendix(_n14tr)
+_n16_rows = planned_vs_actual(B, U, None)[:8]
+_n16_built["apab"] = _P.apab_appendix(
+    _n16_rows,
+    windows_by_ms={"KD15": _kw(_n16_rows, [r["task_code"]
+                                           for r in _n16_rows[:3]])},
+    keydates={_n16_rows[0]["task_code"]: "why"})
+_n16_built["critical_path"] = _P.critical_path_appendix(
+    _P.extract_critical_path(U, "U"))
+_n16_built["float"] = _P.float_appendix(
+    _P.analyse_float_erosion([("B", B), ("U", U)]))
+_n16_built["progress"] = _P.progress_appendix(
+    _P.compute_progress(B, "B", [("U", U)]))
+_n16_built["windows"] = _P.windows_appendix(
+    _P.analyse_windows([("B", B), ("U", U)]))
+_n16_built["resources"] = _P.resources_appendix(
+    _P.extract_resource_loading(U, "U"))
+_n16_sp = _P.propose_sequence_mapping(U, "U")
+_n16_built["sequence"] = _P.sequence_appendix(
+    _P.analyse_sequence(_n16_sp.rows, "U"), mapping_rows=_n16_sp.rows)
+
+for _n, _t in _n16_built.items():
+    _n16_check_shape(_n, _t)
+check("N16 every appendix builder returns well-formed, non-empty "
+      "(title, rows) tables", _n16_shapes_ok)
+check("N16b appendices carry the FULL row set, not a summary",
+      len(dict(_n16_built["asbuilt"])["As-built critical path — "
+                                      "every activity"])
+      == len(_n14tr.activities)
+      and len(dict(_n16_built["resources"])["Resources"])
+      == len(_P.extract_resource_loading(U, "U").resources))
+_n16_built["dcma"] = _P.dcma_appendix(run_all_checks(U, DCMAConfig()))
+_n16_check_shape("dcma", _n16_built["dcma"])
+# Empty results must degrade, never raise. An empty inventory still
+# legitimately reports its MISSING inputs, so assert on the contract
+# (no exception, well-formed output) rather than on emptiness.
+_n16_empty_ok = True
+try:
+    _e1 = _P.asbuilt_appendix(_P.extract_actual_trace([]))
+    _e2 = _P.inventory_appendix(_P.build_inventory([]))
+    _e3 = _P.dcma_appendix([])
+    _n16_empty_ok = (_e1 == [] and _e3 == []
+                     and _n16_check_shape("empty inventory", _e2))
+except Exception as _exc:                       # noqa: BLE001
+    _n16_empty_ok = False
+    print(f"      raised: {type(_exc).__name__}: {_exc}")
+check("N16c empty results degrade safely, never raise", _n16_empty_ok)
+
+# STRUCTURAL: every narrative panel must pass an appendix_builder, so a
+# module cannot ship a report whose detail has nowhere to live.
+_n16_missing = []
+for _f in sorted(_n16glob.glob("views/*.py")):
+    _src = open(_f).read()
+    if "ai_narrative_panel(" not in _src or _f.endswith("_shared.py"):
+        continue
+    if _src.count("appendix_builder=") < _src.count(
+            "narrative = ai_narrative_panel("):
+        _n16_missing.append(_f)
+check("N16d every narrative panel supplies an appendix builder",
+      not _n16_missing, str(_n16_missing))
+_n16_dx = _n15doc("t", "## S\nbody",
+                  appendix=_n16_built["float"])
+check("N16e a module appendix renders as real Word tables",
+      _n15zf.ZipFile(io.BytesIO(_n16_dx)).read(
+          "word/document.xml").decode("utf-8").count("<w:tbl>")
+      >= len(_n16_built["float"]))
+
 check("N15n the report draft leads with the editing-vs-progress "
       "question and its table",
       all(t in _n15tmpl["comparison"] for t in (

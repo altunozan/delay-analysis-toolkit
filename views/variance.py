@@ -8,6 +8,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    variance_appendix,
     activity_code_types, build_gantt_html, build_variance_prompt,
     build_variance_xlsx, combine_mappings, compute_variance_by_mapping,
     group_tree, max_wbs_depth, task_code_assignments, task_wbs_assignments,
@@ -246,6 +247,7 @@ def variance_tab() -> None:
         lambda tmpl: build_variance_prompt(var, tmpl),
         "planned_vs_recorded",
         DEFAULT_TEMPLATES["variance"],
+        appendix_builder=lambda: variance_appendix(var),
     )
     st.download_button(
         "⬇️ Download variance report (Excel)",

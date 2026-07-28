@@ -8,6 +8,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    progress_appendix,
     WEIGHT_OPTIONS, build_progress_prompt, build_progress_xlsx,
     compute_progress,
 )
@@ -123,6 +124,7 @@ def progress_tab() -> None:
         lambda tmpl: build_progress_prompt(res, tmpl),
         "progress",
         DEFAULT_TEMPLATES["progress"],
+        appendix_builder=lambda: progress_appendix(res),
     )
     st.download_button(
         "⬇️ Download S-curve report (Excel)",

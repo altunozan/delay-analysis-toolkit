@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 
 import state as sk
+from programme import explain_appendix
 from programme import build_explain_prompt, build_explain_xlsx, explain_delay
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import ai_narrative_panel, get_parsed_files
@@ -165,6 +166,7 @@ def explain_tab() -> None:
         lambda tmpl, r=res: build_explain_prompt(r, tmpl),
         "explain",
         DEFAULT_TEMPLATES["explain"],
+        appendix_builder=lambda: explain_appendix(res),
     )
     conf_map = st.session_state.get(f"explain_confirmed_{target}", {})
     names_by_code = {s.task_code: s.name

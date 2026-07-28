@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 import state as sk
+from programme import windows_appendix
 from programme import build_windows_prompt, build_windows_xlsx
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
@@ -250,6 +251,7 @@ def windows_tab() -> None:
         lambda tmpl: build_windows_prompt(res, tmpl),
         "windows",
         DEFAULT_TEMPLATES["windows"],
+        appendix_builder=lambda: windows_appendix(res),
     )
     st.download_button(
         "⬇️ Download windows report (Excel)",

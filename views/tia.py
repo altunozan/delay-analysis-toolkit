@@ -12,6 +12,7 @@ from dcma import DCMAConfig, run_all_checks
 from dcma.checks import CheckStatus
 from dcma.narrative import NarrativeError, PROVIDERS, stream_narrative
 from programme import (
+    tia_appendix,
     CLAUSE_SYSTEM_PROMPT, DelayEvent, EXPORT_CAVEAT, EXTRACTION_SYSTEM_PROMPT,
     FRAGNET_SYSTEM_PROMPT, FRAGNET_VARIANTS, FragnetActivity, FragnetLink,
     LOGIC_SYSTEM_PROMPT, NOTICE_CAVEAT, assess_event_scope, assess_notice,
@@ -846,7 +847,8 @@ def tia_tab() -> None:
     narrative = ai_narrative_panel(
         f"nar_tia_{event.event_id}",
         lambda tmpl, r=res: build_tia_prompt(r, tmpl),
-        "tia", DEFAULT_TEMPLATES["tia"])
+        "tia", DEFAULT_TEMPLATES["tia"],
+        appendix_builder=lambda: tia_appendix(res))
     sc1, sc2 = st.columns(2)
     if sc1.button("💾 Save event + fragnet to register", key="tia_save"):
         st.session_state.setdefault(sk.EVENT_REGISTER, {})[

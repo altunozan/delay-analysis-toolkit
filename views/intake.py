@@ -11,6 +11,7 @@ import streamlit as st
 import state as sk
 from dcma import DCMAConfig, parse_xer
 from programme import (
+    inventory_appendix,
     ProjectStore, STORE_CAVEATS, build_custody_xlsx, build_inventory,
     build_inventory_prompt, build_inventory_xlsx,
 )
@@ -186,6 +187,7 @@ def intake_tab() -> None:
         lambda tmpl: build_inventory_prompt(inv, tmpl),
         "data_inventory",
         DEFAULT_TEMPLATES[sk.INVENTORY],
+        appendix_builder=lambda: inventory_appendix(inv),
     )
     st.download_button(
         "⬇️ Download inventory (Excel)",

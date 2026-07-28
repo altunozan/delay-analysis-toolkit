@@ -16,6 +16,7 @@ from dcma.narrative import (
     DEFAULT_TEMPLATE as DCMA_DEFAULT_TEMPLATE, build_report_prompt,
 )
 from dcma.report_xlsx import build_xlsx_report
+from programme import dcma_appendix
 from views._shared import (
     STATUS_BG, STATUS_COLORS, _cfgkey, _fkey, ai_narrative_panel, cached_dcma,
     get_parsed_files,
@@ -306,6 +307,8 @@ def dcma_tab() -> None:
         lambda tmpl: build_report_prompt(data, results, tmpl, trace=trace),
         f"dcma_{proj.short_name if proj else 'project'}",
         DCMA_DEFAULT_TEMPLATE,
+        appendix_builder=lambda r=results, t=trace:
+            dcma_appendix(r, trace=t),
     )
 
     st.subheader("Export")

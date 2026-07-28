@@ -25,6 +25,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    apab_appendix,
     ROLLUP_CAVEATS, build_apab_gantt_html, build_apab_report_prompt,
     build_rollup, build_simple_xlsx, keydate_windows, planned_vs_actual,
 )
@@ -376,6 +377,8 @@ def apab_tab() -> None:
             chart_png_builder=lambda p=_png4: (
                 [("Final gantt — as-planned vs as-built", p)]
                 if p else None),
+            appendix_builder=lambda d=display, wbm=windows_by_ms,
+            k=kd: apab_appendix(d, windows_by_ms=wbm, keydates=k),
         )
         st.download_button(
             "⬇️ Download as-planned vs as-built workbook (Excel)",

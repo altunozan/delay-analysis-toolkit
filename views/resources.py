@@ -8,6 +8,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    resources_appendix,
     build_resources_prompt, build_resources_xlsx, extract_resource_loading,
 )
 from programme.narrative import DEFAULT_TEMPLATES
@@ -78,6 +79,7 @@ def resources_tab() -> None:
         lambda tmpl: build_resources_prompt(res, tmpl),
         "resources",
         DEFAULT_TEMPLATES["resources"],
+        appendix_builder=lambda: resources_appendix(res),
     )
     st.download_button(
         "⬇️ Download resource loading report (Excel)",

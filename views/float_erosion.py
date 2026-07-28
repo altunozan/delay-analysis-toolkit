@@ -8,6 +8,7 @@ import streamlit as st
 
 import state as sk
 from programme import (
+    float_appendix,
     analyse_float_erosion, build_float_erosion_prompt,
     build_float_erosion_xlsx,
 )
@@ -113,6 +114,7 @@ def float_erosion_tab() -> None:
         lambda tmpl: build_float_erosion_prompt(res, tmpl),
         "float_erosion",
         DEFAULT_TEMPLATES["float_erosion"],
+        appendix_builder=lambda: float_appendix(res),
     )
     st.download_button(
         "⬇️ Download float erosion report (Excel)",
