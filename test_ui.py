@@ -186,14 +186,27 @@ def main() -> int:
             # with the measurement gate never switching on).
             check("umbrella editor defaults to critical-path rows",
                   page.get_by_text("Show all", exact=False).count() > 0)
-            # the propose area renders THE shared provider block — the
-            # same code path as the narrative panels (model selector +
+            # the propose area renders THE shared provider block — but
+            # ONLY behind the per-matter external-AI election, which
+            # defaults OFF: no model selector, no key UI, until the
+            # analyst permits it. Permitting here flips it app-wide.
+            check("external-AI consent gate defaults OFF",
+                  page.locator('.st-key-ab_umb_ai_consent').count() == 1
+                  and page.locator(
+                      '.st-key-ab_umb_ai_nvidia_modelsel').count() == 0)
+            _consent = page.locator('.st-key-ab_umb_ai_consent button')
+            if _consent.count():
+                _consent.first.click()
+                page.wait_for_timeout(3000)
+            # the same code path as the narrative panels (model selector +
             # managed caption + own-key switch, keyed per state_key)
             check("umbrella propose has the model selector",
                   page.locator(
                       '.st-key-ab_umb_ai_nvidia_modelsel').count() == 1)
             check("umbrella propose has the own-key switch",
                   page.locator('.st-key-ab_umb_ai_own').count() == 1)
+            check("consent gate offers revoke once permitted",
+                  page.locator('.st-key-ab_umb_ai_revoke').count() == 1)
             def type_umbrella_cells() -> None:
                 ed = page.locator('.st-key-ab_umb_editor '
                                   '[data-testid="stDataFrame"]').first

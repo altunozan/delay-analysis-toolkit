@@ -22,7 +22,7 @@ from programme import (
     UMBRELLA_SYSTEM_PROMPT, build_rollup, critique_grouping,
     merge_grouping, refine_grouping,
 )
-from views._shared import ai_provider_block
+from views._shared import ai_provider_block, log_ai_use
 
 
 def _adopt(groups: dict[str, list[str]]) -> None:
@@ -77,6 +77,7 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
                         _call, pool, path_codes, valid)
                 st.session_state[sk.UMBRELLA_PROPOSED] = best or []
                 st.session_state[sk.UMBRELLA_ROUNDS] = traj
+                log_ai_use("umbrella propose", provider, model)
                 dropped = sum(t.get("dropped") or 0 for t in traj)
                 if dropped:
                     st.warning(

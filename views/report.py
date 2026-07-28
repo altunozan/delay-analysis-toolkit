@@ -27,6 +27,7 @@ from programme import (
 )
 from views._shared import (
     _fkey, ai_provider_block, cached_compare, cached_longest_path,
+    log_ai_use,
     cached_milestone_shifts, cached_windows, get_parsed_files,
 )
 
@@ -492,6 +493,8 @@ def report_tab() -> None:
                     st.session_state[c["nar_key"]] = text
                 except NarrativeError as exc:
                     failures.append(f"{c['label']}: {exc.message}")
+                else:
+                    log_ai_use(f"report — {c['label']}", provider, model)
                 prog.progress((j + 1) / len(targets))
             status.empty()
             if failures:

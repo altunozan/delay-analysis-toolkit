@@ -29,6 +29,13 @@ AI_PROVIDER = "tia_provider"     # continuity; treat as the ONE canonical
 AI_MODEL = "tia_model"
 AI_MANAGED = "ai_managed"  # True = using the deployment's own
 #                            NVIDIA key (never displayed)           # credential set for the whole app
+AI_CONSENT = "ai_consent"  # per-matter external-AI election. DEFAULT
+#                            OFF: no prompt leaves this machine until
+#                            the analyst permits it, once, app-wide.
+AI_LOG = "ai_log"          # list[dict] — outbound AI use this session
+#                            (module/provider/model/time, NEVER content
+#                            or credentials); disclosed in the Basis of
+#                            Analysis
 
 # --- shared analysis records --------------------------------------------
 EVENT_REGISTER = "tia_register"  # dict[event_id, event_to_dict(...)] —

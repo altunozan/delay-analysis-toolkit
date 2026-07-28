@@ -2630,6 +2630,60 @@ if _os.path.isdir(_FIELD):
         check("M4b heavy-OOS file: collapse validation gap warned",
               any("validation gap" in w for w in _m_cab.warnings))
 
+# ---------------------------------------------------------------------------
+# N18. Per-matter external-AI consent (audit governance item). DEFAULT
+# OFF: no prompt leaves the machine until the analyst permits it, and
+# the election is enforced in the ONE resolver every AI feature uses —
+# not in each panel's goodwill.
+print("\n--- Layer N18: external-AI consent gate ---")
+import logging as _n18log
+_n18log.getLogger(
+    "streamlit.runtime.scriptrunner_utils.script_run_context"
+).setLevel(_n18log.ERROR)
+_n18_env_had = "NVIDIA_API_KEY" in os.environ
+_n18_env_old = os.environ.get("NVIDIA_API_KEY")
+os.environ["NVIDIA_API_KEY"] = "qa-n18-managed-key"
+try:
+    import streamlit as _n18st
+    import state as _n18sk
+    from views._shared import resolve_ai_credentials as _n18resolve
+
+    _n18st.session_state.pop(_n18sk.AI_CONSENT, None)
+    _n18_p, _n18_m, _n18_k = _n18resolve()
+    check("N18 no consent -> empty key even with a managed key present",
+          _n18_k == "", repr(_n18_k))
+    check("N18b the refusal itself is disclosed in the Basis of Analysis",
+          any("NOT permitted" in ln for ln in _n18st.session_state.get(
+              _n18sk.ANALYSIS_BASIS, {}).get("AI governance", [])))
+    _n18st.session_state[_n18sk.AI_CONSENT] = True
+    _n18_p2, _n18_m2, _n18_k2 = _n18resolve()
+    check("N18c consent granted -> the managed key resolves again",
+          bool(_n18_k2))
+    check("N18d the grant is disclosed with provider and data categories",
+          any("permitted by analyst election" in ln for ln in
+              _n18st.session_state[_n18sk.ANALYSIS_BASIS]["AI governance"])
+          and any("Data categories" in ln for ln in
+                  _n18st.session_state[_n18sk.ANALYSIS_BASIS][
+                      "AI governance"]))
+    _n18st.session_state.pop(_n18sk.AI_CONSENT, None)
+finally:
+    if _n18_env_had:
+        os.environ["NVIDIA_API_KEY"] = _n18_env_old
+    else:
+        del os.environ["NVIDIA_API_KEY"]
+
+# STRUCTURAL: the gate must stay in the shared layer. Both entry points
+# (panel rendering AND panel-less resolution) check the election, and
+# the default in every check is False — never True.
+_n18src = open("views/_shared.py").read()
+check("N18e ai_provider_block renders behind ai_consent_gate",
+      "if not ai_consent_gate(state_key):" in _n18src)
+check("N18f ai_credentials_panel renders behind ai_consent_gate",
+      "if not ai_consent_gate(f\"aic_{page}\"):" in _n18src)
+check("N18g resolve_ai_credentials enforces the election, default OFF",
+      "if not st.session_state.get(sk.AI_CONSENT, False):" in _n18src
+      and "get(sk.AI_CONSENT, True)" not in _n18src)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")
