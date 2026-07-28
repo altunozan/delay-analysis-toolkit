@@ -244,17 +244,33 @@ magnitude + red-flag bonus) and one on where analyst attention should go
 first. State plainly this is a screening, not a causation finding.
 
 ### 8. What Moved Completion
-Where completion-attribution data is provided: state the kernel completion
-of each revision and the movement, then the tested changes as a table:
+THE key section. Answer one question first, in bold, in one sentence:
+**did the programme CHANGES move completion, or did the driving chain
+simply fail to progress?** The data settles it — programme editing is
+measured by reverting every revertible change together, and the remainder
+is progress performance. Give the split as a table:
+| | Days |
+|---|---|
+| Programme editing (all changes reverted together) | |
+| Progress performance & un-modelled changes | |
+| Total movement | |
+and state the kernel completion of each revision.
+
+Then the driving chain — what actually governs completion:
+| # | Activity ID | Activity | Remaining (d) | Edited this window | On data date |
+Where the chain is unchanged and rooted on the data date, say plainly
+that the works on the governing chain did not progress and the chain
+translated forward by the length of the window — the movement is
+non-progress, NOT programme editing.
+
+Then the individual changes tested one at a time:
 | Change | Category | Completion with | Completion without | Contribution (d) |
-one row per tested change, figures verbatim. Explain the top contributors
-in a sentence each — e.g. "reverting this lag change pulls completion from
-X back to Y, so the change contributed +Nd". Where none of the tested
-changes moves completion materially, say the movement is progress
-slippage rather than programme editing. State plainly that each change was
-tested one at a time against a programme where every other change remains,
-so contributions interact and need not sum to the total. Note how many
-changes were not re-scheduled and why (completed side, untested
+figures verbatim, top contributors explained in a sentence each — e.g.
+"reverting this lag change pulls completion from X back to Y". State
+plainly that these were each tested against a programme where every other
+change remains, so they interact and must NOT be summed — only the
+editing-vs-progress split above sums to the total. Note how many changes
+were not re-scheduled and why (completed side of the network, un-modelled
 categories, test cap).
 
 ### 9. Change Provenance
@@ -774,6 +790,37 @@ def build_comparison_prompt(
                      + (f" (moved {attribution.kernel_moved_days:+.0f}d)"
                         if attribution.kernel_moved_days is not None
                         else ""))
+        if attribution.editing_effect_days is not None:
+            lines.append(
+                f"- PROGRAMME EDITING effect: "
+                f"{attribution.editing_effect_days:+.1f}d (every "
+                "revertible change reverted TOGETHER in one run — this "
+                "is the measured editing figure)")
+            lines.append(
+                f"- REMAINDER (progress performance + categories not "
+                f"re-scheduled): {attribution.residual_days:+.1f}d")
+            lines.append(
+                "- these two sum exactly to the movement; the "
+                "one-at-a-time figures below interact and must NOT be "
+                "summed")
+        if attribution.driving_chain:
+            ch = attribution.driving_chain
+            n_ed = sum(1 for c in ch if c["duration_changed"]
+                       or c["logic_changed"])
+            lines.append(
+                f"- DRIVING CHAIN to completion ({len(ch)} activities, "
+                f"{n_ed} edited this window, root "
+                + ("ON the data date" if attribution.chain_root_at_data_date
+                   else "not on the data date") + "):")
+            for c in ch[:12]:
+                lines.append(
+                    f"    {c['code']} '{c['name'][:40]}' "
+                    f"{c['duration_days']}d remaining"
+                    + (" [EDITED: duration]" if c["duration_changed"]
+                       else " [EDITED: logic]" if c["logic_changed"]
+                       else "")
+                    + (" [on the data date]" if c["at_data_date"]
+                       else ""))
         for a in attribution.tested_changes[:25]:
             lines.append(
                 f"- {a.category}: {a.ref} '{a.name}' ({a.detail}): "

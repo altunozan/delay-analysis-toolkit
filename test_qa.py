@@ -2225,6 +2225,43 @@ check("N15h the workbook ships every table the page shows",
       {"Materiality Rank", "Completion Attribution",
        "Provenance"} <= set(_n15wb.sheetnames))
 
+# N15i-n. Editing vs non-progress — THE question the page answers.
+# Programme editing is measured by reverting every revertible change
+# together; the remainder is progress performance. The two must sum
+# exactly to the movement, and the driving chain says which it was.
+check("N15i editing effect measured, and editing + remainder == the "
+      "movement exactly",
+      _n15a.editing_effect_days is not None
+      and _n15a.residual_days is not None
+      and abs((_n15a.editing_effect_days + _n15a.residual_days)
+              - _n15a.kernel_moved_days) < 0.05)
+check("N15j the driving chain to the anchor is reported, deepest-last",
+      _n15a.driving_chain
+      and _n15a.driving_chain[0]["code"] == "KD15"
+      and all({"code", "name", "duration_days", "at_data_date",
+               "duration_changed", "logic_changed"} <= set(c)
+              for c in _n15a.driving_chain))
+check("N15k the chain diagnosis is disclosed in the warnings",
+      any("chain governing" in w for w in _n15a.warnings))
+check("N15l constraint / calendar / scope changes are now revertible "
+      "candidates, not silently skipped",
+      {"Constraint changes", "Activities added", "Activities deleted"}
+      & {a.category for a in _n15a.changes})
+# a revision compared with ITSELF: no changes, no movement, no editing
+_n15self = _n15attr(U, U, "U", "U", end_task_code="KD15")
+check("N15m self-comparison: zero movement and zero editing effect",
+      (_n15self.kernel_moved_days or 0) == 0.0
+      and (_n15self.editing_effect_days or 0) == 0.0
+      and not _n15self.tested_changes)
+check("N15n the report draft leads with the editing-vs-progress "
+      "question and its table",
+      all(t in _n15tmpl["comparison"] for t in (
+          "did the programme CHANGES move completion, or did the "
+          "driving chain",
+          "| Programme editing (all changes reverted together) | |",
+          "| # | Activity ID | Activity | Remaining (d) | Edited this "
+          "window | On data date |")))
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

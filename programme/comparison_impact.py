@@ -424,12 +424,21 @@ ATTRIBUTION_CAVEATS = [
     "engine schedules both runs). Never compare a kernel date with a "
     "P6 file date — the kernel's own baseline completion is disclosed "
     "so every figure is a like-for-like delta.",
-    "Revertible categories: lag changes, logic added / removed, and "
-    "duration changes (remaining-duration approximation for "
-    "in-progress work). Constraint, calendar, scope (added / deleted) "
-    "and retrospective actual-date changes are ranked by the screening "
-    "but are NOT re-scheduled here — their influence is screened, not "
-    "measured.",
+    "Revertible categories: lag changes, logic added / removed, "
+    "duration changes, START-side constraint changes (the kernel "
+    "models start floors; finish-side and late constraints are "
+    "reported, not modelled), calendar reassignments, and scope "
+    "(activities added — removed from the network; activities deleted "
+    "— reinstated with their former duration, calendar and logic where "
+    "they were incomplete in the earlier revision). Calendar-definition "
+    "edits, scheduling-option changes and retrospective actual-date "
+    "changes are ranked by the screening but NOT re-scheduled — their "
+    "influence is screened, not measured.",
+    "Alongside the one-at-a-time tests, ALL revertible changes are "
+    "reverted TOGETHER in a single run: that combined figure is the "
+    "measured effect of programme editing, and the remainder of the "
+    "completion movement is progress performance plus the categories "
+    "listed above as not re-scheduled.",
     "Completion is measured at the elected contractual milestone where "
     "it exists in the remaining network, otherwise at the network's "
     "latest early finish.",
@@ -462,12 +471,28 @@ class CompletionAttribution:
     kernel_completion_new: datetime | None = None
     kernel_moved_days: float | None = None
     changes: list[AttributedChange] = field(default_factory=list)
+    # all revertible changes undone TOGETHER — the measured effect of
+    # programme editing, as distinct from progress performance
+    completion_no_edits: datetime | None = None
+    editing_effect_days: float | None = None
+    # the chain that actually governs completion in the later revision
+    driving_chain: list[dict] = field(default_factory=list)
+    chain_root_at_data_date: bool = False
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
 
     @property
     def tested_changes(self) -> list[AttributedChange]:
         return [c for c in self.changes if c.tested]
+
+    @property
+    def residual_days(self) -> float | None:
+        """Movement NOT explained by programme editing: progress
+        performance plus the categories the kernel cannot re-schedule."""
+        if (self.kernel_moved_days is None
+                or self.editing_effect_days is None):
+            return None
+        return round(self.kernel_moved_days - self.editing_effect_days, 1)
 
 
 def attribute_completion_impact(
@@ -490,7 +515,8 @@ def attribute_completion_impact(
     -ve = it pulled completion earlier). Candidates are taken in the
     screening's materiality order and capped at ``max_tests``.
     """
-    from .cpm import build_network, forward_pass
+    from .cpm import (REL_TO_SHORT, START_FLOOR_CSTR, build_network,
+                      calendar_masks, forward_pass, parse_xer_date)
 
     config = config or DCMAConfig()
     cmp = comparison or compare_revisions(old, new, old_label, new_label,
@@ -520,7 +546,7 @@ def attribute_completion_impact(
     result.anchor_code = (end_task_code
                           if end_task_code and end_task_code in nodes
                           else None)
-    _, EF0, _, _ = forward_pass(nodes, preds, dd_new, started)
+    ES0, EF0, _, driver0 = forward_pass(nodes, preds, dd_new, started)
     base = completion(EF0)
     result.kernel_completion_new = base
 
@@ -619,6 +645,143 @@ def attribute_completion_impact(
         cands.append(("Duration changes", c.task_code, c.name,
                       f"{c.old_value} -> {c.new_value}", mk_dur))
 
+    # ---- constraint changes: the kernel models START floors --------
+    old_by_code = {t.task_code: t for t in old.tasks if not t.is_loe_or_wbs}
+    new_by_code = {t.task_code: t for t in new.tasks if not t.is_loe_or_wbs}
+
+    def _floor_from(t) -> datetime | None:
+        """Early-start floor a task's own constraints would impose."""
+        best = None
+        for ctype, cdate in ((t.cstr_type, t.cstr_date),
+                             (t.cstr_type2, t.cstr_date2)):
+            if (ctype or "").strip() in START_FLOOR_CSTR and cdate:
+                best = cdate if best is None else max(best, cdate)
+        return best
+
+    for c in cmp.constraint_changes:
+        def mk_cstr(code=c.task_code):
+            if code not in nodes:
+                return None
+            o_t = old_by_code.get(code)
+            if o_t is None:
+                return None
+            had = code in started
+            prev = started.get(code)
+            # in-progress work is floored at the data date regardless
+            base = dd_new if (new_by_code.get(code) is not None
+                              and new_by_code[code].act_start
+                              is not None) else None
+            old_floor = _floor_from(o_t)
+            reverted = max([d for d in (base, old_floor)
+                            if d is not None], default=None)
+            if reverted is None:
+                started.pop(code, None)
+            else:
+                started[code] = reverted
+
+            def undo():
+                if had:
+                    started[code] = prev
+                else:
+                    started.pop(code, None)
+            return undo
+        cands.append(("Constraint changes", c.task_code, c.name,
+                      f"{c.old_value} -> {c.new_value}", mk_cstr))
+
+    # ---- calendar reassignments: swap the working mask back --------
+    old_masks = calendar_masks(old)
+    for c in cmp.calendar_changes:
+        def mk_cal(code=c.task_code):
+            if code not in nodes:
+                return None
+            o_t = old_by_code.get(code)
+            if o_t is None:
+                return None
+            prev = nodes[code]
+            nodes[code] = (prev[0], old_masks.get(o_t.clndr_id))
+
+            def undo():
+                nodes[code] = prev
+            return undo
+        cands.append(("Calendar reassignments", c.task_code, c.name,
+                      f"{c.old_value} -> {c.new_value}", mk_cal))
+
+    # ---- scope: added activities are REMOVED from the network ------
+    for a in cmp.added:
+        def mk_added(code=a.task_code):
+            if code not in nodes:
+                return None
+            node_prev = nodes.pop(code)
+            own_preds = preds.pop(code, None)
+            start_prev = started.pop(code, None)
+            touched = []
+            for s, plist in preds.items():
+                keep = [p for p in plist if p[0] != code]
+                if len(keep) != len(plist):
+                    touched.append((s, plist))
+                    preds[s] = keep
+
+            def undo():
+                nodes[code] = node_prev
+                if own_preds is not None:
+                    preds[code] = own_preds
+                if start_prev is not None:
+                    started[code] = start_prev
+                for s, plist in touched:
+                    preds[s] = plist
+            return undo
+        cands.append(("Activities added", a.task_code, a.name,
+                      f"revert = remove ({a.duration_days or 0:.0f}d) "
+                      "from the network", mk_added))
+
+    # ---- scope: deleted activities are REINSTATED ------------------
+    o_code_of = {t.task_id: t.task_code for t in old.tasks}
+    o_rels_by_succ: dict[str, list] = {}
+    o_rels_by_pred: dict[str, list] = {}
+    for r in old.relationships:
+        p, s = o_code_of.get(r.pred_task_id), o_code_of.get(r.task_id)
+        if p and s:
+            o_rels_by_succ.setdefault(s, []).append((p, r))
+            o_rels_by_pred.setdefault(p, []).append((s, r))
+
+    for a in cmp.deleted:
+        def mk_deleted(code=a.task_code):
+            o_t = old_by_code.get(code)
+            # only work that was still OUTSTANDING can be reinstated
+            # into the remaining network; completed work was done
+            if o_t is None or code in nodes or not o_t.is_incomplete:
+                return None
+            hpd = old.hours_per_day(o_t, config)
+            rem = o_t.remaining_duration_days(hpd)
+            if rem is None:
+                rem = o_t.original_duration_days(hpd) or 0.0
+            nodes[code] = (max(rem, 0.0), old_masks.get(o_t.clndr_id))
+            mine = []
+            for p, r in o_rels_by_succ.get(code, []):
+                if p in nodes:
+                    lag = (r.lag_hr / hpd) if r.lag_hr else 0.0
+                    mine.append((p, REL_TO_SHORT.get(r.pred_type, "FS"),
+                                 lag))
+            preds[code] = mine
+            added_to = []
+            for s, r in o_rels_by_pred.get(code, []):
+                if s in preds:
+                    lag = (r.lag_hr / hpd) if r.lag_hr else 0.0
+                    preds[s].append(
+                        (code, REL_TO_SHORT.get(r.pred_type, "FS"), lag))
+                    added_to.append(s)
+
+            def undo():
+                nodes.pop(code, None)
+                preds.pop(code, None)
+                for s in added_to:
+                    preds[s] = [p for p in preds[s] if p[0] != code]
+            return undo
+        cands.append(("Activities deleted", a.task_code, a.name,
+                      f"revert = reinstate "
+                      f"({a.duration_days or 0:.0f}d) into the network",
+                      mk_deleted))
+
     cands.sort(key=lambda x: -(score_of.get((x[0], x[1]), 0.0)))
 
     tested = 0
@@ -654,8 +817,94 @@ def attribute_completion_impact(
                 (base - comp1).total_seconds() / 86400, 1)
         result.changes.append(ac)
 
+    # ---- ALL revertible changes undone together -------------------
+    # One-at-a-time contributions interact and cannot be summed; this
+    # single run measures what programme EDITING did, leaving the
+    # remainder to progress performance and the un-modelled categories.
+    undos = []
+    for category, ref, name, detail, mk in cands:
+        u = mk()
+        if u is not None:
+            undos.append(u)
+    if undos:
+        try:
+            _, EFa, _, _ = forward_pass(nodes, preds, dd_new, started)
+            result.completion_no_edits = completion(EFa)
+        finally:
+            for u in reversed(undos):
+                u()
+        if base and result.completion_no_edits:
+            result.editing_effect_days = round(
+                (base - result.completion_no_edits).total_seconds()
+                / 86400, 1)
+
     result.changes.sort(
         key=lambda a: -abs(a.contribution_days or 0.0))
+
+    # ---- what actually governs completion, and did it move? --------
+    # Walking the kernel's own driving predecessors back from the
+    # anchor answers "what pushes it later" directly: if the chain is
+    # unchanged and rooted at the data date, nothing was EDITED into
+    # the delay — the chain simply failed to progress and translated
+    # forward by the window.
+    anchor = (end_task_code if end_task_code and end_task_code in EF0
+              else (max(EF0, key=lambda k: EF0[k]) if EF0 else None))
+    o_dur = {c.task_code: c.delta_days for c in cmp.duration_changes}
+    changed_links = {p for lk in (cmp.logic_added + cmp.logic_removed)
+                     for p in (lk.pred_code, lk.succ_code)}
+    changed_links |= {pair[1] for pair in
+                      (_split_lag_ref(c.task_code)
+                       for c in cmp.lag_changes) if pair}
+    cur, seen_c, chain = anchor, set(), []
+    while cur is not None and cur not in seen_c and len(chain) < 40:
+        seen_c.add(cur)
+        t = new_by_code.get(cur)
+        chain.append({
+            "code": cur,
+            "name": (t.name if t is not None else ""),
+            "duration_days": round(nodes[cur][0], 1) if cur in nodes
+            else None,
+            "at_data_date": cur in started,
+            "duration_changed": cur in o_dur,
+            "logic_changed": cur in changed_links,
+        })
+        cur = driver0.get(cur)
+    result.driving_chain = chain
+    result.chain_root_at_data_date = bool(chain
+                                          and chain[-1]["at_data_date"])
+    n_touched = sum(1 for c in chain
+                    if c["duration_changed"] or c["logic_changed"])
+
+    if result.editing_effect_days is not None:
+        resid = result.residual_days
+        result.warnings.append(
+            f"Programme EDITING accounts for "
+            f"{result.editing_effect_days:+.0f} calendar day(s) of the "
+            f"movement (all {len(undos)} revertible changes undone "
+            "together in one run)"
+            + (f"; the remaining {resid:+.0f} day(s) are progress "
+               "performance and the categories the kernel does not "
+               "re-schedule (calendar definitions, scheduling options, "
+               "retrospective actuals)." if resid is not None else "."))
+    if chain:
+        head = "; ".join(f"{c['code']} ({c['duration_days']:.0f}d)"
+                         for c in chain[:5]
+                         if c["duration_days"] is not None)
+        if n_touched == 0 and result.chain_root_at_data_date:
+            result.warnings.append(
+                f"The chain governing {anchor} is UNCHANGED between "
+                f"the revisions ({len(chain)} activities, none edited) "
+                f"and is rooted at '{chain[-1]['code']}' sitting on the "
+                "data date: the whole chain simply translated forward "
+                "by the window. On this evidence the movement is "
+                "non-progress on the driving chain, not programme "
+                f"editing. Chain head: {head}.")
+        else:
+            result.warnings.append(
+                f"The chain governing {anchor} runs {len(chain)} "
+                f"activities deep; {n_touched} of them were edited "
+                "between the revisions (duration or logic) — those are "
+                f"where an edit could bite. Chain head: {head}.")
 
     movers = [a for a in result.tested_changes
               if abs(a.contribution_days or 0) >= 0.5]

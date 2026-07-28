@@ -57,39 +57,34 @@ def _strip_chart(cmp, attr):
         [a for a in attr.tested_changes
          if abs(a.contribution_days or 0) >= 0.5],
         key=lambda a: -abs(a.contribution_days or 0))[:6]
-    residual = round(total - sum(a.contribution_days or 0
-                                 for a in movers), 1)
+    # Two MEASURED steps that sum exactly to the movement: programme
+    # editing (all revertible changes reverted together) and the
+    # remainder — progress performance plus the un-modelled categories.
+    # Individual contributions interact and must never be summed, so
+    # they are reported beneath, never as bridge steps.
+    editing = attr.editing_effect_days
+    if editing is None:
+        editing = 0.0
+    residual = round(total - editing, 1)
 
     A_OLD = "① Completion — earlier revision"
     A_NEW = "④ Completion — later revision"
-    R_ROW = "③ Progress slippage & untested changes"
+    E_ROW = "② Programme editing (all changes reverted together)"
+    R_ROW = "③ Progress performance & un-modelled changes"
     steps, anchors, txts = [], [], []
     order = [A_OLD]
     anchors.append({"Row": A_OLD, "x": 0.0, "kind": "completion",
                     "lbl": f"{c_old:%d %b %Y}"})
 
     run = 0.0
-    for i, a in enumerate(movers, start=1):
-        d = a.contribution_days or 0.0
-        row = f"② {a.category.replace(' changes', '')}: {a.ref}"[:40]
+    for row, d in ((E_ROW, editing), (R_ROW, residual)):
         order.append(row)
+        kind = "pushes later" if d > 0 else "pulls earlier"
         steps.append({"Row": row, "x0": run, "x1": run + d,
-                      "kind": ("pushes later" if d > 0
-                               else "pulls earlier")})
+                      "kind": kind})
         txts.append({"Row": row, "x": max(run, run + d),
-                     "lbl": f"{d:+.1f}d",
-                     "kind": "pushes later" if d > 0
-                     else "pulls earlier"})
+                     "lbl": f"{d:+.0f}d", "kind": kind})
         run += d
-    if abs(residual) >= 0.05 or not movers:
-        order.append(R_ROW)
-        steps.append({"Row": R_ROW, "x0": run, "x1": run + residual,
-                      "kind": ("pushes later" if residual > 0
-                               else "pulls earlier")})
-        txts.append({"Row": R_ROW, "x": max(run, run + residual),
-                     "lbl": f"{residual:+.0f}d",
-                     "kind": "pushes later" if residual > 0
-                     else "pulls earlier"})
     order.append(A_NEW)
     anchors.append({"Row": A_NEW, "x": total, "kind": "completion",
                     "lbl": f"{c_new:%d %b %Y}  ({total:+.0f}d)"})
@@ -165,24 +160,76 @@ def _completion_strip(cmp, attr) -> None:
         f"**Completion at a glance — what leads to what** &nbsp; "
         f"`{cmp.old_label[:34]}` → `{cmp.new_label[:34]}`")
     st.altair_chart(chart, width="stretch")
-    if movers:
-        st.caption(
-            "Read it top to bottom: ① where the earlier revision "
-            "finished, ② each change the one-at-a-time kernel test "
-            "shows moving completion (brick pushes it later, green "
-            "pulls it earlier), ③ everything the tests cannot "
-            "attribute — progress slippage and the untested categories "
-            "(constraints, calendars, scope) — and ④ where the later "
-            "revision finishes. Each segment starts where the one "
-            "above ended, so the chain reads as a summary of every "
-            "table below.")
-    else:
-        st.caption(
-            f"No tested change moves completion by half a day or more: "
-            f"the whole {residual:+.0f}-day movement falls to progress "
-            "slippage and the untested categories (constraints, "
-            "calendars, scope), not to the programme edits tested "
-            "here.")
+
+    # ---- the verdict, stated outright ------------------------------
+    edit = attr.editing_effect_days
+    if edit is not None:
+        chain_clean = (attr.chain_root_at_data_date
+                       and attr.driving_chain
+                       and not any(c["duration_changed"]
+                                   or c["logic_changed"]
+                                   for c in attr.driving_chain))
+        if abs(edit) >= 0.5 and abs(edit) >= abs(residual):
+            st.error(
+                f"**The programme edits moved it.** Reverting every "
+                f"revertible change together pulls completion "
+                f"{-edit:+.0f} days — programme editing accounts for "
+                f"{edit:+.0f} of the {(edit + residual):+.0f}-day "
+                "movement. The individual contributors are in the "
+                "table below.")
+        elif chain_clean:
+            st.warning(
+                f"**Nothing progressed on the driving chain.** The "
+                f"{len(attr.driving_chain)} activities governing "
+                f"completion are UNCHANGED between the revisions — no "
+                "duration, no logic edited — and the chain is rooted "
+                "at an activity sitting on the data date. It simply "
+                f"translated forward: {residual:+.0f} days of "
+                f"non-progress, {edit:+.0f} days of programme editing.")
+        else:
+            st.info(
+                f"**Mostly non-progress.** Programme editing accounts "
+                f"for {edit:+.0f} day(s); the remaining "
+                f"{residual:+.0f} day(s) are progress performance and "
+                "the categories the kernel does not re-schedule "
+                "(calendar definitions, scheduling options, "
+                "retrospective actuals).")
+    st.caption(
+        "① where the earlier revision finished · ② what programme "
+        "EDITING did, measured by reverting every revertible change "
+        "together in one run · ③ the remainder — progress performance "
+        "and the un-modelled categories · ④ where the later revision "
+        "finishes. The two steps sum exactly to the movement. "
+        "Individual change contributions interact and are reported "
+        "separately below, never summed."
+        + (f" Largest single change tested alone: "
+           f"{movers[0].ref} ({movers[0].contribution_days:+.1f}d)."
+           if movers else ""))
+
+    # ---- what actually governs completion --------------------------
+    if attr.driving_chain:
+        with st.expander(
+                f"What governs completion — the driving chain to "
+                f"{attr.anchor_code or 'the latest finisher'} "
+                f"({len(attr.driving_chain)} activities)"):
+            st.dataframe(pd.DataFrame([{
+                "#": i,
+                "Activity ID": c["code"],
+                "Activity": c["name"][:52],
+                "Remaining (d)": c["duration_days"],
+                "Edited this window": ("duration"
+                                       if c["duration_changed"]
+                                       else "logic"
+                                       if c["logic_changed"] else ""),
+                "On the data date": "◆" if c["at_data_date"] else "",
+            } for i, c in enumerate(attr.driving_chain, start=1)]),
+                width="stretch", hide_index=True, height=300)
+            st.caption(
+                "Read top-down: the completion anchor, then the "
+                "predecessor driving each activity's start, back to "
+                "the root. ◆ marks work floored at the data date — "
+                "where the root is ◆ and nothing on the chain was "
+                "edited, the movement is non-progress, not editing.")
 
 
 def comparison_tab() -> None:
