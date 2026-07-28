@@ -54,6 +54,7 @@ APAB_DATE_BASIS = "apab_date_basis"  # "late" (default) | "early"
 UMBRELLAS = "umbrella_groups"        # dict[umbrella name, [task_code]]
 UMBRELLA_PROPOSED = "umbrella_proposed"   # last AI proposal (unconfirmed)
 UMBRELLA_ON = "umbrella_on"          # bool — measure on umbrella rows
+UMBRELLA_ROUNDS = "umbrella_rounds"  # AI refinement trajectory (audit)
 
 # --- Impacted As-Planned / Collapsed As-Built ---------------------------
 IAP_EVENTS = "iap_events"        # on-page event rows (standalone capture)

@@ -285,6 +285,13 @@ from .rollup import (
     build_umbrella_prompt,
     parse_umbrella_grouping,
 )
+from .grouping_review import (
+    GroupingCritique,
+    GroupingDefect,
+    build_refine_prompt,
+    critique_grouping,
+    refine_grouping,
+)
 from .windows import (
     PathShift,
     WindowDriver,
@@ -476,6 +483,11 @@ __all__ = [
     "RollupResult",
     "UMBRELLA_SYSTEM_PROMPT",
     "build_rollup",
+    "GroupingCritique",
+    "GroupingDefect",
+    "build_refine_prompt",
+    "critique_grouping",
+    "refine_grouping",
     "build_umbrella_prompt",
     "parse_umbrella_grouping",
     # windows

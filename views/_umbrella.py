@@ -19,8 +19,8 @@ import streamlit as st
 import state as sk
 from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
-    UMBRELLA_SYSTEM_PROMPT, build_rollup, build_umbrella_prompt,
-    merge_grouping, parse_umbrella_grouping,
+    UMBRELLA_SYSTEM_PROMPT, build_rollup, critique_grouping,
+    merge_grouping, refine_grouping,
 )
 from views._shared import ai_provider_block
 
@@ -62,21 +62,27 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         # narrative panels render, model selector and own-key switch
         # included. Not a copy of the logic: the same function.
         provider, model, ai_key = ai_provider_block(f"{key_prefix}_ai")
-        if st.button("Propose work packages", key=f"{key_prefix}_go",
+        if st.button("Propose work packages (up to 3 AI rounds — a "
+                     "deterministic reviewer scores each round, best "
+                     "round kept)", key=f"{key_prefix}_go",
                      disabled=not (pool and ai_key)):
             try:
-                out = "".join(stream_narrative(
-                    provider, ai_key,
-                    build_umbrella_prompt(pool, path_codes),
-                    model or None,
-                    system=UMBRELLA_SYSTEM_PROMPT))
-                proposed, dropped = parse_umbrella_grouping(out, valid)
-                st.session_state[sk.UMBRELLA_PROPOSED] = proposed
+                def _call(prompt: str) -> str:
+                    return "".join(stream_narrative(
+                        provider, ai_key, prompt, model or None,
+                        system=UMBRELLA_SYSTEM_PROMPT))
+
+                with st.spinner("Proposing, critiquing, refining…"):
+                    best, best_crit, traj = refine_grouping(
+                        _call, pool, path_codes, valid)
+                st.session_state[sk.UMBRELLA_PROPOSED] = best or []
+                st.session_state[sk.UMBRELLA_ROUNDS] = traj
+                dropped = sum(t.get("dropped") or 0 for t in traj)
                 if dropped:
                     st.warning(
                         f"{dropped} proposed code(s) were not present in "
                         "the programme and were dropped.")
-                if not proposed:
+                if not best:
                     st.warning("No usable groups were returned — try "
                                "again, or type groups in the table.")
             except NarrativeError as exc:
@@ -87,6 +93,31 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
                     "AI settings above and use your own key. Grouping "
                     "by hand in the table below works regardless.")
 
+        traj = st.session_state.get(sk.UMBRELLA_ROUNDS) or []
+        if len(traj) > 1 or (traj and traj[0].get("defects")):
+            scored = [t for t in traj if t.get("score") is not None]
+            best_rnd = (max(scored, key=lambda t: t["score"])["round"]
+                        if scored else None)
+            st.dataframe(pd.DataFrame([{
+                "Round": t["round"],
+                "Score": t["score"] if t["score"] is not None else "—",
+                "Packages": t["packages"],
+                "Defects": (t["defects"] if t["defects"] is not None
+                            else "—"),
+                "": "✔ kept" if t["round"] == best_rnd else "",
+            } for t in traj]), width="stretch", hide_index=True)
+            st.caption(
+                "Each round the model revises its own grouping against "
+                "the reviewer's defect list; the reviewer is arithmetic "
+                "on the rows (coverage, spans, ID families, name "
+                "coherence), never the model grading itself. The "
+                "best-scoring round is kept — revisions do not improve "
+                "monotonically.")
+            last_best = next((t for t in traj
+                              if t["round"] == best_rnd), None)
+            if last_best and last_best.get("top_defects"):
+                st.caption("Remaining defects to fix by hand: "
+                           + last_best["top_defects"])
         proposed = st.session_state.get(sk.UMBRELLA_PROPOSED) or []
         if proposed:
             st.dataframe(pd.DataFrame([{
@@ -140,6 +171,7 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         _adopt({})
         st.session_state.pop(ed_key, None)
         st.session_state.pop(sk.UMBRELLA_PROPOSED, None)
+        st.session_state.pop(sk.UMBRELLA_ROUNDS, None)
         st.rerun()
 
     # ---- live preview of what the roll-up measures -------------------
@@ -172,4 +204,15 @@ def umbrella_editor(rows: list[dict], path_codes: set[str],
         for u in res.umbrellas:
             for w in u.warnings:
                 st.caption(f"• {w}")
+        # the same deterministic reviewer that drives the AI rounds,
+        # run on whatever is adopted — typed by hand or proposed
+        crit = critique_grouping(groups, rows, path_codes)
+        if crit.defects:
+            st.caption(
+                f"Reviewer: {crit.score:.0f}/100 — "
+                + "; ".join(d.detail for d in crit.defects[:3])
+                + (" …" if len(crit.defects) > 3 else ""))
+        else:
+            st.caption(f"Reviewer: {crit.score:.0f}/100 — no defects "
+                       "found in the adopted grouping.")
     return groups

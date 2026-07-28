@@ -1926,6 +1926,118 @@ check("N12d forecast tail carried on the as-built side, flagged",
       any(r.get("actual_is_forecast") and r["actual_finish"]
           for r in _n_late.values()))
 
+# N13. Deterministic grouping critique + the AI refinement loop.
+# The critic is arithmetic on the rows; the loop keeps the BEST round.
+from datetime import datetime as _n13dt
+from programme import (critique_grouping as _cg,
+                       build_refine_prompt as _brp,
+                       refine_grouping as _rg)
+
+
+def _n13_row(code, name, s, f):
+    return {"task_code": code, "name": name,
+            "actual_start": _n13dt(2016, *s), "actual_finish":
+            _n13dt(2016, *f), "planned_start": None,
+            "planned_finish": None, "actual_is_forecast": False,
+            "start_var_days": None, "finish_var_days": None,
+            "in_baseline": True}
+
+
+_n13_rows = [
+    _n13_row("EL-001", "Electrical First Fix L1", (1, 4), (2, 1)),
+    _n13_row("EL-002", "Electrical First Fix L2", (2, 2), (3, 1)),
+    _n13_row("EL-003", "Electrical First Fix L3", (3, 2), (4, 1)),
+    _n13_row("SC-001", "Screed Works L1", (4, 2), (5, 1)),
+    _n13_row("SC-002", "Screed Works L2", (5, 2), (6, 1)),
+    _n13_row("PL-001", "Plastering L1", (6, 2), (7, 1)),
+    _n13_row("SN-001", "Plastering Snagging L1", (7, 2), (7, 20)),
+    _n13_row("KD-01", "Completion Milestone", (12, 21), (12, 21)),
+]
+_n13_cp = {r["task_code"] for r in _n13_rows}
+_n13_good = {"Electrical First Fix": ["EL-001", "EL-002", "EL-003"],
+             "Screed Works": ["SC-001", "SC-002"],
+             "Plastering & Finishes": ["PL-001", "SN-001"]}
+_gcrit = _cg(_n13_good, _n13_rows, _n13_cp)
+check("N13 a coherent full-coverage grouping scores clean",
+      _gcrit.score >= 90
+      and not any(d.kind == "uncovered" for d in _gcrit.defects),
+      f"score {_gcrit.score}, defects "
+      f"{[d.kind for d in _gcrit.defects]}")
+check("N13b milestones are never expected inside a package",
+      _gcrit.total_cp == 7)          # KD-01 (single-date) excluded
+_bad = {"General Works": ["EL-001", "SC-001", "PL-001"],
+        "Snagging": ["SN-001"]}
+_bcrit = _cg(_bad, _n13_rows, _n13_cp)
+_bkinds = {d.kind for d in _bcrit.defects}
+check("N13c the catch-all grouping is named on every count",
+      {"generic-name", "mixed-prefix", "singleton",
+       "uncovered"} <= _bkinds, str(_bkinds))
+check("N13d worse grouping scores strictly lower",
+      _bcrit.score < _gcrit.score,
+      f"{_bcrit.score} !< {_gcrit.score}")
+_span = _cg({"Electrical": ["EL-001", "SN-001"]}, _n13_rows, _n13_cp)
+check("N13e a one-label two-campaigns package raises the span defect",
+      any(d.kind == "span" for d in _span.defects))
+check("N13f the orphan member is identified by code",
+      any(d.kind == "orphan-name" and d.codes == ["SN-001"]
+          for d in _span.defects))
+_rp = _brp(_n13_rows, _n13_cp, _bad, _bcrit)
+check("N13g refine prompt carries grouping, score and defects",
+      "General Works" in _rp and str(_bcrit.score) in _rp
+      and "generic-name" in _rp and "REVISED" in _rp)
+
+# scripted model: round 1 poor, round 2 clean -> best is round 2 and
+# the loop stops at the target score without burning round 3
+import json as _n13json
+_n13_outs = [
+    _n13json.dumps({"groups": [
+        {"label": "General Works",
+         "codes": ["EL-001", "SC-001", "PL-001"], "rationale": ""},
+        {"label": "Snagging", "codes": ["SN-001"], "rationale": ""}]}),
+    _n13json.dumps({"groups": [
+        {"label": g, "codes": c, "rationale": "clean"}
+        for g, c in _n13_good.items()]}),
+    "SHOULD NEVER BE REQUESTED",
+]
+_n13_calls = []
+
+
+def _n13_model(prompt):
+    _n13_calls.append(prompt)
+    return _n13_outs[len(_n13_calls) - 1]
+
+
+_best, _bestc, _traj = _rg(_n13_model, _n13_rows, _n13_cp, _n13_cp)
+check("N13h loop keeps the best round, not the last poor one",
+      _bestc is not None and _bestc.score == _gcrit.score
+      and {g["label"] for g in _best} == set(_n13_good))
+check("N13i loop stops at the target score (round 3 never called)",
+      len(_n13_calls) == 2 and len(_traj) == 2
+      and _traj[1]["kept"] and not _traj[0]["defects"] is None)
+check("N13j round-2 prompt fed the round-1 grouping and its defects",
+      "General Works" in _n13_calls[1]
+      and "Defects the reviewer found" in _n13_calls[1])
+# a model that returns garbage ends the loop with the audit recorded
+_gbest, _gc, _gtraj = _rg(lambda p: "not json", _n13_rows, _n13_cp,
+                          _n13_cp)
+check("N13k unparseable round recorded, nothing adopted",
+      _gbest is None and _gc is None and len(_gtraj) == 1
+      and _gtraj[0]["score"] is None)
+# best-round-wins when a LATER round regresses: good then bad
+_n13_calls2 = []
+
+
+def _n13_model2(prompt):
+    _n13_calls2.append(prompt)
+    return [_n13_outs[1], _n13_outs[0]][len(_n13_calls2) - 1]
+
+
+_b2, _c2, _t2 = _rg(_n13_model2, _n13_rows, _n13_cp, _n13_cp,
+                    target_score=200.0)
+check("N13l a regressing later round is recorded but NOT kept",
+      _c2.score == _gcrit.score and len(_t2) == 2
+      and not _t2[1]["kept"])
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this
