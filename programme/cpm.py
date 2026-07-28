@@ -117,8 +117,16 @@ def forward_pass(
     preds: dict[str, list[tuple[str, str, float]]],  # id -> (pred, type, lag)
     start: datetime,
     started_at: dict[str, datetime],
-) -> tuple[dict[str, datetime], dict[str, datetime], list[str]]:
-    """Kahn-ordered forward pass. Returns (ES, EF, warnings)."""
+) -> tuple[dict[str, datetime], dict[str, datetime], list[str],
+           dict[str, str]]:
+    """Kahn-ordered forward pass.
+
+    Returns (ES, EF, warnings, driver) — ``driver`` maps each node to
+    the predecessor whose relationship governed its early start, the
+    map the driving-chain walk in comparison attribution rests on. The
+    annotation lied about this fourth element for a while; every caller
+    already unpacks four.
+    """
     warnings: list[str] = []
     succs: dict[str, list[str]] = {n: [] for n in nodes}
     indeg = {n: 0 for n in nodes}

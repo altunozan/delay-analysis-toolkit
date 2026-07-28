@@ -2723,6 +2723,95 @@ check("N19e both Word builders stamp before saving",
 check("N19f the DCMA workbook is stamped too",
       "build_stamp" in open("dcma/report_xlsx.py").read())
 
+# ---------------------------------------------------------------------------
+# N20. Degenerate-dates engine torture (audit F-10, the cluster that
+# matters). Layer K proves the PARSER survives malformed files; nothing
+# proved the ENGINES survive a parsed file whose dates are missing in
+# every combination the field corpus happens not to contain: completed
+# work with no actuals, in-progress with no early dates, milestones
+# with no dates at all, a relationship to a task that does not exist.
+# Every engine must return or warn — never throw.
+print("\n--- Layer N20: degenerate-dates engine torture ---")
+_n20_hdr = ("ERMHDR\t8.0\n"
+            "%T\tPROJECT\n%F\tproj_id\tproj_short_name\tlast_recalc_date\n"
+            "%R\tP1\tDEGEN\t2018-06-01 00:00\n"
+            "%T\tCALENDAR\n%F\tclndr_id\tclndr_name\n%R\tC1\tStd\n"
+            "%T\tTASK\n%F\ttask_id\tproj_id\ttask_code\ttask_name\t"
+            "task_type\tstatus_code\tclndr_id\tearly_start_date\t"
+            "early_end_date\tlate_start_date\tlate_end_date\t"
+            "act_start_date\tact_end_date\ttarget_start_date\t"
+            "target_end_date\ttotal_float_hr_cnt\tremain_dur_hr_cnt\n")
+_n20_rows = [
+    # complete but NO actual dates at all
+    ("T1", "A1000", "Complete no actuals", "TT_Task", "TK_Complete",
+     "", "", "", "", "", "", "", "", "", ""),
+    # in-progress with an actual start but NO early/late/remaining
+    ("T2", "A1010", "Started no forecast", "TT_Task", "TK_Active",
+     "", "", "", "", "2018-05-01 08:00", "", "", "", "", ""),
+    # not started with NO dates whatsoever
+    ("T3", "A1020", "Future undated", "TT_Task", "TK_NotStart",
+     "", "", "", "", "", "", "", "", "", ""),
+    # milestone with no dates and no float
+    ("T4", "MS-100", "Undated milestone", "TT_FinMile", "TK_NotStart",
+     "", "", "", "", "", "", "", "", "", ""),
+    # actual finish but NO actual start (real P6 exports do this)
+    ("T5", "A1030", "Finish only", "TT_Task", "TK_Complete",
+     "", "", "", "", "", "2018-04-10 17:00", "", "", "", ""),
+    # healthy row so engines have something to anchor on
+    ("T6", "A1040", "Healthy anchor", "TT_Task", "TK_Active",
+     "2018-06-01 08:00", "2018-07-01 17:00", "2018-06-05 08:00",
+     "2018-07-05 17:00", "2018-05-20 08:00", "", "2018-05-15 08:00",
+     "2018-06-25 17:00", "40", "160"),
+]
+_n20_txt = _n20_hdr + "".join(
+    "%R\t" + "\t".join([r[0], "P1", r[1], r[2], r[3], r[4], "C1",
+                        *r[5:]]) + "\n"
+    for r in _n20_rows
+) + ("%T\tTASKPRED\n%F\ttask_pred_id\ttask_id\tpred_task_id\t"
+     "pred_type\tlag_hr_cnt\n"
+     "%R\tPR1\tT6\tT2\tPR_FS\t0\n"
+     "%R\tPR2\tT2\tT5\tPR_FS\t8\n"
+     "%R\tPR3\tT6\tT999\tPR_FS\t0\n"      # dangling predecessor
+     "%E\n")
+from dcma import build_dcma_trace
+from programme import (build_repair_plan, collapse_asbuilt,
+                       extract_asbuilt_longest_path as _n20_ablp,
+                       extract_actual_trace as _n20_seq,
+                       out_of_sequence_flags, planned_vs_actual)
+_n20 = parse_xer(_n20_txt.encode())
+check("N20 the degenerate file parses (6 tasks, dangling pred kept "
+      "out or tolerated)", len(_n20.tasks) == 6)
+
+
+def _n20_run(label, fn):
+    try:
+        fn()
+        check(f"N20 {label} survives missing dates", True)
+    except Exception as _e:  # noqa: BLE001 - the whole point
+        check(f"N20 {label} survives missing dates", False,
+              f"{type(_e).__name__}: {_e}")
+
+
+_n20_run("DCMA checks + trace", lambda: build_dcma_trace(
+    _n20, DCMAConfig(), run_all_checks(_n20, DCMAConfig())))
+_n20_run("longest path", lambda: extract_longest_path(_n20, "DEGEN"))
+_n20_run("float-based critical path",
+         lambda: extract_critical_path(_n20, "DEGEN"))
+_n20_run("OOS flags + repair plan", lambda: (
+    out_of_sequence_flags(_n20), build_repair_plan(_n20)))
+_n20_run("revision comparison (self)",
+         lambda: compare_revisions(_n20, _n20, "a", "b"))
+_n20_run("windows analysis",
+         lambda: analyse_windows([("a", _n20), ("b", _n20)]))
+_n20_run("planned vs actual", lambda: planned_vs_actual(_n20, _n20, None))
+_n20_run("as-built longest path", lambda: _n20_ablp(_n20))
+_n20_run("as-built sequence trace", lambda: _n20_seq([("a", _n20)]))
+_n20_run("collapsed as-built",
+         lambda: collapse_asbuilt(_n20, "DEGEN", set()))
+_n20_run("milestone shifts", lambda: track_milestone_shifts(
+    [("a", _n20.project.data_date, _n20),
+     ("b", _n20.project.data_date, _n20)]))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")
