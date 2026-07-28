@@ -198,9 +198,13 @@ def main() -> int:
                     page.wait_for_timeout(4000)
                 page.wait_for_timeout(4000)
 
-            type_umbrella_cells()
-            if not page.get_by_text("Adopted — measured span").count():
-                type_umbrella_cells()          # one retry on grid flake
+            # the canvas grid drops keystrokes under load — retry the
+            # whole typing pass up to three times before failing
+            for _attempt in range(3):
+                type_umbrella_cells()
+                if page.get_by_text("Adopted — measured span").count():
+                    break
+                page.wait_for_timeout(2500)
             check("typing in the grid auto-adopts the grouping",
                   page.get_by_text("Adopted — measured span").count() > 0)
             # no toggle any more: the shared block's gantt always

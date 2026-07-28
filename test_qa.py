@@ -1485,21 +1485,29 @@ check("J4b grouping prompt is code<TAB>name lines",
 from programme.variance import keydate_windows as _kw
 _j_all = _pva(_gb, _gu)
 _j_win = _kw(_j_all, ["A1870", "A1910", "B28-TsLC-SDS110"])
-check("J6 key-date windows: consecutive pairs in as-built order",
-      len(_j_win) == 2 and _j_win[0]["from_code"] == "A1870")
+check("J6 one window per key date, the first from PROJECT START",
+      len(_j_win) == 3 and _j_win[0]["from_code"] == "PROJECT START"
+      and _j_win[1]["from_code"] == _j_win[0]["to_code"])
 _w0 = _j_win[0]
-check("J6b window delay identity: actual - planned interval",
-      abs(_w0["window_delay_days"]
-          - (_w0["actual_interval_days"]
-             - _w0["planned_interval_days"])) < 0.05)
-check("J6c resequenced pair (negative planned interval) excluded "
-      "from cumulative — this real pair WAS resequenced",
-      _j_win[1]["resequenced"] is True
-      and _j_win[1]["cumulative_delay_days"] is None
-      and _j_win[0]["cumulative_delay_days"]
-      == _j_win[0]["window_delay_days"])
-check("J6d fewer than two usable key dates -> no windows",
-      _kw(_j_all, ["A1870"]) == [] and _kw(_j_all, ["NOPE"]) == [])
+check("J6b delay at a key date is DIRECT: actual minus planned finish",
+      abs(_w0["cumulative_delay_days"]
+          - (_w0["actual_finish"] - _w0["planned_finish"]
+             ).total_seconds() / 86400) < 0.06)
+check("J6b2 accrued in window = change in slippage across it",
+      abs(_j_win[1]["window_delay_days"]
+          - (_j_win[1]["cumulative_delay_days"]
+             - _j_win[0]["cumulative_delay_days"])) < 0.05
+      and _w0["window_delay_days"] == _w0["cumulative_delay_days"])
+check("J6c resequenced key date flagged; its DIRECT delay kept",
+      any(w["resequenced"] for w in _j_win)
+      and all(w["cumulative_delay_days"] is not None for w in _j_win))
+check("J6d a single key date bounds one window from project start; "
+      "no usable key dates -> none",
+      len(_kw(_j_all, ["A1870"])) == 1 and _kw(_j_all, ["NOPE"]) == [])
+check("J6e window spans run project start → key actual finish",
+      _w0["window_start"] is not None
+      and _w0["window_start"] <= _w0["window_end"]
+      and _j_win[1]["window_start"] == _j_win[0]["window_end"])
 
 from programme import build_simple_xlsx as _bsx
 _wb_j = load_workbook(io.BytesIO(_bsx(
@@ -1668,8 +1676,10 @@ check("L3f self-transfer sanity: zero network and scope effect",
       _l_self.network_effect_days == 0.0
       and _l_self.scope_effect_days == 0.0)
 
-# L4 key-date windows: resequenced pairs flagged and kept out of the
-# cumulative sum
+# L4 key-date windows (2026-07-28 semantics): delay at each key date is
+# DIRECT (actual minus planned finish); windows run project start → K1
+# → K2 → …; accrued-in-window = change in slippage; resequenced key
+# dates flagged (their accrued figure carries a sequencing artefact)
 _l_rows = [
     {"task_code": "A", "name": "a", "planned_start": None,
      "planned_finish": _dtt(2016, 1, 10), "actual_start": None,
@@ -1685,13 +1695,15 @@ _l_rows = [
      "finish_var_days": None, "in_baseline": True},
 ]
 _l_kw = _kw(_l_rows, ["A", "B", "C"])
-check("L4 resequenced pair (negative planned interval) flagged",
-      _l_kw[0]["resequenced"] is True
-      and _l_kw[0]["cumulative_delay_days"] is None)
-check("L4b clean pair still accumulates",
-      _l_kw[1]["resequenced"] is False
-      and _l_kw[1]["cumulative_delay_days"]
-      == _l_kw[1]["window_delay_days"])
+check("L4 resequenced key date flagged; its DIRECT delay kept",
+      _l_kw[1]["resequenced"] is True
+      and _l_kw[1]["to_code"] == "B"
+      and _l_kw[1]["cumulative_delay_days"] == 27.0)
+check("L4b direct delay per key date; accrued = change in slippage "
+      "(recovery reads negative)",
+      _l_kw[0]["cumulative_delay_days"] == 0.0
+      and _l_kw[2]["cumulative_delay_days"] == 20.0
+      and _l_kw[2]["window_delay_days"] == -7.0)
 
 # L5 CAB anchor: completion measured at the elected milestone
 from programme.collapsed_asbuilt import collapse_asbuilt as _cab2
@@ -2094,6 +2106,15 @@ try:
     check("N14h Word narrative carries the figure",
           any("media/image" in n
               for n in _n14zf.ZipFile(io.BytesIO(_n14dx)).namelist()))
+    # markdown tables must land as REAL Word tables, not pipe/dash text
+    _n14md = ("## Windows\n\n| Window | Delay |\n|---|---|\n"
+              "| W1 | +12 |\n| W2 | -3 |\n\nafter")
+    _n14dx2 = _n14doc("t", _n14md)
+    _n14doc_xml = _n14zf.ZipFile(io.BytesIO(_n14dx2)).read(
+        "word/document.xml").decode("utf-8")
+    check("N14j markdown tables render as Word tables (no dash walls)",
+          "<w:tbl>" in _n14doc_xml and "|---|" not in _n14doc_xml
+          and "W1" in _n14doc_xml)
 except ImportError as _n14exc:
     print(f"  [SKIP] N14e-h figure pipeline ({_n14exc})")
 

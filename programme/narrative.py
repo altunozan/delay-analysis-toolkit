@@ -163,11 +163,21 @@ For each work package / activity on the path: planned dates (state the
 elected basis — late or early), as-built dates, and the variance in
 days. Tell it as a construction narrative, worst variances called out.
 
-### 4. Analysis Windows
-Per window (bounded by the analyst's key dates): the planned interval,
-the as-built interval, and the window delay. State which windows carry
-the delay and which recovered time. Resequenced windows are excluded
-from the cumulative total and must be reported as such.
+### 4. Key Dates & Analysis Windows
+First state the measurement in one sentence: the delay at a key date is
+its as-built finish minus its planned finish under the elected date
+basis (calendar days, positive = late); windows run PROJECT START →
+key date 1 → key date 2 → …, and the delay accrued in a window is the
+change in that slippage across it. Then present the windows as a
+markdown table with EXACTLY these columns:
+| Window | From → To | Planned finish | Actual finish | Delay at key date (d) | Accrued in window (d) |
+one row per window, figures verbatim from the data. Below the table,
+explain each key date in turn: what it is, its planned vs actual date,
+the delay at that date, and how much of it accrued in the window
+leading to it. State which windows carry the delay and which recovered
+time. A key date flagged RESEQUENCED was reached in a different order
+than planned: report its direct delay normally but state that its
+accrued-in-window figure carries a sequencing artefact.
 
 ### 5. Delay to Each Milestone
 Per measured milestone: planned completion, as-built (or forecast)
@@ -1152,15 +1162,21 @@ def build_apab_report_prompt(
                 f"{fmt(r.get('actual_start'))} -> "
                 f"{fmt(r.get('actual_finish'))}"
                 + (f", variance {var:+.0f}d" if var is not None else ""))
-        for w in (windows_by_ms or {}).get(sec["ms"], []):
+        for i, w in enumerate(
+                (windows_by_ms or {}).get(sec["ms"], []), start=1):
             lines.append(
-                f"  window {w.get('from_code')} -> {w.get('to_code')}: "
-                f"planned interval {w.get('planned_interval_days')}d, "
-                f"as-built {w.get('actual_interval_days')}d, delay "
+                f"  window W{i} {w.get('from_code')} -> "
+                f"{w.get('to_code')} '{w.get('to_name', '')}': spans "
+                f"{fmt(w.get('window_start'))} -> "
+                f"{fmt(w.get('window_end'))}; key date planned "
+                f"{fmt(w.get('planned_finish'))}, actual "
+                f"{fmt(w.get('actual_finish'))}; delay at key date "
+                f"{w.get('cumulative_delay_days')}d (direct: actual "
+                "minus planned finish); accrued in this window "
                 f"{w.get('window_delay_days')}d"
-                + (", RESEQUENCED (excluded from cumulative)"
-                   if w.get("resequenced") else "")
-                + f", cumulative {w.get('cumulative_delay_days')}d")
+                + (", RESEQUENCED (accrued figure carries a "
+                   "sequencing artefact)" if w.get("resequenced")
+                   else ""))
         lines.append("</milestone>\n")
     lines.append("<caveats>")
     for c in (caveats or []):

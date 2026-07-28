@@ -328,15 +328,18 @@ def tia_paths_chart(res) -> alt.Chart | None:
 # --------------------------------------------------------------------- #
 
 def apab_gantt_chart(rows, windows=None, data_date=None,
-                     max_rows: int = 140):
+                     keydates=None, max_rows: int = 140):
     """Step-④ final gantt: planned dimension line over the as-built bar
     per activity (late = brick red, on time = green), analysis-window
-    curtains, dashed data date. Row order is the on-screen order."""
+    curtains labelled with the accrued delay, key-date ◇ planned / ◆
+    actual markers with the measured delay, dashed data date. Row order
+    is the on-screen order — the same reading as the app's chart."""
+    keydates = keydates or {}
     use = [r for r in rows
            if r.get("row_kind") != "section"
            and (r.get("planned_start") or r.get("actual_start"))]
     use = use[:max_rows]
-    recs, order = [], []
+    recs, order, kdrecs = [], [], []
     for r in use:
         kind = r.get("row_kind") or ""
         mark = "▣ " if kind == "umbrella" else "↳ " if kind == "member" else ""
@@ -355,6 +358,12 @@ def apab_gantt_chart(rows, windows=None, data_date=None,
         if p_s and p_f:
             recs.append({"Row": lbl, "s": p_s, "f": p_f,
                          "Series": "as-planned"})
+        if (r["task_code"] in keydates and r.get("planned_finish")
+                and r.get("actual_finish")):
+            kdrecs.append({"Row": lbl, "p": r["planned_finish"],
+                           "a": r["actual_finish"],
+                           "d": (f"{var:+.0f}d" if var is not None
+                                 else "")})
     if not recs:
         return None
     df = pd.DataFrame(recs)
@@ -391,6 +400,17 @@ def apab_gantt_chart(rows, windows=None, data_date=None,
             color=PLANNED_C, align="left")
             .encode(x="ws:T", text="lab:N"))
     layers += [ab, pl]
+    if kdrecs:
+        kdf = pd.DataFrame(kdrecs)
+        layers.append(alt.Chart(kdf).mark_point(
+            shape="diamond", size=90, filled=False, color=PLANNED_C,
+            strokeWidth=1.6).encode(x="p:T", y=y))
+        layers.append(alt.Chart(kdf).mark_point(
+            shape="diamond", size=90, filled=True, color=PLANNED_C)
+            .encode(x="a:T", y=y))
+        layers.append(alt.Chart(kdf).mark_text(
+            dx=10, fontSize=10, fontWeight="bold", color=RECORDED_C,
+            align="left").encode(x="a:T", y=y, text="d:N"))
     if data_date is not None:
         layers.append(alt.Chart(pd.DataFrame([{"dd": data_date}]))
                       .mark_rule(strokeDash=[5, 4], color=RECORDED_C,
@@ -398,7 +418,9 @@ def apab_gantt_chart(rows, windows=None, data_date=None,
                       .encode(x="dd:T"))
     return (alt.layer(*layers)
             .properties(width=980, height=alt.Step(15),
-                        title="As-planned vs as-built — final gantt")
+                        title="As-planned vs as-built — final gantt "
+                              "(◇ key date planned, ◆ actual, label = "
+                              "delay at the key date)")
             .configure_view(stroke=None)
             .configure_axis(grid=True, gridColor="#E4EDF4"))
 

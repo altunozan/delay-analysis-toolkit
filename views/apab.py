@@ -250,8 +250,9 @@ def apab_tab() -> None:
                 kd[str(r["ID"])] = str(r["Why it is key"] or "")
         st.session_state[sk.APAB_KEYDATES] = kd
 
-        if len(kd) < 2:
-            st.info("Tick at least TWO key dates to bound a window.")
+        if not kd:
+            st.info("Tick at least ONE key date — the first window runs "
+                    "from the PROJECT START to it.")
         for ms, disp, roll, delay, achieved in _sections():
             flat = [r for r in disp if r.get("row_kind") != "member"]
             kwin = keydate_windows(flat, [c for c in kd
@@ -261,14 +262,27 @@ def apab_tab() -> None:
                 st.markdown(f"**Windows on the path to {ms}:**")
                 st.dataframe(pd.DataFrame([{
                     "Window": f"W{i}: {w['from_code']} → {w['to_code']}",
-                    "Planned interval (d)": w["planned_interval_days"],
-                    "As-built interval (d)": w["actual_interval_days"],
-                    "Window delay (d)": w["window_delay_days"],
-                    "Resequenced": ("⚠️ excluded from cumulative"
+                    "Window span": (f"{w['window_start']:%Y-%m-%d} → "
+                                    f"{w['window_end']:%Y-%m-%d}"
+                                    if w.get("window_start") else "—"),
+                    "Planned finish": f"{w['planned_finish']:%Y-%m-%d}",
+                    "Actual finish": f"{w['actual_finish']:%Y-%m-%d}",
+                    "Delay at key date (d)": w["cumulative_delay_days"],
+                    "Accrued in window (d)": w["window_delay_days"],
+                    "Resequenced": ("⚠️ order differs from plan"
                                     if w.get("resequenced") else ""),
-                    "Cumulative (d)": w["cumulative_delay_days"],
                 } for i, w in enumerate(kwin, start=1)]),
                     width="stretch", hide_index=True)
+                st.caption(
+                    "Delay at a key date is DIRECT: its as-built finish "
+                    f"minus its planned ({date_basis.upper()}) finish, "
+                    "calendar days. 'Accrued in window' is the change "
+                    "in that slippage across the window. Windows run "
+                    "PROJECT START → key date 1 → key date 2 → …; a "
+                    "⚠ resequenced key date was reached in a different "
+                    "order than planned, so its accrued figure carries "
+                    "a sequencing artefact — the direct delay at the "
+                    "date remains a clean measurement.")
 
     # ============ ④ gantt & report =================================== #
     else:
@@ -290,12 +304,11 @@ def apab_tab() -> None:
                                           if c in {r["task_code"]
                                                    for r in flat}])
             windows_by_ms[ms] = kwin
-            fin = {r["task_code"]: r.get("actual_finish") for r in flat}
             for i, w in enumerate(kwin, start=1):
                 all_windows.append({
                     "label": f"W{i}",
-                    "start": fin.get(w["from_code"]),
-                    "end": fin.get(w["to_code"]),
+                    "start": w.get("window_start"),
+                    "end": w.get("window_end"),
                     "delay_days": w["window_delay_days"]})
             sections_data.append({
                 "ms": ms, "ms_name": by_code[ms].name,
@@ -328,7 +341,7 @@ def apab_tab() -> None:
             from programme.report_charts import apab_gantt_chart, \
                 chart_png
             ch = apab_gantt_chart(display, windows=all_windows,
-                                  data_date=dd)
+                                  data_date=dd, keydates=kd)
             return chart_png(ch) if ch is not None else None
         try:
             _png4 = _final_gantt_png()

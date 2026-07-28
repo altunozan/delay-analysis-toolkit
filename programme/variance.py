@@ -274,43 +274,62 @@ def planned_vs_actual(
 
 
 def keydate_windows(rows: list[dict],
-                    key_codes: list[str]) -> list[dict]:
+                    key_codes: list[str],
+                    project_start=None) -> list[dict]:
     """Analysis windows bounded by the analyst's KEY DATES.
 
-    ``rows`` come from planned_vs_actual; ``key_codes`` are the analyst's
-    key-date activities. Key dates are ordered by actual finish; each
-    consecutive pair bounds one window. Window delay = actual interval
-    minus planned interval (calendar days, positive = the works took
-    longer than planned through that window).
+    A key date is an as-built critical-path completion point. Its
+    measurement is DIRECT: slippage = its recorded (or forecast) finish
+    minus its planned finish under the elected date basis (late LS/LF
+    by default, early on election) — calendar days, positive = late.
+
+    Windows run PROJECT START → key date 1 → key date 2 → …: window i
+    spans from the previous key date's actual finish (or the project
+    start for the first window) to key date i's actual finish. The
+    delay ACCRUED in a window is the change in slippage across it
+    (slippage at its closing key date minus slippage at the previous
+    one); the CUMULATIVE figure at each key date is that key date's own
+    slippage, measured directly, not a running sum.
+
+    ``resequenced`` flags a key date whose planned finish precedes the
+    previous key date's planned finish — the works reached them in a
+    different order than planned, so the accrued-in-window figure
+    carries a sequencing artefact and is disclosed as such (the direct
+    slippage at the key date remains a clean measurement).
     """
     by_code = {r["task_code"]: r for r in rows}
     keys = [by_code[c] for c in key_codes if c in by_code]
     keys = [k for k in keys if k["actual_finish"] and k["planned_finish"]]
     keys.sort(key=lambda r: r["actual_finish"])
+    if not keys:
+        return []
+    if project_start is None:
+        starts = [r["actual_start"] for r in rows if r.get("actual_start")]
+        project_start = min(starts) if starts else None
     out: list[dict] = []
-    cum = 0.0
-    for a, b in zip(keys, keys[1:]):
-        planned = _delta_days(a["planned_finish"], b["planned_finish"])
-        actual = _delta_days(a["actual_finish"], b["actual_finish"])
-        delay = (round(actual - planned, 1)
-                 if planned is not None and actual is not None else None)
-        # As-built order differing from planned order makes the planned
-        # interval NEGATIVE: the pair was RESEQUENCED and 'delay' would
-        # carry a sequencing artefact, not elongation — flag it and
-        # keep it OUT of the cumulative sum.
-        resequenced = planned is not None and planned < 0
-        if delay is not None and not resequenced:
-            cum = round(cum + delay, 1)
+    prev = None            # previous key row
+    prev_slip = 0.0        # slippage carried into the window
+    for i, k in enumerate(keys, start=1):
+        slip = _delta_days(k["planned_finish"], k["actual_finish"])
+        accrued = (round(slip - prev_slip, 1)
+                   if slip is not None else None)
+        resequenced = (prev is not None
+                       and k["planned_finish"] < prev["planned_finish"])
         out.append({
-            "from_code": a["task_code"], "to_code": b["task_code"],
-            "from_name": a["name"], "to_name": b["name"],
-            "planned_interval_days": (round(planned, 1)
-                                      if planned is not None else None),
-            "actual_interval_days": (round(actual, 1)
-                                     if actual is not None else None),
-            "window_delay_days": delay,
+            "from_code": (prev["task_code"] if prev is not None
+                          else "PROJECT START"),
+            "from_name": (prev["name"] if prev is not None
+                          else "Start of the works"),
+            "to_code": k["task_code"], "to_name": k["name"],
+            "window_start": (prev["actual_finish"] if prev is not None
+                             else project_start),
+            "window_end": k["actual_finish"],
+            "planned_finish": k["planned_finish"],
+            "actual_finish": k["actual_finish"],
+            "window_delay_days": accrued,
+            "cumulative_delay_days": (round(slip, 1)
+                                      if slip is not None else None),
             "resequenced": resequenced,
-            "cumulative_delay_days": (cum if delay is not None
-                                      and not resequenced else None),
         })
+        prev, prev_slip = k, (slip if slip is not None else prev_slip)
     return out

@@ -597,7 +597,9 @@ def build_apab_gantt_html(
               ".requestFullscreen().catch(()=>alert('Full screen is "
               "blocked inside this frame — use the standalone-HTML "
               "download button under the chart.'));}\">"
-              "⛶ Full screen</button>")
+              "⛶ Full screen</button>"
+              "<button id='expm' class='tgl'>Expand all</button>"
+              "<button id='colm' class='tgl'>Collapse all</button>")
     parts = ["""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   body { margin:0; background:#FCFCFA; color:#14324A;
          font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif;
@@ -688,10 +690,11 @@ def build_apab_gantt_html(
   tr.r:nth-child(even) td.lbl { background:#F5F7F9 !important; }
   tr.kd td.lbl { background:#F4E9E7 !important; }
   tr.umb td.lbl { background:#EBEFF3 !important; }
-  #fs { float:right; margin:-2px 0; background:#FCFCFA; color:#14324A;
-        border:1px solid #8FA9BE; border-radius:4px; padding:2px 10px;
-        cursor:pointer; font-size:10px; font-weight:700;
-        text-transform:none; letter-spacing:0; }
+  #fs, .tgl { float:right; margin:-2px 0 -2px 6px; background:#FCFCFA;
+        color:#14324A; border:1px solid #8FA9BE; border-radius:4px;
+        padding:2px 10px; cursor:pointer; font-size:10px;
+        font-weight:700; text-transform:none; letter-spacing:0; }
+  tr.umb td.lbl { cursor:pointer; }
 </style></head><body>""", head, """
 <div class='leg'>
 <span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late (45&#176; dense)
@@ -748,8 +751,10 @@ def build_apab_gantt_html(
         parts.append("<tr class='r' style='height:16px'>"
                      "<td class='lbl'><div><span class='aid'></span>"
                      "<span class='anm' style='font-size:9.5px;"
-                     "color:#5B7994'>ANALYSIS WINDOWS "
-                     "(delay = as-built vs as-planned interval)</span>"
+                     "color:#5B7994'>ANALYSIS WINDOWS — project start "
+                     "→ key date 1 → … (label = delay accrued in the "
+                     "window; delay AT each key date is measured "
+                     "direct, actual vs planned finish)</span>"
                      "</div></td>"
                      f"<td class='lane' style='min-width:{W:.0f}px'>"
                      + "".join(wl) + "</td></tr>")
@@ -815,12 +820,34 @@ def build_apab_gantt_html(
             kids.append(f"<div class='dlab {var_cls}' "
                         f"style='left:{hi+8:.0f}px'>{var_txt}d</div>")
         _cls = "r" + (" kd" if is_kd else "") + \
-            (" umb" if kind == "umbrella" else "")
+            (" umb" if kind == "umbrella" else "") + \
+            (" mem" if kind == "member" else "")
         parts.append(f"<tr class='{_cls}'>{lbl}"
                      f"<td class='lane' style='min-width:{W:.0f}px'>"
                      + "".join(kids) + "</td></tr>")
 
     parts.append("</table></div>")
+    # collapse/expand umbrella members: the two toolbar buttons act on
+    # every member row; clicking an umbrella header toggles its own
+    parts.append("""<script>
+const setMem = s => document.querySelectorAll('tr.mem').forEach(
+  r => r.style.display = s ? '' : 'none');
+const eb = document.getElementById('expm'),
+      cb = document.getElementById('colm');
+if (eb) eb.onclick = () => setMem(true);
+if (cb) cb.onclick = () => setMem(false);
+document.querySelectorAll('tr.umb').forEach(u => {
+  u.onclick = () => {
+    let r = u.nextElementSibling;
+    const hide = r && r.classList.contains('mem')
+      && r.style.display !== 'none';
+    while (r && r.classList.contains('mem')) {
+      r.style.display = hide ? 'none' : '';
+      r = r.nextElementSibling;
+    }
+  };
+});
+</script>""")
     _late = sum(1 for r in use if (r.get("finish_var_days") or 0) > 0)
     parts.append(
         "<div class='tblock'>"

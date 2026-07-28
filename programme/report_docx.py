@@ -83,10 +83,52 @@ def _add_md_paragraph(doc: Document, text: str, style: str | None = None):
     return p
 
 
+def _md_table(doc: Document, lines: list[str]) -> None:
+    """A buffered run of |-delimited markdown lines as a real Word
+    table — narratives are full of tables, and rendering them as text
+    left the reader a wall of pipes and dashes."""
+    from docx.shared import Pt
+    rows = []
+    for ln in lines:
+        cells = [c.strip() for c in ln.strip().strip("|").split("|")]
+        # the |---|---| separator row carries no content
+        if cells and all(re.fullmatch(r":?-{2,}:?", c) for c in cells
+                         if c):
+            continue
+        rows.append(cells)
+    if not rows:
+        return
+    ncols = max(len(r) for r in rows)
+    t = doc.add_table(rows=len(rows), cols=ncols)
+    t.style = "Table Grid"
+    for i, r in enumerate(rows):
+        for j in range(ncols):
+            cell = t.cell(i, j)
+            cell.text = _BOLD_RE.sub(r"\1", r[j]) if j < len(r) else ""
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    run.font.size = Pt(9)
+                    if i == 0:
+                        run.bold = True
+    doc.add_paragraph()
+
+
 def _add_markdown(doc: Document, md: str, base_heading_level: int) -> None:
-    """Minimal markdown renderer: #/##/### headings, - bullets, paragraphs."""
+    """Minimal markdown renderer: #/##/### headings, - bullets,
+    | tables |, paragraphs."""
+    table_buf: list[str] = []
+
+    def flush_table() -> None:
+        if table_buf:
+            _md_table(doc, table_buf)
+            table_buf.clear()
+
     for raw in md.split("\n"):
         line = raw.rstrip()
+        if line.strip().startswith("|") and line.count("|") >= 2:
+            table_buf.append(line)
+            continue
+        flush_table()
         if not line.strip():
             continue
         m = re.match(r"^(#{1,6})\s+(.*)$", line)
@@ -103,6 +145,7 @@ def _add_markdown(doc: Document, md: str, base_heading_level: int) -> None:
                               style="List Number")
         else:
             _add_md_paragraph(doc, line)
+    flush_table()
 
 
 def _dedupe(items: list[str]) -> list[str]:
