@@ -192,7 +192,6 @@ def _data_table(doc, rows: list[dict], max_rows: int = 400) -> None:
 
 def build_narrative_docx(title: str, narrative_md: str,
                          images: list[tuple[str, bytes]] | None = None,
-                         appendix: list[tuple[str, list[dict]]] | None = None,
                          ) -> bytes:
     """One module's AI narrative as a Word document.
 
@@ -201,7 +200,13 @@ def build_narrative_docx(title: str, narrative_md: str,
     bullets and numbering carry through. ``images`` are (caption, PNG)
     figures placed at the FRONT of the document, before the narrative —
     the final gantt is the exhibit that tells the whole delay story, so
-    it leads and the words follow."""
+    it leads and the words follow.
+
+    The narrative stays SHORT by design: the complete tables ship as a
+    separate appendix workbook (report_xlsx.build_appendix_xlsx). Word
+    tables cost roughly 5ms per row to build, so a 7,000-row appendix
+    took 37 seconds inline against 0.4 in Excel — the reader gets a
+    document that opens instantly and a workbook they can filter."""
     from docx import Document as _Document
     from docx.shared import Inches as _Inches
     doc = _Document()
@@ -217,23 +222,6 @@ def build_narrative_docx(title: str, narrative_md: str,
         doc.add_heading(cap, level=2)
         doc.add_picture(io.BytesIO(png), width=_Inches(6.4))
     _add_markdown(doc, narrative_md, base_heading_level=2)
-
-    # The complete record, so the document reads end to end without
-    # opening a second file. The body carries the top rows per
-    # category; every row lives here.
-    if appendix:
-        doc.add_page_break()
-        doc.add_heading("Appendix — complete change tables", level=1)
-        p = doc.add_paragraph()
-        p.add_run(
-            "The narrative above reports the most material rows per "
-            "category. The tables below are the complete record for "
-            "the same comparison, in the same order as the workbook."
-        ).italic = True
-        for i, (cap, rows) in enumerate(appendix, start=1):
-            doc.add_heading(f"A{i}. {cap} ({len(rows)})", level=2)
-            _data_table(doc, rows)
-
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

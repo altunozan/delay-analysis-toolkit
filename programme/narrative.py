@@ -53,8 +53,8 @@ PRESENTATION RULES (apply to every section below)
 - Show at most the FIVE most material rows per table — the data is
   supplied in that order. Where a category has more, state its TOTAL
   count in the sentence beneath and add: "the complete table is in the
-  accompanying Excel workbook" (and at Appendix A where this report
-  carries an appendix). Never imply the five shown are all of them.
+  appendix workbook". Never imply the five shown are all of them; the
+  appendix downloads alongside this narrative and carries every row.
 - Figures verbatim from the data. Never invent, extrapolate or round
   beyond what is supplied; where a figure is absent say so rather than
   estimating it.
@@ -288,7 +288,7 @@ extensions and reductions in a sentence each.
 CRITICAL SECTION. State the TOTAL number changed or removed in the first
 sentence — that figure is the finding — then the five most material:
 | Activity ID | Name | Was | Now | Delta (d) |
-and point to the complete list at Appendix A. If there are none, state
+and point to the complete list in the appendix workbook. If there are none, state
 explicitly that no actualised dates were altered — a positive indicator
 for the contemporaneity of the records.
 

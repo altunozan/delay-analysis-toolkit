@@ -12,7 +12,8 @@ from dcma import annotate_path_position, build_dcma_trace, run_all_checks
 from dcma.checks import CheckStatus
 from dcma.narrative import NarrativeError, PROVIDERS, stream_narrative
 from programme import (
-    analyse_windows, build_narrative_docx, build_repair_plan,
+    analyse_windows, build_appendix_xlsx, build_narrative_docx,
+    build_repair_plan,
     compare_revisions, event_from_dict, extract_critical_path,
     extract_longest_path, oos_evolution, out_of_sequence_flags,
     sched_options_summary, track_milestone_shifts,
@@ -464,28 +465,48 @@ def ai_narrative_panel(
 
         narrative = st.session_state.get(state_key)
         if narrative:
-            _figs = _appx = None
+            _figs = None
             if chart_png_builder is not None:
                 try:
                     _figs = chart_png_builder()
                 except Exception:
                     _figs = None       # a figure must never block the text
-            if appendix_builder is not None:
-                try:
-                    _appx = appendix_builder()
-                except Exception:
-                    _appx = None       # nor may the appendix
             st.download_button(
-                "⬇️ Download narrative (Word"
-                + (" — with full appendix)" if _appx else ")"),
+                "⬇️ Download narrative (Word)",
                 data=build_narrative_docx(
                     file_stub.replace("_", " ").title() + " — Narrative",
-                    narrative, images=_figs, appendix=_appx),
+                    narrative, images=_figs),
                 file_name=f"{file_stub}_narrative.docx",
                 mime="application/vnd.openxmlformats-officedocument."
                      "wordprocessingml.document",
                 key=f"{state_key}_dl",
             )
+
+        # The appendix is built entirely in CODE and ships as its own
+        # workbook — no tokens, no generation time, and the narrative
+        # stays a document that opens instantly. Offered whether or not
+        # a narrative has been generated: the tables do not need the AI.
+        if appendix_builder is not None:
+            try:
+                _appx = appendix_builder()
+            except Exception:
+                _appx = None           # never block the panel
+            if _appx:
+                _title = file_stub.replace("_", " ").title()
+                st.download_button(
+                    f"⬇️ Download appendix — complete tables (Excel, "
+                    f"{len(_appx)} tables, "
+                    f"{sum(len(r) for _, r in _appx):,} rows)",
+                    data=build_appendix_xlsx(_title, _appx),
+                    file_name=f"{file_stub}_appendix.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument."
+                         "spreadsheetml.sheet",
+                    key=f"{state_key}_apx",
+                    help="Every row behind the narrative, one sheet per "
+                         "table with an index. The narrative reports the "
+                         "five most material rows per table; this is the "
+                         "complete record.",
+                )
     return st.session_state.get(state_key)
 
 

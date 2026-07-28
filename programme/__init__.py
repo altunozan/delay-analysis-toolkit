@@ -184,6 +184,7 @@ from .report_docx import (
     build_narrative_docx,
 )
 from .report_xlsx import (
+    build_appendix_xlsx,
     build_asbuilt_xlsx,
     build_comparison_xlsx,
     build_custody_xlsx,
@@ -560,6 +561,7 @@ __all__ = [
     "build_narrative_docx",
     # excel
     "build_asbuilt_xlsx",
+    "build_appendix_xlsx",
     "build_comparison_xlsx",
     "build_custody_xlsx",
     "build_impact_xlsx",

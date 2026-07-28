@@ -2274,13 +2274,20 @@ check("N15q the prompt body caps at 5 and discloses every total",
           (len(_n15c.deleted), len(_n15c.constraint_changes)))
       and "showing='most material 5'" in _n15p
       and "further row(s) NOT listed" in _n15p)
-_n15dx = _n15doc("t", "## S\nbody", appendix=_n15ap)
-_n15axml = _n15zf.ZipFile(io.BytesIO(_n15dx)).read(
-    "word/document.xml").decode("utf-8")
-check("N15r the Word document appends the tables as REAL tables",
-      "Appendix" in _n15axml
-      and _n15axml.count("<w:tbl>") >= len(_n15ap)
-      and "A1." in _n15axml)
+# The appendix is its OWN workbook, built in code — the narrative
+# stays a document that opens instantly (7,000 rows of Word tables
+# cost 37s to build; the same rows in Excel cost 0.4s).
+from programme import build_appendix_xlsx as _n15bapx
+_n15awb = load_workbook(io.BytesIO(_n15bapx("Comparison", _n15ap)))
+check("N15r the appendix ships as a workbook: an index plus one sheet "
+      "per table, every row present",
+      _n15awb.sheetnames[0] == "Index"
+      and len(_n15awb.sheetnames) == len(_n15ap) + 1
+      and all(_n15awb[s].max_row >= 3 for s in _n15awb.sheetnames[1:]))
+_n15dx = _n15doc("t", "## S\nbody")
+check("N15r2 the narrative document carries NO appendix tables",
+      "Appendix" not in _n15zf.ZipFile(io.BytesIO(_n15dx)).read(
+          "word/document.xml").decode("utf-8"))
 
 # N15s-v. STRUCTURAL: every report draft — not just comparison —
 # carries the shared presentation rules and specifies its tables, so a
@@ -2294,10 +2301,10 @@ _n15_no_tbl = [k for k, v in _n15tmpl.items() if "\n| " not in v]
 check("N15t every report draft specifies at least one table",
       not _n15_no_tbl, str(_n15_no_tbl))
 check("N15u the rules state the 5-row cap, the total disclosure and "
-      "the appendix/workbook fallback",
+      "the appendix-workbook fallback",
       all(t in _n15br for t in (
           "FIVE most material rows", "state its TOTAL",
-          "accompanying Excel workbook", "Appendix A",
+          "the complete table is in the\n  appendix workbook",
           "Never imply the five shown are all of them")))
 check("N15v the rules forbid redrawing attached charts in text",
       "never attempt to redraw a chart in text" in _n15br)
@@ -2393,12 +2400,26 @@ for _f in sorted(_n16glob.glob("views/*.py")):
         _n16_missing.append(_f)
 check("N16d every narrative panel supplies an appendix builder",
       not _n16_missing, str(_n16_missing))
-_n16_dx = _n15doc("t", "## S\nbody",
-                  appendix=_n16_built["float"])
-check("N16e a module appendix renders as real Word tables",
-      _n15zf.ZipFile(io.BytesIO(_n16_dx)).read(
-          "word/document.xml").decode("utf-8").count("<w:tbl>")
-      >= len(_n16_built["float"]))
+_n16_wb = load_workbook(io.BytesIO(
+    _n15bapx("Float Erosion", _n16_built["float"])))
+check("N16e a module appendix builds a navigable workbook",
+      len(_n16_wb.sheetnames) == len(_n16_built["float"]) + 1
+      and _n16_wb["Index"].max_row >= 5 + len(_n16_built["float"]))
+# a 7k-row appendix must stay fast — this is the whole point of moving
+# it out of Word, so pin it rather than trusting it
+import time as _n16time
+_n16_t0 = _n16time.time()
+_n16_big = _n15bapx("DCMA", _n16_built["dcma"])
+_n16_secs = _n16time.time() - _n16_t0
+check("N16f a 7k-row appendix builds in under 5s (Word took ~37s)",
+      _n16_secs < 5.0, f"{_n16_secs:.1f}s")
+# sheet names must be Excel-legal and unique or the file will not open
+_n16_names = load_workbook(io.BytesIO(_n16_big)).sheetnames
+check("N16g sheet names are Excel-legal (<=31 chars, no []:*?/\\\\) "
+      "and unique",
+      all(len(n) <= 31 and not (set(n) & set('[]:*?/\\\\'))
+          for n in _n16_names)
+      and len(_n16_names) == len(set(n.lower() for n in _n16_names)))
 
 check("N15n the report draft leads with the editing-vs-progress "
       "question and its table",

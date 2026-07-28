@@ -1541,3 +1541,73 @@ def build_simple_xlsx(title: str, sheets: dict[str, list[dict]],
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+# --------------------------------------------------------------------------- #
+# Report appendix — the complete tables, as their own workbook
+# --------------------------------------------------------------------------- #
+
+_SHEET_BAD = set(r'[]:*?/\\')
+
+
+def _sheet_name(idx: int, caption: str, used: set[str]) -> str:
+    """Excel sheet name: <=31 chars, no reserved characters, unique."""
+    clean = "".join(" " if c in _SHEET_BAD else c for c in caption)
+    name = f"A{idx} {clean}"[:31].strip()
+    base, n = name, 2
+    while name.lower() in used:
+        suffix = f" ({n})"
+        name = base[:31 - len(suffix)] + suffix
+        n += 1
+    used.add(name.lower())
+    return name
+
+
+def build_appendix_xlsx(title: str,
+                        tables: list[tuple[str, list[dict]]],
+                        notes: list[str] | None = None) -> bytes:
+    """The report appendix: one sheet per table, complete, plus an index.
+
+    Built entirely in code — the narrative model only ever sees the top
+    rows, so the full record costs no tokens and no generation time.
+    """
+    wb = Workbook()
+    used: set[str] = set()
+
+    idx = wb.active
+    idx.title = "Index"
+    _title(idx, f"{title} — appendix", 3)
+    idx.cell(row=3, column=1, value=(
+        "Every table in full. The narrative reports the most material "
+        "rows; these sheets are the complete record."
+    )).font = Font(italic=True)
+    _header_row(idx, 5, ["Sheet", "Table", "Rows"])
+
+    for i, (caption, rows) in enumerate(tables, start=1):
+        name = _sheet_name(i, caption, used)
+        for col, v in enumerate((name, caption, len(rows)), start=1):
+            idx.cell(row=5 + i, column=col, value=v).border = THIN_BORDER
+        ws = wb.create_sheet(name)
+        ws.cell(row=1, column=1, value=f"A{i}. {caption}").font = Font(
+            bold=True, size=12)
+        if not rows:
+            ws.cell(row=3, column=1, value="(no rows)")
+            continue
+        headers = list(rows[0].keys())
+        _header_row(ws, 3, [str(h) for h in headers])
+        for r, row in enumerate(rows, start=4):
+            for c, h in enumerate(headers, start=1):
+                v = row.get(h)
+                if isinstance(v, datetime):
+                    v = f"{v:%Y-%m-%d}"
+                ws.cell(row=r, column=c, value=v).border = THIN_BORDER
+        _autofit(ws, {c + 1: min(max(len(str(h)) + 4, 12), 46)
+                      for c, h in enumerate(headers)})
+        ws.freeze_panes = "A4"
+
+    _autofit(idx, {1: 34, 2: 54, 3: 10})
+    if notes:
+        _notes_sheet(wb, notes, "Notes & Caveats")
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
