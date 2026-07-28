@@ -186,14 +186,24 @@ def main() -> int:
                 box = ed.bounding_box()
                 cx = box["x"] + box["width"] - 80
                 cy = box["y"] + 51
+                # WARM-UP click: glide's overlay editor does not take
+                # keyboard focus on the very FIRST canvas interaction
+                # after load, so the first typed value silently went
+                # nowhere. Focus the canvas, drop the selection, then
+                # edit for real.
+                page.mouse.click(cx, cy)
+                page.wait_for_timeout(700)
+                page.keyboard.press("Escape")
+                page.wait_for_timeout(300)
                 for dy in (0, 35):
                     # select the cell, open the overlay with Enter —
                     # steadier than a double-click on the canvas grid
                     page.mouse.click(cx, cy + dy)
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(600)
                     page.keyboard.press("Enter")
-                    page.wait_for_timeout(500)
+                    page.wait_for_timeout(700)
                     page.keyboard.type("Test Package")
+                    page.wait_for_timeout(300)
                     page.keyboard.press("Enter")
                     page.wait_for_timeout(4000)
                 page.wait_for_timeout(4000)

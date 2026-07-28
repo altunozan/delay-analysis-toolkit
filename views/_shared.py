@@ -311,10 +311,16 @@ def _live_models(base_url: str, key_fp: str, _key: str) -> list[str]:
 
 
 def refresh_models(pinfo: dict, api_key: str | None) -> dict:
-    """pinfo with its model list refreshed from the endpoint's live
-    catalogue when one is reachable: known-good models first (dead ones
-    dropped), the rest of the catalogue after. Falls back to the static
-    list untouched on any failure."""
+    """pinfo with its CURATED model list validated against the
+    endpoint's live catalogue.
+
+    The live catalogue only ever REMOVES — a model that has been
+    retired drops off the dropdown by itself. It never adds: the
+    endpoint lists dozens of models, and offering all of them buries
+    the handful worth drafting a forensic narrative with. Anything
+    outside the shortlist goes through Custom…. Falls back to the
+    static list untouched on any failure, or when the catalogue and
+    the shortlist do not overlap at all."""
     if not (api_key and pinfo.get("base_url")):
         return pinfo
     try:
@@ -324,14 +330,12 @@ def refresh_models(pinfo: dict, api_key: str | None) -> dict:
                             api_key)
     except Exception:
         return pinfo
-    if not live:
-        return pinfo
     preferred = [m for m in pinfo.get("models", []) if m in live]
-    rest = sorted(m for m in live if m not in preferred)
+    if not preferred:
+        return pinfo
     out = dict(pinfo)
-    out["models"] = (preferred + rest) if preferred else rest
-    if preferred:
-        out["default_model"] = preferred[0]
+    out["models"] = preferred
+    out["default_model"] = preferred[0]
     return out
 
 

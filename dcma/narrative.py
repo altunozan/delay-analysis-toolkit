@@ -27,14 +27,15 @@ PROVIDERS: dict[str, dict] = {
     "nvidia": {
         "label": "NVIDIA (managed — no key needed)",
         "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-        # Static FALLBACK ordering only — the model dropdown refreshes
-        # from GET {base_url}/models whenever a key is present, so a
-        # retired model drops off the list by itself (qwen3-next-80b
-        # died mid-engagement on 2026-07-27 and took every AI panel
-        # with it; never again).
+        # A CURATED three, one per profile: NVIDIA's tuned default, a
+        # large general model, a fast one. The endpoint's catalogue runs
+        # to dozens of models — most of them irrelevant to drafting a
+        # forensic narrative — so the dropdown offers these, validated
+        # against the live catalogue (a retired model drops off by
+        # itself; qwen3-next-80b died mid-engagement on 2026-07-27 and
+        # took every AI panel with it). Anything else: Custom….
         "models": ["nvidia/llama-3.3-nemotron-super-49b-v1.5",
                    "openai/gpt-oss-120b",
-                   "nvidia/llama-3.1-nemotron-70b-instruct",
                    "deepseek-ai/deepseek-v4-flash"],
         "env_var": "NVIDIA_API_KEY",
         "key_hint": "build.nvidia.com/settings/api-keys",
