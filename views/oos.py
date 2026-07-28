@@ -71,33 +71,55 @@ def oos_tab() -> None:
 
     # ---------------- repair plan (analyst confirms) ------------------- #
     st.subheader("As-built repair plan")
-    st.caption(
-        "Untick any fit you do not accept. Blocked rows are never "
-        "applied. Lags are observed calendar-day offsets converted at "
-        "the successor's calendar; reschedule (F9) in P6 after import."
-    )
-    plan_df = pd.DataFrame([{
-        "Apply": r.apply and not r.blocked,
-        "Predecessor": r.pred_code, "Successor": r.succ_code,
-        "Old link": r.old_link,
-        "New link": f"{r.new_type.replace('PR_', '')} "
-                    f"{r.new_lag_days_cal:+.0f}d",
-        "Lag (hr)": r.new_lag_hr,
-        "Blocked": r.blocked,
-        "Basis": r.basis,
-    } for r in plan])
-    edited = st.data_editor(
-        plan_df, width="stretch", hide_index=True,
-        disabled=["Predecessor", "Successor", "Old link", "New link",
-                  "Lag (hr)", "Blocked", "Basis"],
-        key=f"oos_plan_{chosen}")
-    for r, apply_sel in zip(plan, edited["Apply"].tolist()):
-        r.apply = bool(apply_sel) and not r.blocked
-    n_sel = sum(1 for r in plan if r.apply)
+    report, n_sel = None, 0
+    if not plan:
+        # Every record is review-class: the recorded dates do not
+        # evidence a relation in the planned direction (as-built order
+        # reversed, or actuals too thin). There is nothing to confirm
+        # and nothing safe to auto-apply — the screening above stands
+        # on its own, and the exports below still carry it.
+        st.info(
+            f"No concrete as-built fit is available for any of the "
+            f"{len(flags)} record(s) in '{chosen}'. Every one is "
+            "REVIEW CLASS — the as-built order is reversed against the "
+            "planned direction, or the actual dates are too thin to "
+            "evidence a relation. These are never auto-applied: the "
+            "reversed candidate is stated for the analyst in the "
+            "screening above and in the Excel register below, and no "
+            "repaired .xer is offered.")
+    else:
+        st.caption(
+            "Untick any fit you do not accept. Blocked rows are never "
+            "applied. Lags are observed calendar-day offsets converted "
+            "at the successor's calendar; reschedule (F9) in P6 after "
+            "import."
+        )
+        plan_df = pd.DataFrame([{
+            "Apply": r.apply and not r.blocked,
+            "Predecessor": r.pred_code, "Successor": r.succ_code,
+            "Old link": r.old_link,
+            "New link": f"{r.new_type.replace('PR_', '')} "
+                        f"{r.new_lag_days_cal:+.0f}d",
+            "Lag (hr)": r.new_lag_hr,
+            "Blocked": r.blocked,
+            "Basis": r.basis,
+        } for r in plan])
+        edited = st.data_editor(
+            plan_df, width="stretch", hide_index=True,
+            disabled=["Predecessor", "Successor", "Old link", "New link",
+                      "Lag (hr)", "Blocked", "Basis"],
+            key=f"oos_plan_{chosen}")
+        # never index a column that an empty/edited frame may not carry
+        _sel = (edited["Apply"].tolist() if "Apply" in edited.columns
+                else [r.apply for r in plan])
+        for r, apply_sel in zip(plan, _sel):
+            r.apply = bool(apply_sel) and not r.blocked
+        n_sel = sum(1 for r in plan if r.apply)
 
     raw = fetch_raw(chosen)
-    report = None
-    if raw is None:
+    if not plan:
+        pass                      # nothing to apply — no export offered
+    elif raw is None:
         st.warning("Raw file text unavailable for this file — reload it "
                    "at Data Intake to enable the repaired-.xer export.")
     elif st.toggle(f"Build repaired .xer ({n_sel} fits selected)",

@@ -2400,6 +2400,23 @@ for _f in sorted(_n16glob.glob("views/*.py")):
         _n16_missing.append(_f)
 check("N16d every narrative panel supplies an appendix builder",
       not _n16_missing, str(_n16_missing))
+
+# N16h. STRUCTURAL: a DataFrame built from a possibly-empty list has NO
+# columns, so indexing one raises KeyError. The OOS page crashed this
+# way on ten field programmes whose every record is review-class
+# (flags present, repair plan empty). Any view indexing an editor
+# column must guard it.
+_n16_unguarded = []
+for _f in sorted(_n16glob.glob("views/*.py")):
+    _src = open(_f).read()
+    for _ln, _line in enumerate(_src.splitlines(), start=1):
+        if 'edited["' in _line and ".tolist()" in _line:
+            _col = _line.split('edited["')[1].split('"')[0]
+            if f'"{_col}" in edited.columns' not in _src:
+                _n16_unguarded.append(f"{_f}:{_ln} edited[{_col!r}]")
+check("N16h no view indexes a data-editor column unguarded "
+      "(empty frame => KeyError)",
+      not _n16_unguarded, "; ".join(_n16_unguarded))
 _n16_wb = load_workbook(io.BytesIO(
     _n15bapx("Float Erosion", _n16_built["float"])))
 check("N16e a module appendix builds a navigable workbook",
@@ -2487,6 +2504,23 @@ if _os.path.isdir(_FIELD):
               "(never auto-fitted)",
               len(_m_fl) > 0
               and all(f.rec_link_type == "review" for f in _m_fl))
+
+    # M3c. The ALL-REVIEW-CLASS programme: out-of-sequence records
+    # exist but not one yields a concrete as-built fit, so the repair
+    # plan is EMPTY. Ten field files land here (every NCC monthly and
+    # all three CBU files) and the page crashed on each until the
+    # empty-plan guard went in.
+    from programme import build_repair_plan as _m_brp
+    _m_allrev = []
+    for _fp, _d in _m_parsed.items():
+        _f = out_of_sequence_flags(_d)
+        if _f and not _m_brp(_d):
+            _m_allrev.append(_fp.split("/")[-1])
+    check("M3c the all-review-class state is real in the field corpus "
+          "(flags present, repair plan empty)",
+          bool(_m_allrev), "no field file reproduces it")
+    if _m_allrev:
+        print(f"      all-review-class files: {len(_m_allrev)}")
 
     _sp_files = [f for f in _m_parsed if "/SPML/" in f]
     if _sp_files:
