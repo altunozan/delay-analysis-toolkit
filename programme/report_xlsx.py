@@ -27,6 +27,28 @@ SLIP_FILL = PatternFill("solid", fgColor="FFC7CE")
 GAIN_FILL = PatternFill("solid", fgColor="C6EFCE")
 
 
+def _wb_bytes(wb: Workbook) -> bytes:
+    """Serialise with build provenance — EVERY workbook exits here.
+
+    The stamp (toolkit, commit, generation time) lands three ways: the
+    print footer of every sheet, a visible line under the first sheet's
+    content, and the file's description property — so the document can
+    testify which code produced it (audit F-04, answered per-export).
+    """
+    from buildinfo import build_stamp
+    stamp = build_stamp()
+    for ws in wb.worksheets:
+        ws.oddFooter.left.text = stamp
+        ws.oddFooter.left.size = 7
+    ws0 = wb.worksheets[0]
+    c = ws0.cell(row=ws0.max_row + 2, column=1, value=stamp)
+    c.font = Font(size=8, italic=True, color="808080")
+    wb.properties.description = stamp
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def _title(ws, text: str, span: int) -> None:
     ws["A1"] = text
     ws["A1"].font = TITLE_FONT
@@ -106,9 +128,7 @@ def build_inventory_xlsx(
     _notes_sheet(wb, inv.missing + inv.warnings, "Missing & Warnings")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -166,9 +186,7 @@ def build_milestone_xlsx(
     _notes_sheet(wb, notes, "Warnings")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,9 +221,7 @@ def build_variance_xlsx(
     _notes_sheet(wb, var.caveats + var.warnings, "Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 5 — Baseline planned critical path
@@ -260,9 +276,7 @@ def build_critical_path_xlsx(cp, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, cp.caveats + cp.warnings, "Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 6 — Revision comparison / change log
@@ -432,9 +446,7 @@ def build_comparison_xlsx(cmp, narrative: str | None = None,
                  "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 7 — Windows / period movement
@@ -507,9 +519,7 @@ def build_windows_xlsx(res, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 8 — Progress S-curve
@@ -566,9 +576,7 @@ def build_progress_xlsx(res, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 9 — Float erosion
@@ -615,9 +623,7 @@ def build_float_erosion_xlsx(res, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 10 — Planned resource loading
@@ -660,9 +666,7 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 12 — As-built critical path
@@ -793,9 +797,7 @@ def build_asbuilt_xlsx(trace, narrative: str | None = None,
                  "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -850,9 +852,7 @@ def build_sequence_xlsx(seq, mapping_rows, narrative: str | None = None) -> byte
     _notes_sheet(wb, seq.warnings + seq.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 14 — Hierarchy rebuild (outline gantt table)
@@ -958,9 +958,7 @@ def build_hierarchy_xlsx(h, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, h.warnings + h.caveats, "Validation & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Module 15 — Time Impact Analysis
@@ -1045,9 +1043,7 @@ def build_tia_xlsx(res, narrative: str | None = None,
         _autofit(history_ws, {i: 22 for i in range(1, len(keys) + 1)})
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 # --------------------------------------------------------------------------- #
 # Explain This Delay
@@ -1122,9 +1118,7 @@ def build_explain_xlsx(res, narrative: str | None = None,
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
 
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1172,9 +1166,7 @@ def build_impact_xlsx(imp, narrative: str | None = None) -> bytes:
 
     _notes_sheet(wb, imp.warnings + imp.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1248,9 +1240,7 @@ def build_transfer_xlsx(tr, narrative: str | None = None) -> bytes:
     _notes_sheet(wb, tr.warnings + tr.caveats,
                  "Statusing & Caveats")
     _narrative_sheet(wb, narrative)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1275,9 +1265,7 @@ def build_custody_xlsx(records) -> bytes:
             ws.cell(row=i, column=col, value=v).border = THIN_BORDER
     _autofit(ws, {1: 22, 2: 20, 3: 28, 4: 12, 5: 10, 6: 12, 7: 66})
     ws.freeze_panes = "A5"
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1384,9 +1372,7 @@ def build_oos_xlsx(label, flags, plan, report=None,
     notes = (report.qa_notes if report is not None else [])
     _notes_sheet(wb, notes + REPAIR_CAVEATS + OOS_CAVEATS,
                  "QA & Caveats")
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1437,9 +1423,7 @@ def build_concurrency_xlsx(res, narrative: str | None = None) -> bytes:
 
     _notes_sheet(wb, res.warnings + res.caveats, "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1491,9 +1475,7 @@ def build_iap_xlsx(label: str, iap: dict,
              + iap.get("caveats", []) + [iap.get("caveat", "")])
     _notes_sheet(wb, [n for n in notes if n], "Warnings & Caveats")
     _narrative_sheet(wb, narrative)
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 def _image_sheet(wb, caption: str, png: bytes) -> None:
@@ -1538,9 +1520,7 @@ def build_simple_xlsx(title: str, sheets: dict[str, list[dict]],
             _image_sheet(wb, cap, png)
     if notes:
         _notes_sheet(wb, notes, "Notes & Caveats")
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)
 
 
 # --------------------------------------------------------------------------- #
@@ -1608,6 +1588,4 @@ def build_appendix_xlsx(title: str,
     _autofit(idx, {1: 34, 2: 54, 3: 10})
     if notes:
         _notes_sheet(wb, notes, "Notes & Caveats")
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
+    return _wb_bytes(wb)

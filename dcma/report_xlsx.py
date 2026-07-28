@@ -256,6 +256,17 @@ def build_xlsx_report(
             c.alignment = WRAP
             row += 1
 
+    # build provenance — same stamp as every programme export
+    from buildinfo import build_stamp
+    stamp = build_stamp()
+    for _ws in wb.worksheets:
+        _ws.oddFooter.left.text = stamp
+        _ws.oddFooter.left.size = 7
+    _ws0 = wb.worksheets[0]
+    _sc = _ws0.cell(row=_ws0.max_row + 2, column=1, value=stamp)
+    _sc.font = Font(size=8, italic=True, color="808080")
+    wb.properties.description = stamp
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

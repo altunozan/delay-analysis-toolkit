@@ -2684,6 +2684,45 @@ check("N18g resolve_ai_credentials enforces the election, default OFF",
       "if not st.session_state.get(sk.AI_CONSENT, False):" in _n18src
       and "get(sk.AI_CONSENT, True)" not in _n18src)
 
+# ---------------------------------------------------------------------------
+# N19. Build provenance in every export (audit F-04, answered where it
+# matters): a document must testify which code revision produced it.
+print("\n--- Layer N19: build provenance in exports ---")
+from buildinfo import build_stamp as _n19stamp
+_n19s = _n19stamp()
+check("N19 the stamp names the toolkit, a build id and a UTC moment",
+      _n19s.startswith("Delay Analysis Toolkit — build ")
+      and "generated" in _n19s and "UTC" in _n19s, _n19s)
+_n19wb = load_workbook(io.BytesIO(
+    _n15bapx("Stamp Probe", [("T", [{"col": 1}])])))
+_n19ws = _n19wb.worksheets[0]
+check("N19b Excel exports carry the stamp — description, print footer "
+      "and a visible cell",
+      (_n19wb.properties.description or "").startswith(
+          "Delay Analysis Toolkit — build ")
+      and (_n19ws.oddFooter.left.text or "").startswith(
+          "Delay Analysis Toolkit — build ")
+      and any(c.value.startswith("Delay Analysis Toolkit")
+              for row in _n19ws.iter_rows() for c in row
+              if isinstance(c.value, str)))
+from docx import Document as _n19Doc
+from programme import build_narrative_docx as _n19docx
+_n19d = _n19Doc(io.BytesIO(_n19docx("Stamp Probe", "body")))
+check("N19c Word exports carry the stamp in the page footer",
+      _n19d.sections[0].footer.paragraphs[0].text.startswith(
+          "Delay Analysis Toolkit — build "))
+# STRUCTURAL: every workbook must exit through the stamping serialiser —
+# a new builder pasted from an old one cannot silently skip it.
+_n19x = open("programme/report_xlsx.py").read()
+check("N19d all programme workbooks exit through _wb_bytes",
+      _n19x.count("wb.save(buf)") == 1
+      and _n19x.count("return _wb_bytes(wb)") >= 20)
+check("N19e both Word builders stamp before saving",
+      open("programme/report_docx.py").read().count(
+          "    _stamp_docx(doc)") == 2)
+check("N19f the DCMA workbook is stamped too",
+      "build_stamp" in open("dcma/report_xlsx.py").read())
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

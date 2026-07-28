@@ -69,6 +69,25 @@ class BasisOfAnalysis:
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 
 
+def _stamp_docx(doc) -> None:
+    """Build provenance in the page footer of every section — the same
+    stamp the Excel exports carry, so any document can testify which
+    code revision produced it (audit F-04, answered per-export)."""
+    from docx.shared import Pt as _Pt_
+    from buildinfo import build_stamp
+    stamp = build_stamp()
+    for section in doc.sections:
+        para = section.footer.paragraphs[0]
+        para.text = stamp
+        for run in para.runs:
+            run.font.size = _Pt_(7)
+            run.font.italic = True
+    try:
+        doc.core_properties.comments = stamp
+    except Exception:  # noqa: BLE001 - never block the document
+        pass
+
+
 def _add_md_paragraph(doc: Document, text: str, style: str | None = None):
     """Add one paragraph, converting **bold** spans."""
     p = doc.add_paragraph(style=style)
@@ -222,6 +241,7 @@ def build_narrative_docx(title: str, narrative_md: str,
         doc.add_heading(cap, level=2)
         doc.add_picture(io.BytesIO(png), width=_Inches(6.4))
     _add_markdown(doc, narrative_md, base_heading_level=2)
+    _stamp_docx(doc)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
@@ -349,6 +369,7 @@ def build_assembled_report(
         f"Report assembled {basis.generated_at:%Y-%m-%d %H:%M}."
     )
 
+    _stamp_docx(doc)
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
