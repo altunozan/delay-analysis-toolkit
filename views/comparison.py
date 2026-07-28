@@ -47,6 +47,73 @@ def _cached_prov(keys: tuple, _ordered):
     return build_provenance(_ordered)
 
 
+def _completion_strip(cmp, attr) -> None:
+    """Completion at a glance: a handful of rows — the two completion
+    dates, and each change that measurably moves completion drawn as
+    its own before/after row. Open point = without / earlier, filled
+    point = with / later; the label is the movement."""
+    rows = []
+
+    def add(label, x0, x1, delta, kind):
+        if not (x0 and x1):
+            return
+        rows.append({"Row": label, "x0": x0, "x1": x1,
+                     "lbl": f"{delta:+.0f}d" if delta is not None else "",
+                     "kind": kind,
+                     "x_lbl": max(x0, x1)})
+
+    if cmp.old_finish and cmp.new_finish:
+        add("Scheduled completion (as filed)", cmp.old_finish,
+            cmp.new_finish,
+            (cmp.new_finish - cmp.old_finish).days, "completion")
+    add("Kernel completion (like-for-like)",
+        attr.kernel_completion_old, attr.kernel_completion_new,
+        attr.kernel_moved_days, "completion")
+    movers = [a for a in attr.tested_changes
+              if abs(a.contribution_days or 0) >= 0.5][:5]
+    for a in movers:
+        add(f"{a.category}: {a.ref}"[:46], a.completion_without,
+            a.completion_with, a.contribution_days,
+            "pushes later" if (a.contribution_days or 0) > 0
+            else "pulls earlier")
+    if not rows:
+        return
+    st.markdown("**Completion at a glance** — and the changes that "
+                "move it")
+    df = pd.DataFrame(rows)
+    order = [r["Row"] for r in rows]
+    y = alt.Y("Row:N", sort=order, title=None,
+              axis=alt.Axis(labelLimit=330))
+    color = alt.Color("kind:N", scale=alt.Scale(
+        domain=["completion", "pushes later", "pulls earlier"],
+        range=["#14324A", "#9B3227", "#3F6B4F"]),
+        legend=alt.Legend(orient="top", title=None))
+    st.altair_chart(alt.layer(
+        alt.Chart(df).mark_rule(strokeWidth=2).encode(
+            x=alt.X("x0:T", title=None), x2="x1:T", y=y, color=color),
+        alt.Chart(df).mark_point(size=70, filled=False,
+                                 strokeWidth=2).encode(
+            x="x0:T", y=y, color=color),
+        alt.Chart(df).mark_point(size=80, filled=True).encode(
+            x="x1:T", y=y, color=color),
+        alt.Chart(df).mark_text(align="left", dx=10, fontWeight="bold",
+                                fontSize=11).encode(
+            x="x_lbl:T", y=y, text="lbl:N", color=color),
+    ).properties(height=30 * len(rows) + 40), width="stretch")
+    if movers:
+        st.caption(
+            "Each change row: completion WITHOUT the change (open "
+            "point) vs WITH it (filled) — the one-at-a-time kernel "
+            "test. Only changes moving completion ≥ half a day are "
+            "shown; the full table is under Impact & materiality "
+            "screening.")
+    else:
+        st.caption(
+            "No tested change moves completion by half a day or more — "
+            "the movement between these revisions reads as progress "
+            "slippage rather than programme editing.")
+
+
 def comparison_tab() -> None:
     st.caption(
         "A change log between two programme revisions: scope, logic, "
@@ -89,6 +156,9 @@ def comparison_tab() -> None:
             f"Scheduled completion: **{cmp.old_finish:%d %b %Y}** → "
             f"**{cmp.new_finish:%d %b %Y}** ({moved:+d} calendar days)"
         )
+    # filled from the impact section below once the attribution has run
+    # — sits up here because it is the page's headline reading
+    _strip = st.container()
 
     for w in cmp.warnings:
         st.warning(w)
@@ -266,6 +336,8 @@ def comparison_tab() -> None:
                    if abs(a.contribution_days or 0) >= 0.5]
         a3.metric("Changes that move completion",
                   f"{len(_movers)} of {len(attr.tested_changes)} tested")
+        with _strip:
+            _completion_strip(cmp, attr)
         for w in attr.warnings:
             st.warning(w)
         if attr.changes:

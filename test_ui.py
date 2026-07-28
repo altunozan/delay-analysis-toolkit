@@ -127,6 +127,9 @@ def main() -> int:
             # driving-path gantt all run by DEFAULT (no toggles to find)
             goto("Revision Comparison")
             page.wait_for_timeout(8000)
+            check("comparison: completion-at-a-glance strip renders",
+                  page.get_by_text("Completion at a glance",
+                                   exact=False).count() > 0)
             check("comparison: materiality rank renders by default",
                   page.get_by_text("Materiality rank",
                                    exact=False).count() > 0)

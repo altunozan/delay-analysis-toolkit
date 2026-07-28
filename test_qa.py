@@ -2213,6 +2213,15 @@ check("N15g the narrative prompt carries screening, attribution, "
                                "<completion_attribution",
                                "<longest_path_comparison>",
                                "<provenance")))
+from programme.narrative import DEFAULT_TEMPLATES as _n15tmpl
+check("N15g2 the report draft demands the tables, section by section",
+      all(t in _n15tmpl["comparison"] for t in (
+          "| Change | Category | Completion with | Completion without "
+          "| Contribution (d) |",
+          "| Score | Path position | Category | Change | Detail |",
+          "| Activity ID | Left / Joined the path |",
+          "| Window | Completion moved (d) | Retro actual changes",
+          "Materiality Screening")))
 _n15wb = load_workbook(io.BytesIO(_n15bx(
     _n15c, None, impact=_n15i, attribution=_n15a, provenance=_n15pv)))
 check("N15h the workbook ships every table the page shows",

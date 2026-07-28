@@ -189,50 +189,87 @@ Every caveat and warning provided, in full.""",
     "comparison": """\
 ## Programme Revision Comparison
 
+Every section that has data MUST carry its table — markdown tables render
+as real tables in the Word export, so tabulate first, then narrate. Figures
+verbatim from the data; never invent or round beyond what is supplied.
+
 ### 1. Executive Summary
-2-3 sentences: the two revisions compared (with data dates), the movement of
-the scheduled completion date between them, and the overall volume and
-character of the changes.
+3-4 sentences: the two revisions compared (with data dates), the movement
+of the scheduled completion date between them, the overall volume and
+character of the changes, and — where attribution data exists — whether the
+movement traces to programme editing or to progress slippage.
 
-### 2. Scope Changes
-Activities added and deleted: how many, and what areas of work they sit in
-(from the activity names). If scope is unchanged, state that as a point of
-programme stability.
+### 2. Basis of Comparison
+A table:
+| | Earlier revision | Later revision |
+|---|---|---|
+| File | | |
+| Data date | | |
+| Scheduled finish | | |
+then one line stating the completion movement in calendar days.
 
-### 3. Logic & Sequencing Changes
-Relationships added/removed and lag changes between activities present in
-both revisions. If the logic is substantially unchanged, state that the
-sequencing basis has been maintained.
+### 3. Scope Changes
+A table of activities added and deleted:
+| Activity ID | Name | Added / Deleted | Duration (d) | Start | Finish |
+followed by 2-3 sentences on what areas of work they sit in (from the
+names). If scope is unchanged, state that as a point of programme
+stability and omit the table.
 
-### 4. Duration & Constraint Changes
-The largest original-duration changes (both extensions and reductions) and
-the constraint changes, with figures.
+### 4. Logic & Sequencing Changes
+One table for relationships added and removed:
+| Predecessor | Type | Successor | Lag (d) | Added / Removed |
+and one for lag changes:
+| Link | Was | Now | Delta (d) |
+then 2-3 sentences on what the re-sequencing amounts to. If the logic is
+substantially unchanged, say the sequencing basis has been maintained.
 
-### 5. Retrospective Changes to Actual Dates
-CRITICAL SECTION: list every actualised date that was changed or removed
-between the revisions, exactly as provided. If there are none, state
-explicitly that no actualised dates were altered — a positive indicator for
-the contemporaneity of the records.
+### 5. Duration & Constraint Changes
+A table of the duration changes, largest first:
+| Activity ID | Name | Was | Now | Delta (d) |
+and the constraint changes in a like table. Call out the largest
+extensions and reductions in a sentence each.
 
-### 6. What Moved Completion
+### 6. Retrospective Changes to Actual Dates
+CRITICAL SECTION: a table of EVERY actualised date changed or removed,
+exactly as provided:
+| Activity ID | Name | Was | Now | Delta (d) |
+If there are none, state explicitly that no actualised dates were altered
+— a positive indicator for the contemporaneity of the records.
+
+### 7. Materiality Screening
+Where screening data is provided, the ranked changes as a table (top 20):
+| Score | Path position | Category | Change | Detail |
+with one sentence explaining the score's construction (path position +
+magnitude + red-flag bonus) and one on where analyst attention should go
+first. State plainly this is a screening, not a causation finding.
+
+### 8. What Moved Completion
 Where completion-attribution data is provided: state the kernel completion
-of each revision and the movement, then present the tested changes as a
-markdown table with EXACTLY these columns:
+of each revision and the movement, then the tested changes as a table:
 | Change | Category | Completion with | Completion without | Contribution (d) |
 one row per tested change, figures verbatim. Explain the top contributors
 in a sentence each — e.g. "reverting this lag change pulls completion from
-X back to Y, so the change contributed +Nd". State plainly that each change
-was tested one at a time against a programme where every other change
-remains, so contributions interact and need not sum to the total. Where the
-driving longest path changed between revisions, name the activities that
-left and joined it.
+X back to Y, so the change contributed +Nd". Where none of the tested
+changes moves completion materially, say the movement is progress
+slippage rather than programme editing. State plainly that each change was
+tested one at a time against a programme where every other change remains,
+so contributions interact and need not sum to the total. Note how many
+changes were not re-scheduled and why (completed side, untested
+categories, test cap).
 
-### 7. Change Provenance
-Where provenance data is provided: which update window introduced the bulk
-of the editing, which window moved completion most, and where retrospective
-actual-date changes first appear.
+### 9. Driving Path Comparison
+A table of the driving-path membership change:
+| Activity ID | Left / Joined the path |
+then 2-3 sentences reading the change: where the colours change is where
+the delay mechanism changed between the revisions.
 
-### 8. Limitations
+### 10. Change Provenance
+Where provenance data is provided, the window matrix as a table:
+| Window | Completion moved (d) | Retro actual changes | Top edit categories |
+then state which window introduced the bulk of the editing, which moved
+completion most, and where retrospective actual-date changes first appear.
+
+### 11. Limitations
 Every standing caveat and warning provided, in full.""",
     "explain": """\
 ## Explain This Delay
