@@ -37,100 +37,152 @@ def _cached_prov(keys: tuple, _ordered):
 
 
 def _strip_chart(cmp, attr):
-    """Completion at a glance as a MINI GANTT: two navy bars (earlier
-    and later completion, drawn from a common origin so the movement
-    reads as bar length), then one highlighted row per change that
-    measurably moves completion. A mover whose span is too small to
-    see as a bar gets a diamond + label instead — the highlight never
-    disappears into the axis. Returns (chart, movers) or (None, [])."""
-    from datetime import timedelta
+    """The delay bridge: what leads to what.
 
+    Reads top to bottom as a chain — the earlier revision's completion,
+    then each change the one-at-a-time kernel test says moves it (brick
+    = pushes later, green = pulls earlier), then everything the tests
+    cannot attribute (progress slippage, untested categories) as the
+    residual, arriving at the later revision's completion. The x-axis
+    is DAYS of movement, so a ±1-day change and a +500-day slippage
+    sit on one honest scale. Thin line segments, not blocks.
+
+    Returns (chart, movers, residual) or (None, [], None)."""
     c_old = cmp.old_finish or attr.kernel_completion_old
     c_new = cmp.new_finish or attr.kernel_completion_new
     if not (c_old and c_new):
-        return None, []
-    movers = [a for a in attr.tested_changes
-              if abs(a.contribution_days or 0) >= 0.5
-              and a.completion_with and a.completion_without][:5]
-    dates = [c_old, c_new] + [d for a in movers
-                              for d in (a.completion_with,
-                                        a.completion_without)]
-    span = max((max(dates) - min(dates)).days, 30)
-    origin = min(dates) - timedelta(days=max(int(span * 0.06), 21))
-    moved = (c_new - c_old).days
+        return None, [], None
+    total = round((c_new - c_old).total_seconds() / 86400, 1)
+    movers = sorted(
+        [a for a in attr.tested_changes
+         if abs(a.contribution_days or 0) >= 0.5],
+        key=lambda a: -abs(a.contribution_days or 0))[:6]
+    residual = round(total - sum(a.contribution_days or 0
+                                 for a in movers), 1)
 
-    bars, pts, txts = [], [], []
-    bars.append({"Row": f"Completion — earlier ({cmp.old_label[:24]})",
-                 "x0": origin, "x1": c_old, "kind": "completion"})
-    bars.append({"Row": f"Completion — later ({cmp.new_label[:24]})",
-                 "x0": origin, "x1": c_new, "kind": "completion"})
-    txts.append({"Row": f"Completion — later ({cmp.new_label[:24]})",
-                 "x": c_new, "lbl": f"{moved:+.0f}d", "kind": "completion"})
-    min_bar = timedelta(days=max(int(span * 0.012), 2))
-    for a in movers:
-        row = f"{a.category}: {a.ref}"[:44]
-        kind = ("pushes later" if (a.contribution_days or 0) > 0
-                else "pulls earlier")
-        lo = min(a.completion_with, a.completion_without)
-        hi = max(a.completion_with, a.completion_without)
-        if hi - lo >= min_bar:
-            bars.append({"Row": row, "x0": lo, "x1": hi, "kind": kind})
-        else:
-            pts.append({"Row": row, "x": a.completion_with,
-                        "kind": kind})
-        txts.append({"Row": row, "x": hi,
-                     "lbl": f"{a.contribution_days:+.1f}d", "kind": kind})
+    A_OLD = "① Completion — earlier revision"
+    A_NEW = "④ Completion — later revision"
+    R_ROW = "③ Progress slippage & untested changes"
+    steps, anchors, txts = [], [], []
+    order = [A_OLD]
+    anchors.append({"Row": A_OLD, "x": 0.0, "kind": "completion",
+                    "lbl": f"{c_old:%d %b %Y}"})
 
-    order = ([b["Row"] for b in bars[:2]]
-             + [f"{a.category}: {a.ref}"[:44] for a in movers])
+    run = 0.0
+    for i, a in enumerate(movers, start=1):
+        d = a.contribution_days or 0.0
+        row = f"② {a.category.replace(' changes', '')}: {a.ref}"[:40]
+        order.append(row)
+        steps.append({"Row": row, "x0": run, "x1": run + d,
+                      "kind": ("pushes later" if d > 0
+                               else "pulls earlier")})
+        txts.append({"Row": row, "x": max(run, run + d),
+                     "lbl": f"{d:+.1f}d",
+                     "kind": "pushes later" if d > 0
+                     else "pulls earlier"})
+        run += d
+    if abs(residual) >= 0.05 or not movers:
+        order.append(R_ROW)
+        steps.append({"Row": R_ROW, "x0": run, "x1": run + residual,
+                      "kind": ("pushes later" if residual > 0
+                               else "pulls earlier")})
+        txts.append({"Row": R_ROW, "x": max(run, run + residual),
+                     "lbl": f"{residual:+.0f}d",
+                     "kind": "pushes later" if residual > 0
+                     else "pulls earlier"})
+    order.append(A_NEW)
+    anchors.append({"Row": A_NEW, "x": total, "kind": "completion",
+                    "lbl": f"{c_new:%d %b %Y}  ({total:+.0f}d)"})
+
+    lo = min([0.0, total] + [s["x0"] for s in steps]
+             + [s["x1"] for s in steps])
+    hi = max([0.0, total] + [s["x0"] for s in steps]
+             + [s["x1"] for s in steps])
+    pad = max((hi - lo) * 0.22, 3.0)
+    # A step smaller than ~1.5% of the axis is sub-pixel as a segment:
+    # mark it with a diamond so the row never renders blank. The label
+    # carries the exact figure either way — the marker is a locator,
+    # never a widened (and so overstated) magnitude.
+    tiny_cut = max((hi - lo) * 0.015, 0.05)
+    tiny = [s for s in steps if abs(s["x1"] - s["x0"]) < tiny_cut]
+    steps = [s for s in steps if abs(s["x1"] - s["x0"]) >= tiny_cut]
     y = alt.Y("Row:N", sort=order, title=None,
-              axis=alt.Axis(labelLimit=340, labelFontSize=11))
+              axis=alt.Axis(labelLimit=330, labelFontSize=11,
+                            labelPadding=6, domain=False, ticks=False))
+    xscale = alt.Scale(domain=[lo - pad * 0.35, hi + pad])
+    x = alt.X("x0:Q",
+              title="calendar days of completion movement "
+                    "(0 = earlier revision)",
+              scale=xscale)
     color = alt.Color("kind:N", scale=alt.Scale(
         domain=["completion", "pushes later", "pulls earlier"],
         range=["#14324A", "#9B3227", "#3F6B4F"]),
         legend=alt.Legend(orient="top", title=None))
-    layers = [alt.Chart(pd.DataFrame(bars)).mark_bar(
-        height=12, cornerRadius=2).encode(
-        x=alt.X("x0:T", title=None,
-                scale=alt.Scale(domain=[
-                    origin.isoformat(),
-                    (max(dates) + timedelta(days=int(span * 0.09))
-                     ).isoformat()])),
-        x2="x1:T", y=y, color=color)]
-    if pts:
-        layers.append(alt.Chart(pd.DataFrame(pts)).mark_point(
-            shape="diamond", size=130, filled=True).encode(
-            x="x:T", y=y, color=color))
-    layers.append(alt.Chart(pd.DataFrame(txts)).mark_text(
-        align="left", dx=9, fontWeight="bold", fontSize=11.5).encode(
-        x="x:T", y=y, text="lbl:N", color=color))
+
+    layers = []
+    if steps:
+        # thin line segments, the format that reads cleanly
+        layers.append(alt.Chart(pd.DataFrame(steps)).mark_rule(
+            strokeWidth=7, strokeCap="butt").encode(
+            x=x, x2="x1:Q", y=y, color=color,
+            tooltip=["Row:N", "x0:Q", "x1:Q"]))
+    if tiny:
+        tdf = pd.DataFrame([{"Row": s["Row"], "kind": s["kind"],
+                             "x": (s["x0"] + s["x1"]) / 2}
+                            for s in tiny])
+        layers.append(alt.Chart(tdf).mark_point(
+            shape="diamond", size=110, filled=True).encode(
+            x=alt.X("x:Q", title=None, scale=xscale), y=y, color=color))
+    adf = pd.DataFrame(anchors)
+    layers.append(alt.Chart(adf).mark_rule(
+        strokeWidth=2, strokeDash=[4, 3], color="#14324A").encode(
+        x=alt.X("x:Q", title=None, scale=xscale)))
+    layers.append(alt.Chart(adf).mark_point(
+        shape="diamond", size=150, filled=True).encode(
+        x=alt.X("x:Q", title=None, scale=xscale), y=y, color=color))
+    layers.append(alt.Chart(adf).mark_text(
+        align="left", dx=12, fontWeight="bold", fontSize=11.5).encode(
+        x=alt.X("x:Q", title=None, scale=xscale), y=y, text="lbl:N", color=color))
+    if txts:
+        layers.append(alt.Chart(pd.DataFrame(txts)).mark_text(
+            align="left", dx=10, fontWeight="bold",
+            fontSize=11).encode(
+            x=alt.X("x:Q", title=None, scale=xscale), y=y, text="lbl:N",
+            color=color))
     chart = (alt.layer(*layers)
-             .properties(height=34 * len(order) + 44)
-             .configure_axis(grid=True, gridColor="#E4EDF4")
+             .properties(height=32 * len(order) + 46)
+             .configure_axisY(grid=False)
+             .configure_axisX(grid=True, gridColor="#E4EDF4")
              .configure_view(stroke=None))
-    return chart, movers
+    return chart, movers, residual
 
 
 def _completion_strip(cmp, attr) -> None:
-    chart, movers = _strip_chart(cmp, attr)
+    chart, movers, residual = _strip_chart(cmp, attr)
     if chart is None:
         return
-    st.markdown("**Completion at a glance** — and the changes that "
-                "move it")
+    st.markdown(
+        f"**Completion at a glance — what leads to what** &nbsp; "
+        f"`{cmp.old_label[:34]}` → `{cmp.new_label[:34]}`")
     st.altair_chart(chart, width="stretch")
     if movers:
         st.caption(
-            "Bar length = completion date from a common origin. Each "
-            "highlighted row is one change tested by the one-at-a-time "
-            "kernel revert: the span (or ◆) runs from completion "
-            "WITHOUT the change to completion WITH it, labelled with "
-            "the contribution. ≥ half-a-day movers only; the full "
-            "table is under Impact & materiality screening.")
+            "Read it top to bottom: ① where the earlier revision "
+            "finished, ② each change the one-at-a-time kernel test "
+            "shows moving completion (brick pushes it later, green "
+            "pulls it earlier), ③ everything the tests cannot "
+            "attribute — progress slippage and the untested categories "
+            "(constraints, calendars, scope) — and ④ where the later "
+            "revision finishes. Each segment starts where the one "
+            "above ended, so the chain reads as a summary of every "
+            "table below.")
     else:
         st.caption(
-            "No tested change moves completion by half a day or more — "
-            "the movement between these revisions reads as progress "
-            "slippage rather than programme editing.")
+            f"No tested change moves completion by half a day or more: "
+            f"the whole {residual:+.0f}-day movement falls to progress "
+            "slippage and the untested categories (constraints, "
+            "calendars, scope), not to the programme edits tested "
+            "here.")
 
 
 def comparison_tab() -> None:
@@ -453,7 +505,7 @@ def comparison_tab() -> None:
         from programme.report_charts import chart_png
         figs = []
         if a is not None:
-            ch, _m = _strip_chart(cmp, a)
+            ch, _m, _r = _strip_chart(cmp, a)
             if ch is not None:
                 figs.append(("Completion at a glance — and the changes "
                              "that move it", chart_png(ch)))
