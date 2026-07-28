@@ -2038,6 +2038,71 @@ check("N13l a regressing later round is recorded but NOT kept",
       _c2.score == _gcrit.score and len(_t2) == 2
       and not _t2[1]["kept"])
 
+# N14. Gantt presentation rules + the final gantt in the report.
+from programme import (asbuilt_path_tree as _n14apt,
+                       build_gantt_html as _n14bgh,
+                       build_apab_gantt_html as _n14apab,
+                       build_simple_xlsx as _n14bsx,
+                       build_asbuilt_xlsx as _n14bax,
+                       extract_actual_trace as _n14eat)
+_n14tr = _n14eat([("B", B), ("U", U)], max_gap_days=60)
+_n14flat = _n14apt(_n14tr.activities, links=_n14tr.links)
+check("N14 ungrouped activities are LEAF rows — no pseudo-summary "
+      "headers",
+      all(c["leaf"] for c in _n14flat["children"][0]["children"]))
+_n14grp = _n14apt(_n14tr.activities,
+                  groups={"Pkg": [_n14tr.activities[0].task_code,
+                                  _n14tr.activities[1].task_code]},
+                  links=_n14tr.links)
+_n14kids = _n14grp["children"][0]["children"]
+check("N14b adopted umbrella renders as a real group, rest stay leaf",
+      any(not c["leaf"] and c["name"] == "Pkg" for c in _n14kids)
+      and all(c["leaf"] for c in _n14kids if c["name"] != "Pkg"))
+_n14html = _n14bgh(_n14flat)
+check("N14c tree gantt opens every level and offers full screen",
+      "openAll" in _n14html and 'id="fs"' in _n14html
+      and "c.leaf" in _n14html)
+_n14rows = planned_vs_actual(B, U, None)[:6]
+_n14cmp = _n14apab(_n14rows)
+check("N14d comparison gantt frozen columns painted OPAQUE",
+      "td.lbl { background:#FCFCFA !important; }" in _n14cmp
+      and "tr.kd td.lbl" in _n14cmp and "id='fs'" in _n14cmp)
+
+# the final gantt travels WITH the report (workbook + Word)
+try:
+    from programme.report_charts import (apab_gantt_chart as _n14agc,
+                                         asbuilt_gantt_chart as _n14abc,
+                                         chart_png as _n14cp)
+    _n14png = _n14cp(_n14agc(_n14rows))
+    _n14png2 = _n14cp(_n14abc(_n14tr))
+    check("N14e final-gantt figures render to PNG",
+          _n14png.startswith(b"\x89PNG")
+          and _n14png2.startswith(b"\x89PNG"))
+    import zipfile as _n14zf
+    _n14wb = _n14bsx("t", {"Comparison": [{"a": 1}]},
+                     images={"Final Gantt": _n14png})
+    _n14names = _n14zf.ZipFile(io.BytesIO(_n14wb)).namelist()
+    check("N14f workbook embeds the final gantt as a figure sheet",
+          any("media/image" in n for n in _n14names))
+    _n14ab = _n14bax(_n14tr, gantt_png=_n14png2)
+    check("N14g as-built workbook carries its path gantt",
+          any("media/image" in n
+              for n in _n14zf.ZipFile(io.BytesIO(_n14ab)).namelist()))
+    from programme import build_narrative_docx as _n14doc
+    _n14dx = _n14doc("t", "## s\\nbody",
+                     images=[("Final gantt", _n14png)])
+    check("N14h Word narrative carries the figure",
+          any("media/image" in n
+              for n in _n14zf.ZipFile(io.BytesIO(_n14dx)).namelist()))
+except ImportError as _n14exc:
+    print(f"  [SKIP] N14e-h figure pipeline ({_n14exc})")
+
+# N14i. The retired NVIDIA model is out of the static fallback list.
+from dcma.narrative import PROVIDERS as _n14prov
+check("N14i EOL'd qwen3-next-80b no longer offered statically",
+      "qwen/qwen3-next-80b-a3b-instruct"
+      not in _n14prov["nvidia"]["models"])
+
 
 # ===================================================================== #
 # Layer M — LOCAL field-corpus regression (client programmes on this

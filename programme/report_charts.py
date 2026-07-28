@@ -318,3 +318,126 @@ def tia_paths_chart(res) -> alt.Chart | None:
                     legend=alt.Legend(orient="bottom", title=None)))
             .properties(width=620, height=max(160, 12 * len(order)),
                         title="Driving paths — pre vs post impact"))
+
+
+# --------------------------------------------------------------------- #
+# The FINAL gantt as a print figure — the deliverable chart of the
+# APvAB method and the as-built CP page, rebuilt as static Altair specs
+# so the Excel workbook and the Word narrative carry the same chart the
+# analyst sees on screen.
+# --------------------------------------------------------------------- #
+
+def apab_gantt_chart(rows, windows=None, data_date=None,
+                     max_rows: int = 140):
+    """Step-④ final gantt: planned dimension line over the as-built bar
+    per activity (late = brick red, on time = green), analysis-window
+    curtains, dashed data date. Row order is the on-screen order."""
+    use = [r for r in rows
+           if r.get("row_kind") != "section"
+           and (r.get("planned_start") or r.get("actual_start"))]
+    use = use[:max_rows]
+    recs, order = [], []
+    for r in use:
+        kind = r.get("row_kind") or ""
+        mark = "▣ " if kind == "umbrella" else "↳ " if kind == "member" else ""
+        lbl = f"{mark}{r['task_code']} · {r['name'][:36]}"
+        if lbl in order:
+            continue
+        order.append(lbl)
+        var = r.get("finish_var_days")
+        a_s = r.get("actual_start")
+        if a_s:
+            recs.append({"Row": lbl, "s": a_s,
+                         "f": r.get("actual_finish") or a_s,
+                         "Series": ("as-built late" if (var or 0) > 0
+                                    else "as-built on time")})
+        p_s, p_f = r.get("planned_start"), r.get("planned_finish")
+        if p_s and p_f:
+            recs.append({"Row": lbl, "s": p_s, "f": p_f,
+                         "Series": "as-planned"})
+    if not recs:
+        return None
+    df = pd.DataFrame(recs)
+    y = alt.Y("Row:N", sort=order, title=None,
+              axis=alt.Axis(labelLimit=340, labelFontSize=9))
+    color = alt.Color(
+        "Series:N",
+        scale=alt.Scale(
+            domain=["as-planned", "as-built late", "as-built on time"],
+            range=[PLANNED_C, RECORDED_C, GOOD_C]),
+        legend=alt.Legend(orient="top", title=None))
+    ab = (alt.Chart(df)
+          .transform_filter("datum.Series != 'as-planned'")
+          .mark_bar(height=9, cornerRadius=1)
+          .encode(x=alt.X("s:T", title=None), x2="f:T", y=y, color=color))
+    pl = (alt.Chart(df)
+          .transform_filter("datum.Series == 'as-planned'")
+          .mark_bar(height=2.5)
+          .encode(x="s:T", x2="f:T", y=y, color=color))
+    layers = []
+    wrecs = [{"ws": w["start"], "we": w["end"],
+              "lab": (f"{w.get('label', '')} "
+                      f"{w['delay_days']:+.0f}d"
+                      if w.get("delay_days") is not None
+                      else w.get("label", ""))}
+             for w in (windows or []) if w.get("start") and w.get("end")]
+    if wrecs:
+        wdf = pd.DataFrame(wrecs)
+        layers.append(alt.Chart(wdf).mark_rect(opacity=0.07,
+                                               color=PLANNED_C)
+                      .encode(x="ws:T", x2="we:T"))
+        layers.append(alt.Chart(wdf).mark_text(
+            baseline="top", dy=-2, fontSize=9, fontWeight="bold",
+            color=PLANNED_C, align="left")
+            .encode(x="ws:T", text="lab:N"))
+    layers += [ab, pl]
+    if data_date is not None:
+        layers.append(alt.Chart(pd.DataFrame([{"dd": data_date}]))
+                      .mark_rule(strokeDash=[5, 4], color=RECORDED_C,
+                                 size=1.6)
+                      .encode(x="dd:T"))
+    return (alt.layer(*layers)
+            .properties(width=980, height=alt.Step(15),
+                        title="As-planned vs as-built — final gantt")
+            .configure_view(stroke=None)
+            .configure_axis(grid=True, gridColor="#E4EDF4"))
+
+
+def asbuilt_gantt_chart(trace, max_rows: int = 150):
+    """The adopted as-built critical path as a print figure — bars
+    coloured by evidential basis, dashed data date."""
+    acts = [a for a in trace.activities if a.act_start][:max_rows]
+    if not acts:
+        return None
+    recs, order = [], []
+    for a in acts:
+        lbl = f"{a.task_code} · {a.name[:36]}"
+        if lbl in order:
+            continue
+        order.append(lbl)
+        recs.append({"Row": lbl, "s": a.act_start,
+                     "f": a.act_finish or a.act_start, "Basis": a.basis})
+    df = pd.DataFrame(recs)
+    color = alt.Color(
+        "Basis:N",
+        scale=alt.Scale(domain=["as-built", "in-progress", "forecast"],
+                        range=[PLANNED_C, ACCENT_C, RECORDED_C]),
+        legend=alt.Legend(orient="top", title=None))
+    bars = (alt.Chart(df).mark_bar(height=9, cornerRadius=1)
+            .encode(x=alt.X("s:T", title=None), x2="f:T",
+                    y=alt.Y("Row:N", sort=order, title=None,
+                            axis=alt.Axis(labelLimit=340,
+                                          labelFontSize=9)),
+                    color=color))
+    layers = [bars]
+    if trace.data_date is not None:
+        layers.append(alt.Chart(pd.DataFrame([{"dd": trace.data_date}]))
+                      .mark_rule(strokeDash=[5, 4], color=RECORDED_C,
+                                 size=1.6)
+                      .encode(x="dd:T"))
+    return (alt.layer(*layers)
+            .properties(width=980, height=alt.Step(15),
+                        title=f"As-built critical path — "
+                              f"{trace.terminal_code or ''}")
+            .configure_view(stroke=None)
+            .configure_axis(grid=True, gridColor="#E4EDF4"))

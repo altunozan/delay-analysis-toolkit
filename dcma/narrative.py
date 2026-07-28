@@ -27,10 +27,14 @@ PROVIDERS: dict[str, dict] = {
     "nvidia": {
         "label": "NVIDIA (managed — no key needed)",
         "default_model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+        # Static FALLBACK ordering only — the model dropdown refreshes
+        # from GET {base_url}/models whenever a key is present, so a
+        # retired model drops off the list by itself (qwen3-next-80b
+        # died mid-engagement on 2026-07-27 and took every AI panel
+        # with it; never again).
         "models": ["nvidia/llama-3.3-nemotron-super-49b-v1.5",
                    "openai/gpt-oss-120b",
                    "nvidia/llama-3.1-nemotron-70b-instruct",
-                   "qwen/qwen3-next-80b-a3b-instruct",
                    "deepseek-ai/deepseek-v4-flash"],
         "env_var": "NVIDIA_API_KEY",
         "key_hint": "build.nvidia.com/settings/api-keys",
@@ -290,11 +294,19 @@ def _stream_openai(api_key: str, model: str, prompt: str,
     except openai.RateLimitError:
         raise NarrativeError("Rate limited by OpenAI. Wait a moment and retry.")
     except openai.NotFoundError:
-        raise NarrativeError(f"Model '{model}' not found on OpenAI.")
+        raise NarrativeError(
+            f"Model '{model}' not found on this endpoint. Pick another "
+            "model from the Model dropdown.")
     except openai.APIConnectionError:
         raise NarrativeError("Could not reach the OpenAI API. Check your connection.")
     except openai.APIStatusError as exc:
-        raise NarrativeError(f"OpenAI API error ({exc.status_code}): {exc.message}")
+        msg = f"OpenAI API error ({exc.status_code}): {exc.message}"
+        if exc.status_code == 410 or "end of life" in str(exc.message):
+            msg = (f"Model '{model}' has been RETIRED by the endpoint "
+                   "(HTTP 410) — the key is fine. Pick another model "
+                   "from the Model dropdown; with a key present the "
+                   "list refreshes from the endpoint's live catalogue.")
+        raise NarrativeError(msg)
 
 
 def _stream_gemini(api_key: str, model: str, prompt: str,

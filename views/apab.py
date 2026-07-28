@@ -31,7 +31,7 @@ from programme import (
 from programme.narrative import DEFAULT_TEMPLATES
 from views._asbuilt_cp import cp_definition_block
 from views._shared import ai_narrative_panel, basis_panel, \
-    get_parsed_files
+    gantt_fullscreen_button, get_parsed_files
 
 APAB_CAVEATS = [
     "The as-built critical path is an analyst election between computed "
@@ -180,15 +180,17 @@ def apab_tab() -> None:
                        help=None if achieved else
                        "Milestone not achieved — the as-built side is "
                        "the programme's own forecast.")
-        st.iframe(build_apab_gantt_html(
+        _g2 = build_apab_gantt_html(
             display,
             title=f"As-planned ({date_basis} dates) vs as-built",
-            data_date=dd), height=560)
+            data_date=dd)
+        st.iframe(_g2, height=560)
         st.caption(
             "Per row: as-planned dimension line BELOW, as-built bar "
             "ABOVE. ▣ = umbrella work package (measured on its "
             "critical-path members), ↳ = member. Planned dates are the "
             f"baseline's {date_basis.upper()} dates.")
+        gantt_fullscreen_button(_g2, "apab_step2_gantt", "apab_fs2")
         with st.expander("Comparison table"):
             st.dataframe(pd.DataFrame([{
                 "": {"umbrella": "▣", "member": "↳"}.get(
@@ -308,15 +310,30 @@ def apab_tab() -> None:
                        "Milestone not achieved — measured on the "
                        "programme's own forecast.")
         _first = next((d for _, d, _a in mets if d is not None), None)
-        st.iframe(build_apab_gantt_html(
+        _g4 = build_apab_gantt_html(
             display, keydates=kd, overall_delay_days=_first,
             title=f"As-planned ({date_basis} dates) vs as-built",
-            windows=all_windows, data_date=dd), height=620)
+            windows=all_windows, data_date=dd)
+        st.iframe(_g4, height=620)
         st.caption(
             "Shaded curtains = the analysis windows, labelled with each "
             "window's delay. Dashed red line = data date. Key-date rows "
             "carry the planned◇ / actual◆ markers and the measured "
             "gap.")
+        gantt_fullscreen_button(_g4, "apab_final_gantt", "apab_fs4")
+
+        # the FINAL gantt as a print figure — embedded in the workbook
+        # and the Word narrative (a figure failure never blocks either)
+        def _final_gantt_png():
+            from programme.report_charts import apab_gantt_chart, \
+                chart_png
+            ch = apab_gantt_chart(display, windows=all_windows,
+                                  data_date=dd)
+            return chart_png(ch) if ch is not None else None
+        try:
+            _png4 = _final_gantt_png()
+        except Exception:
+            _png4 = None
 
         basis_panel("As-Planned vs As-Built", latest, [
             "As-built CP basis per milestone: "
@@ -343,12 +360,16 @@ def apab_tab() -> None:
                 tmpl),
             "apab",
             DEFAULT_TEMPLATES["apab"],
+            chart_png_builder=lambda p=_png4: (
+                [("Final gantt — as-planned vs as-built", p)]
+                if p else None),
         )
         st.download_button(
             "⬇️ Download as-planned vs as-built workbook (Excel)",
             data=build_simple_xlsx(
                 "As-Planned vs As-Built",
-                {"Comparison": [
+                images=({"Final Gantt": _png4} if _png4 else None),
+                sheets={"Comparison": [
                     {k: v for k, v in r.items() if k != "row_kind"}
                     | {"kind": r.get("row_kind", "")}
                     for r in display],

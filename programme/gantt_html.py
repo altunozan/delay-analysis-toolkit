@@ -110,6 +110,7 @@ _TEMPLATE = """<!DOCTYPE html>
   <input id="q" type="text" placeholder="Search groups / activities…">
   <button id="exp">Expand all</button>
   <button id="col">Collapse all</button>
+  <button id="fs" title="Full screen (or use the standalone-HTML download under the chart)">⛶ Full screen</button>
   <span class="lg">Zoom <input id="zoom" type="range" min="10" max="120"
         value="__ZOOM__" style="width:120px"></span>
   <span class="lg"><span class="sw" style="background:var(--navy)"></span>
@@ -176,7 +177,12 @@ const X = t => (t - dmin) / DAY * pxPerDay();
 const totalW = () => Math.ceil((dmax - dmin) / DAY * pxPerDay());
 
 // -- state ------------------------------------------------------------------
-TREE.children.forEach(c => c._open = true);        // level 0 open by default
+// EVERYTHING open by default: a collapsed sub-group hides its member
+// bars AND their dependency arrows, which read as "the links are not
+// working". Collapsing stays a deliberate act, never the default.
+(function openAll(n){
+  (n.children||[]).forEach(c => { c._open = true; openAll(c); });
+})(TREE);
 let query = "";
 
 function matches(n, isAct) {
@@ -264,9 +270,44 @@ function render() {
     rowsEl.appendChild(row); shown++;
   }
 
+  function actRow(a, c, depth) {
+    if (query && !matches(a, true) && !matches(c, false)) return;
+    if (!a.start) return;
+    const kidz = [];
+    const tip = `${a.id} — ${a.name}\\n${a.start} → ${a.finish || "…"}` +
+                `\\nstatus: ${a.status}`;
+    if (a.milestone) {
+      const el = document.createElement("div");
+      el.className = "ms";
+      el.style.left = (X(Date.parse(a.finish || a.start)) - 5) + "px";
+      el.style.background = "var(--navy)"; el.title = tip;
+      kidz.push(el);
+    } else {
+      kidz.push(bar("bar", a.start, a.finish || a.start,
+                    FILL[a.status] || "#9aa4b2",
+                    EDGE[a.status] || "#9aa4b280", tip));
+    }
+    if (a.lid) {
+      const t0 = Date.parse(a.start);
+      const t1 = Date.parse(a.finish || a.start);
+      REG[a.lid] = {y: shown * 26 + 13, xs: X(t0),
+                    xe: X(t0) + Math.max((t1 - t0)/DAY*pxPerDay(), 3)};
+      for (const tgt of (a.links || [])) LINKS.push([a.lid, tgt]);
+    }
+    addRow(`<span class="caret"></span><span class="aid">${esc(a.id)}</span><span class="anm">${esc(a.name)}</span><span class="adt">${a.start || ""}</span><span class="adt">${a.finish || ""}</span>`,
+           depth, false, null, kidz);
+  }
+
   (function walk(n, depth) {
     for (const c of (n.children||[])) {
       if (!branchHasMatch(c)) continue;
+      // leaf pseudo-groups carry ungrouped activities: render the
+      // activity rows FLAT, no summary header — grouped presentation
+      // exists only where the analyst actually adopted a grouping.
+      if (c.leaf) {
+        (c.activities||[]).forEach(a => actRow(a, c, depth));
+        continue;
+      }
       const open = query ? true : !!c._open;
       const caret = (c.children.length || c.activities.length)
         ? (open ? "▼" : "►") : "·";
@@ -280,33 +321,7 @@ function render() {
              () => { c._open = !c._open; render(); }, kids);
       if (!open) continue;
       walk(c, depth + 1);
-      for (const a of (c.activities||[])) {
-        if (query && !matches(a, true) && !matches(c, false)) continue;
-        if (!a.start) continue;
-        const kidz = [];
-        const tip = `${a.id} — ${a.name}\\n${a.start} → ${a.finish || "…"}` +
-                    `\\nstatus: ${a.status}`;
-        if (a.milestone) {
-          const el = document.createElement("div");
-          el.className = "ms";
-          el.style.left = (X(Date.parse(a.finish || a.start)) - 5) + "px";
-          el.style.background = "var(--navy)"; el.title = tip;
-          kidz.push(el);
-        } else {
-          kidz.push(bar("bar", a.start, a.finish || a.start,
-                        FILL[a.status] || "#9aa4b2",
-                        EDGE[a.status] || "#9aa4b280", tip));
-        }
-        if (a.lid) {
-          const t0 = Date.parse(a.start);
-          const t1 = Date.parse(a.finish || a.start);
-          REG[a.lid] = {y: shown * 26 + 13, xs: X(t0),
-                        xe: X(t0) + Math.max((t1 - t0)/DAY*pxPerDay(), 3)};
-          for (const tgt of (a.links || [])) LINKS.push([a.lid, tgt]);
-        }
-        addRow(`<span class="caret"></span><span class="aid">${esc(a.id)}</span><span class="anm">${esc(a.name)}</span><span class="adt">${a.start || ""}</span><span class="adt">${a.finish || ""}</span>`,
-               depth + 1, false, null, kidz);
-      }
+      for (const a of (c.activities||[])) actRow(a, c, depth + 1);
     }
   })(TREE, 0);
 
@@ -357,6 +372,12 @@ function setAll(open){
 }
 document.getElementById("exp").onclick = () => setAll(true);
 document.getElementById("col").onclick = () => setAll(false);
+document.getElementById("fs").onclick = () => {
+  if (document.fullscreenElement) { document.exitFullscreen(); return; }
+  document.documentElement.requestFullscreen().catch(() => alert(
+    "Full screen is blocked inside this frame — use the standalone-" +
+    "HTML download button under the chart instead."));
+};
 document.getElementById("zoom").oninput = e => { ppm = +e.target.value; render(); };
 document.getElementById("q").oninput = e => {
   query = e.target.value.trim().toLowerCase(); render(); };
@@ -430,7 +451,8 @@ def asbuilt_path_tree(activities, groups=None, links=None,
             children.append({"name": key,
                              "activities": [act(a) for a in members]})
         else:
-            children.append({"name": members[0].name[:44],
+            # ungrouped: flat activity rows, no pseudo-summary header
+            children.append({"name": members[0].name[:44], "leaf": True,
                              "activities": [act(a) for a in members]})
     return group_tree([{"name": root_name, "children": children}])
 
@@ -495,6 +517,7 @@ def group_tree(groups: list[dict]) -> dict:
                 "start": iso(min(starts)) if starts else None,
                 "finish": iso(max(finishes)) if finishes else None,
                 "count": count, "complete": complete,
+                "leaf": bool(g.get("leaf")),
                 "children": kids, "activities": acts}
 
     kids = [node(g, 0) for g in groups]
@@ -569,6 +592,12 @@ def build_apab_gantt_html(
                 "(as-built vs as-planned completion of the section)"
                 "</div>")
 
+    fs_btn = ("<button id='fs' onclick=\"if(document.fullscreenElement)"
+              "{document.exitFullscreen();}else{document.documentElement"
+              ".requestFullscreen().catch(()=>alert('Full screen is "
+              "blocked inside this frame — use the standalone-HTML "
+              "download button under the chart.'));}\">"
+              "⛶ Full screen</button>")
     parts = ["""<!DOCTYPE html><html><head><meta charset="utf-8"><style>
   body { margin:0; background:#FCFCFA; color:#14324A;
          font-family:"Segoe UI","Helvetica Neue",Arial,sans-serif;
@@ -651,13 +680,26 @@ def build_apab_gantt_html(
   tr.umb td.lbl div { font-weight:700; }
   tr.umb td { background:rgba(20,50,74,.07) !important; }
   .memnm { padding-left:18px; color:#3d5a75; }
+  /* Frozen columns must be OPAQUE: the translucent row tints above let
+     scrolling bars show through the sticky label cells, which reads as
+     the chart 'swiping under' the activity and date columns. Same tint,
+     solid paint, higher specificity so it wins the !important rules. */
+  td.lbl { background:#FCFCFA !important; }
+  tr.r:nth-child(even) td.lbl { background:#F5F7F9 !important; }
+  tr.kd td.lbl { background:#F4E9E7 !important; }
+  tr.umb td.lbl { background:#EBEFF3 !important; }
+  #fs { float:right; margin:-2px 0; background:#FCFCFA; color:#14324A;
+        border:1px solid #8FA9BE; border-radius:4px; padding:2px 10px;
+        cursor:pointer; font-size:10px; font-weight:700;
+        text-transform:none; letter-spacing:0; }
 </style></head><body>""", head, """
 <div class='leg'>
 <span class='sw' style='background:repeating-linear-gradient(45deg,#9B3227 0 3px,#C9857C 3px 6px);border:.5px solid #9B3227'></span>as-built late (45&#176; dense)
 <span class='sw' style='background:repeating-linear-gradient(135deg,#3F6B4F 0 2px,transparent 2px 5px),#E8F0EA;border:.5px solid #3F6B4F'></span>as-built on time (135&#176; open)
 <span class='sw' style='height:0;border-top:1.5px solid #14324A'></span>as-planned
 <span style='color:#14324A'>&#9670;</span> key date actual
-<span style='color:#5B7994'>&#9671;</span> planned</div>
+<span style='color:#5B7994'>&#9671;</span> planned
+""" + fs_btn + """</div>
 <div id='wrap'><table class='cmp'>"""]
 
     hdr_cells = ("<td class='lbl'><div><span class='aid'>Activity ID"

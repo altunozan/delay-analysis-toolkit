@@ -115,13 +115,18 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
-def build_narrative_docx(title: str, narrative_md: str) -> bytes:
+def build_narrative_docx(title: str, narrative_md: str,
+                         images: list[tuple[str, bytes]] | None = None,
+                         ) -> bytes:
     """One module's AI narrative as a Word document.
 
     Analysts deliver in Word; a .md file forces a paste-and-restyle
     detour. Reuses the assembled-report markdown renderer so headings,
-    bullets and numbering carry through."""
+    bullets and numbering carry through. ``images`` are (caption, PNG)
+    figures appended after the narrative — the module's final gantt
+    travels WITH the report it narrates."""
     from docx import Document as _Document
+    from docx.shared import Inches as _Inches
     doc = _Document()
     doc.add_heading(title, level=1)
     p = doc.add_paragraph()
@@ -130,6 +135,11 @@ def build_narrative_docx(title: str, narrative_md: str) -> bytes:
                     "review before inclusion in any deliverable.")
     run.italic = True
     _add_markdown(doc, narrative_md, base_heading_level=2)
+    for cap, png in (images or []):
+        if not png:
+            continue
+        doc.add_heading(cap, level=2)
+        doc.add_picture(io.BytesIO(png), width=_Inches(6.4))
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

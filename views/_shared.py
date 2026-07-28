@@ -45,6 +45,16 @@ def get_parsed_files() -> list[tuple[str, object]]:
     return st.session_state.get(sk.XER_POOL, [])
 
 
+def gantt_fullscreen_button(html: str, stub: str, key: str) -> None:
+    """Standalone-HTML download for a chart — the guaranteed full-screen
+    path (the in-chart ⛶ button depends on the iframe's permission)."""
+    st.download_button(
+        "⛶ Full-screen gantt (standalone HTML — opens browser-wide, "
+        "fully interactive)",
+        data=html.encode("utf-8"), file_name=f"{stub}.html",
+        mime="text/html", key=key)
+
+
 def stash_raw(name: str, raw: bytes) -> None:
     """Keep an original XER in session, zlib-compressed.
 
@@ -284,10 +294,56 @@ def status_strip() -> None:
     st.caption("📁 " + " · ".join(bits))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _live_models(base_url: str, key_fp: str, _key: str) -> list[str]:
+    """Live model catalogue from an OpenAI-protocol endpoint.
+
+    Model retirements (qwen3-next-80b, 410, 2026-07-27) must drop off
+    the dropdown by themselves — a static list rots. Cached an hour;
+    keyed on a key fingerprint, never the key itself."""
+    import requests
+    r = requests.get(f"{base_url}/models",
+                     headers={"Authorization": f"Bearer {_key}"},
+                     timeout=8)
+    r.raise_for_status()
+    return [m.get("id", "") for m in r.json().get("data", [])
+            if m.get("id")]
+
+
+def refresh_models(pinfo: dict, api_key: str | None) -> dict:
+    """pinfo with its model list refreshed from the endpoint's live
+    catalogue when one is reachable: known-good models first (dead ones
+    dropped), the rest of the catalogue after. Falls back to the static
+    list untouched on any failure."""
+    if not (api_key and pinfo.get("base_url")):
+        return pinfo
+    try:
+        import hashlib
+        live = _live_models(pinfo["base_url"],
+                            hashlib.sha256(api_key.encode()).hexdigest()[:16],
+                            api_key)
+    except Exception:
+        return pinfo
+    if not live:
+        return pinfo
+    preferred = [m for m in pinfo.get("models", []) if m in live]
+    rest = sorted(m for m in live if m not in preferred)
+    out = dict(pinfo)
+    out["models"] = (preferred + rest) if preferred else rest
+    if preferred:
+        out["default_model"] = preferred[0]
+    return out
+
+
 def model_selector(container, pinfo: dict, state_key: str) -> str:
     """Model dropdown per provider, with a Custom escape hatch."""
     options = list(pinfo.get("models", [pinfo["default_model"]]))
     options.append("Custom…")
+    # a stored selection that has since been retired must not pin the
+    # dropdown to a dead model
+    _mk = f"{state_key}_modelsel"
+    if st.session_state.get(_mk) not in options:
+        st.session_state.pop(_mk, None)
     sel = container.selectbox(
         "Model", options, key=f"{state_key}_modelsel",
         help="Common models for this provider; pick Custom… to type any "
@@ -317,7 +373,7 @@ def ai_provider_block(state_key: str) -> tuple[str, str | None, str]:
         pcol1, pcol2 = st.columns([1, 1])
         pcol1.caption("Managed NVIDIA endpoint — no key required.")
         provider = "nvidia"
-        pinfo = PROVIDERS[provider]
+        pinfo = refresh_models(PROVIDERS[provider], _managed)
         model = model_selector(pcol2, pinfo, f"{state_key}_nvidia")
         api_key = _managed
         if st.button("Use my own API key instead",
@@ -337,10 +393,15 @@ def ai_provider_block(state_key: str) -> tuple[str, str | None, str]:
             key=_pk,
         )
         pinfo = PROVIDERS[provider]
-        model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
         env_key = os.environ.get(pinfo["env_var"], "")
         if provider == "gemini" and not env_key:
             env_key = os.environ.get("GOOGLE_API_KEY", "")
+        # refresh the model list from whatever key is already known
+        # (typed on a previous rerun, session, or environment)
+        _key_cand = (st.session_state.get(f"{state_key}_key")
+                     or st.session_state.get(sk.AI_KEY) or env_key)
+        pinfo = refresh_models(pinfo, _key_cand)
+        model = model_selector(pcol2, pinfo, f"{state_key}_{provider}")
         api_key = st.text_input(
             f"{pinfo['label']} API key",
             type="password",
@@ -361,6 +422,7 @@ def ai_narrative_panel(
     prompt_builder,
     file_stub: str,
     default_template: str,
+    chart_png_builder=None,
 ) -> str | None:
     """Provider/model/key picker + streaming narrative, shared by all modules.
 
@@ -397,11 +459,17 @@ def ai_narrative_panel(
 
         narrative = st.session_state.get(state_key)
         if narrative:
+            _figs = None
+            if chart_png_builder is not None:
+                try:
+                    _figs = chart_png_builder()
+                except Exception:
+                    _figs = None       # a figure must never block the text
             st.download_button(
                 "⬇️ Download narrative (Word)",
                 data=build_narrative_docx(
                     file_stub.replace("_", " ").title() + " — Narrative",
-                    narrative),
+                    narrative, images=_figs),
                 file_name=f"{file_stub}_narrative.docx",
                 mime="application/vnd.openxmlformats-officedocument."
                      "wordprocessingml.document",

@@ -16,3 +16,5 @@ google-genai>=1.0.0,<2
 python-dateutil>=2.8.0,<3
 requests>=2.31.0,<3
 typing_extensions>=4.12
+# openpyxl image embedding (the final-gantt figure sheets)
+pillow>=10,<12

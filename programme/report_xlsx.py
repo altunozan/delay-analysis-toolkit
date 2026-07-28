@@ -594,8 +594,10 @@ def build_resources_xlsx(res, narrative: str | None = None) -> bytes:
 # Module 12 — As-built critical path
 # --------------------------------------------------------------------------- #
 def build_asbuilt_xlsx(trace, narrative: str | None = None,
-                       roll=None, links=None) -> bytes:
-    """trace: ActualTraceResult; roll: RollupResult; links: umbrella links."""
+                       roll=None, links=None,
+                       gantt_png: bytes | None = None) -> bytes:
+    """trace: ActualTraceResult; roll: RollupResult; links: umbrella
+    links; gantt_png: the path gantt as a figure sheet."""
     wb = Workbook()
     ws = wb.active
     ws.title = "As-Built Path"
@@ -709,6 +711,8 @@ def build_asbuilt_xlsx(trace, narrative: str | None = None,
         _autofit(s5, {1: 30, 2: 30, 3: 14, 4: 10, 5: 16, 6: 14, 7: 60})
         s5.freeze_panes = "A2"
 
+    if gantt_png:
+        _image_sheet(wb, "Gantt — as-built critical path", gantt_png)
     _notes_sheet(wb, list(trace.warnings) + list(trace.caveats)
                  + (list(roll.caveats) + list(roll.warnings)
                     if roll is not None else []),
@@ -1418,11 +1422,22 @@ def build_iap_xlsx(label: str, iap: dict,
     return buf.getvalue()
 
 
+def _image_sheet(wb, caption: str, png: bytes) -> None:
+    """One chart PNG on its own sheet (the deliverable figure)."""
+    from openpyxl.drawing.image import Image as _XLImage
+    ws = wb.create_sheet(caption[:31])
+    ws["A1"] = caption
+    ws["A1"].font = Font(bold=True, size=13)
+    ws.add_image(_XLImage(io.BytesIO(png)), "A3")
+
+
 def build_simple_xlsx(title: str, sheets: dict[str, list[dict]],
-                      notes: list[str] | None = None) -> bytes:
+                      notes: list[str] | None = None,
+                      images: dict[str, bytes] | None = None) -> bytes:
     """Generic workbook: one sheet per {name: rows-of-dicts} + notes.
     Used by the stepped methods (As-Planned vs As-Built, Collapsed
-    As-Built) whose tables are analyst-shaped."""
+    As-Built) whose tables are analyst-shaped. ``images`` embeds chart
+    PNGs, one sheet each — the final gantt travels WITH the workbook."""
     wb = Workbook()
     first = True
     for name, rows in sheets.items():
@@ -1444,6 +1459,9 @@ def build_simple_xlsx(title: str, sheets: dict[str, list[dict]],
         _autofit(ws, {i + 1: min(max(len(str(h)) + 4, 12), 46)
                       for i, h in enumerate(headers)})
         ws.freeze_panes = "A2"
+    for cap, png in (images or {}).items():
+        if png:
+            _image_sheet(wb, cap, png)
     if notes:
         _notes_sheet(wb, notes, "Notes & Caveats")
     buf = io.BytesIO()

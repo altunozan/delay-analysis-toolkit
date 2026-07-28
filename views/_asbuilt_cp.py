@@ -23,7 +23,7 @@ from programme import (
     group_tree, planned_vs_actual,
 )
 from programme.gantt_html import ASBUILT_CATEGORIES
-from views._shared import _fkey
+from views._shared import _fkey, gantt_fullscreen_button
 from views._umbrella import umbrella_editor
 
 # --------------------------------------------------------------------- #
@@ -247,23 +247,28 @@ def cp_definition_block(ordered, baseline, *, key_prefix: str,
                         {"name": f"▣ {k}",
                          "activities": [act(c, n) for c, n in mem]})
                 else:
+                    # ungrouped: a flat activity row — grouped rows
+                    # exist only where a grouping was actually adopted
                     children.append(
-                        {"name": mem[0][1][:44],
+                        {"name": mem[0][1][:44], "leaf": True,
                          "activities": [act(c, n) for c, n in mem]})
             roots.append({"name": f"Path to {ms} — "
                           f"{by_code[ms].name[:40]}",
                           "children": children})
         if roots:
-            st.iframe(build_gantt_html(
+            _gantt_html = build_gantt_html(
                 group_tree(roots),
                 data_date=f"{dd:%Y-%m-%d}" if dd else None,
                 title="As-built critical path",
-                categories=ASBUILT_CATEGORIES), height=560)
+                categories=ASBUILT_CATEGORIES)
+            st.iframe(_gantt_html, height=560)
             st.caption(
                 "Dashed line = data date; bars right of it are the "
                 "programme's forecast. Arrows = the path's "
                 "hand-offs. ▣ groups are umbrella work packages — "
                 "members remain visible beneath their header.")
+            gantt_fullscreen_button(_gantt_html, "asbuilt_cp_gantt",
+                                    f"{key_prefix}_gantt_fs")
 
     return paths, basis_by, groups, chosen_ms
 

@@ -123,12 +123,31 @@ def asbuilt_tab() -> None:
                 st.write("•", c)
 
     # ---- the original report generator -------------------------------
+    def _path_pngs():
+        """(caption, png) per adopted path; a figure failure never
+        blocks the report."""
+        from programme.report_charts import asbuilt_gantt_chart, \
+            chart_png
+        out = []
+        for ms in adopted:
+            ch = asbuilt_gantt_chart(traces[ms])
+            if ch is not None:
+                out.append((f"As-built critical path — {ms}",
+                            chart_png(ch)))
+        return out or None
+
+    try:
+        _pngs = dict(_path_pngs() or [])
+    except Exception:
+        _pngs = {}
+
     narrative = ai_narrative_panel(
         "nar_asbuilt",
         lambda tmpl, trs=[traces[ms] for ms in adopted], rl=roll:
             build_asbuilt_multi_prompt(trs, rl, tmpl),
         "asbuilt_path",
         DEFAULT_TEMPLATES["asbuilt_path"],
+        chart_png_builder=lambda: (list(_pngs.items()) or None),
     )
     for ms in adopted:
         st.download_button(
@@ -136,7 +155,8 @@ def asbuilt_tab() -> None:
             data=build_asbuilt_xlsx(
                 traces[ms], narrative, roll=roll,
                 links=(umbrella_links(traces[ms].links, groups)
-                       if groups else None)),
+                       if groups else None),
+                gantt_png=_pngs.get(f"As-built critical path — {ms}")),
             file_name=f"asbuilt_critical_path_{ms}.xlsx",
             mime="application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet",
