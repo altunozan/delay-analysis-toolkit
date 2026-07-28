@@ -105,11 +105,6 @@ class ComparisonImpact:
     ranked: list[RankedChange] = field(default_factory=list)
     oos_flags: list[OutOfSequenceFlag] = field(default_factory=list)
     band_counts: dict[str, int] = field(default_factory=dict)
-    # the two driving longest paths, for the summary comparison gantt
-    lp_old: list[tuple[str, str]] = field(default_factory=list)
-    lp_new: list[tuple[str, str]] = field(default_factory=list)
-    lp_old_links: list[tuple[str, str]] = field(default_factory=list)
-    lp_new_links: list[tuple[str, str]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
 
@@ -218,12 +213,6 @@ def assess_comparison_impact(
         new, new_label, end_task_code=end_task_code,
         near_critical_days=near_critical_days, config=config)
     result.end_old, result.end_new = _lp_old.end_choice, _lp_new.end_choice
-    result.lp_old = [(a.task_code, a.name) for a in _lp_old.critical]
-    result.lp_new = [(a.task_code, a.name) for a in _lp_new.critical]
-    result.lp_old_links = [(lk.pred_code, lk.succ_code)
-                           for lk in _lp_old.links]
-    result.lp_new_links = [(lk.pred_code, lk.succ_code)
-                           for lk in _lp_new.links]
 
     if cmp.old_finish and cmp.new_finish:
         result.completion_moved_days = round(

@@ -136,10 +136,6 @@ def main() -> int:
             check("comparison: completion attribution renders by default",
                   page.get_by_text("Which changes moved completion",
                                    exact=False).count() > 0)
-            check("comparison: driving-path summary gantt renders",
-                  page.get_by_text("Driving longest path",
-                                   exact=False).count() > 0
-                  and page.locator("iframe").count() > 0)
             check("comparison walk exception-free", exc() == 0,
                   f"{exc()} exceptions")
 

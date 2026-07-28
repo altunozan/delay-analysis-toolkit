@@ -9,24 +9,13 @@ import streamlit as st
 import state as sk
 from programme import (
     assess_comparison_impact, attribute_completion_impact,
-    build_comparison_prompt, build_comparison_xlsx, build_gantt_html,
-    build_impact_xlsx, build_provenance, group_tree,
+    build_comparison_prompt, build_comparison_xlsx,
+    build_impact_xlsx, build_provenance,
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
-    _fkey, ai_narrative_panel, cached_compare, gantt_fullscreen_button,
-    get_parsed_files,
+    _fkey, ai_narrative_panel, cached_compare, get_parsed_files,
 )
-
-# the longest-path comparison colours: where the driving path itself
-# changed between the revisions is exactly what the reader must see
-LP_CATEGORIES = [
-    {"key": "shared", "label": "on both driving paths",
-     "color": "#14324A"},
-    {"key": "joined", "label": "joined the path (new driver)",
-     "color": "#9B3227"},
-    {"key": "left", "label": "left the path", "color": "#B07A24"},
-]
 
 
 @st.cache_data(show_spinner=False, max_entries=8)
@@ -47,66 +36,96 @@ def _cached_prov(keys: tuple, _ordered):
     return build_provenance(_ordered)
 
 
-def _completion_strip(cmp, attr) -> None:
-    """Completion at a glance: a handful of rows — the two completion
-    dates, and each change that measurably moves completion drawn as
-    its own before/after row. Open point = without / earlier, filled
-    point = with / later; the label is the movement."""
-    rows = []
+def _strip_chart(cmp, attr):
+    """Completion at a glance as a MINI GANTT: two navy bars (earlier
+    and later completion, drawn from a common origin so the movement
+    reads as bar length), then one highlighted row per change that
+    measurably moves completion. A mover whose span is too small to
+    see as a bar gets a diamond + label instead — the highlight never
+    disappears into the axis. Returns (chart, movers) or (None, [])."""
+    from datetime import timedelta
 
-    def add(label, x0, x1, delta, kind):
-        if not (x0 and x1):
-            return
-        rows.append({"Row": label, "x0": x0, "x1": x1,
-                     "lbl": f"{delta:+.0f}d" if delta is not None else "",
-                     "kind": kind,
-                     "x_lbl": max(x0, x1)})
-
-    if cmp.old_finish and cmp.new_finish:
-        add("Scheduled completion (as filed)", cmp.old_finish,
-            cmp.new_finish,
-            (cmp.new_finish - cmp.old_finish).days, "completion")
-    add("Kernel completion (like-for-like)",
-        attr.kernel_completion_old, attr.kernel_completion_new,
-        attr.kernel_moved_days, "completion")
+    c_old = cmp.old_finish or attr.kernel_completion_old
+    c_new = cmp.new_finish or attr.kernel_completion_new
+    if not (c_old and c_new):
+        return None, []
     movers = [a for a in attr.tested_changes
-              if abs(a.contribution_days or 0) >= 0.5][:5]
+              if abs(a.contribution_days or 0) >= 0.5
+              and a.completion_with and a.completion_without][:5]
+    dates = [c_old, c_new] + [d for a in movers
+                              for d in (a.completion_with,
+                                        a.completion_without)]
+    span = max((max(dates) - min(dates)).days, 30)
+    origin = min(dates) - timedelta(days=max(int(span * 0.06), 21))
+    moved = (c_new - c_old).days
+
+    bars, pts, txts = [], [], []
+    bars.append({"Row": f"Completion — earlier ({cmp.old_label[:24]})",
+                 "x0": origin, "x1": c_old, "kind": "completion"})
+    bars.append({"Row": f"Completion — later ({cmp.new_label[:24]})",
+                 "x0": origin, "x1": c_new, "kind": "completion"})
+    txts.append({"Row": f"Completion — later ({cmp.new_label[:24]})",
+                 "x": c_new, "lbl": f"{moved:+.0f}d", "kind": "completion"})
+    min_bar = timedelta(days=max(int(span * 0.012), 2))
     for a in movers:
-        add(f"{a.category}: {a.ref}"[:46], a.completion_without,
-            a.completion_with, a.contribution_days,
-            "pushes later" if (a.contribution_days or 0) > 0
-            else "pulls earlier")
-    if not rows:
-        return
-    st.markdown("**Completion at a glance** — and the changes that "
-                "move it")
-    df = pd.DataFrame(rows)
-    order = [r["Row"] for r in rows]
+        row = f"{a.category}: {a.ref}"[:44]
+        kind = ("pushes later" if (a.contribution_days or 0) > 0
+                else "pulls earlier")
+        lo = min(a.completion_with, a.completion_without)
+        hi = max(a.completion_with, a.completion_without)
+        if hi - lo >= min_bar:
+            bars.append({"Row": row, "x0": lo, "x1": hi, "kind": kind})
+        else:
+            pts.append({"Row": row, "x": a.completion_with,
+                        "kind": kind})
+        txts.append({"Row": row, "x": hi,
+                     "lbl": f"{a.contribution_days:+.1f}d", "kind": kind})
+
+    order = ([b["Row"] for b in bars[:2]]
+             + [f"{a.category}: {a.ref}"[:44] for a in movers])
     y = alt.Y("Row:N", sort=order, title=None,
-              axis=alt.Axis(labelLimit=330))
+              axis=alt.Axis(labelLimit=340, labelFontSize=11))
     color = alt.Color("kind:N", scale=alt.Scale(
         domain=["completion", "pushes later", "pulls earlier"],
         range=["#14324A", "#9B3227", "#3F6B4F"]),
         legend=alt.Legend(orient="top", title=None))
-    st.altair_chart(alt.layer(
-        alt.Chart(df).mark_rule(strokeWidth=2).encode(
-            x=alt.X("x0:T", title=None), x2="x1:T", y=y, color=color),
-        alt.Chart(df).mark_point(size=70, filled=False,
-                                 strokeWidth=2).encode(
-            x="x0:T", y=y, color=color),
-        alt.Chart(df).mark_point(size=80, filled=True).encode(
-            x="x1:T", y=y, color=color),
-        alt.Chart(df).mark_text(align="left", dx=10, fontWeight="bold",
-                                fontSize=11).encode(
-            x="x_lbl:T", y=y, text="lbl:N", color=color),
-    ).properties(height=30 * len(rows) + 40), width="stretch")
+    layers = [alt.Chart(pd.DataFrame(bars)).mark_bar(
+        height=12, cornerRadius=2).encode(
+        x=alt.X("x0:T", title=None,
+                scale=alt.Scale(domain=[
+                    origin.isoformat(),
+                    (max(dates) + timedelta(days=int(span * 0.09))
+                     ).isoformat()])),
+        x2="x1:T", y=y, color=color)]
+    if pts:
+        layers.append(alt.Chart(pd.DataFrame(pts)).mark_point(
+            shape="diamond", size=130, filled=True).encode(
+            x="x:T", y=y, color=color))
+    layers.append(alt.Chart(pd.DataFrame(txts)).mark_text(
+        align="left", dx=9, fontWeight="bold", fontSize=11.5).encode(
+        x="x:T", y=y, text="lbl:N", color=color))
+    chart = (alt.layer(*layers)
+             .properties(height=34 * len(order) + 44)
+             .configure_axis(grid=True, gridColor="#E4EDF4")
+             .configure_view(stroke=None))
+    return chart, movers
+
+
+def _completion_strip(cmp, attr) -> None:
+    chart, movers = _strip_chart(cmp, attr)
+    if chart is None:
+        return
+    st.markdown("**Completion at a glance** — and the changes that "
+                "move it")
+    st.altair_chart(chart, width="stretch")
     if movers:
         st.caption(
-            "Each change row: completion WITHOUT the change (open "
-            "point) vs WITH it (filled) — the one-at-a-time kernel "
-            "test. Only changes moving completion ≥ half a day are "
-            "shown; the full table is under Impact & materiality "
-            "screening.")
+            "Bar length = completion date from a common origin. Each "
+            "highlighted row is one change tested by the one-at-a-time "
+            "kernel revert: the span (or ◆) runs from completion "
+            "WITHOUT the change to completion WITH it, labelled with "
+            "the contribution. ≥ half-a-day movers only; the full "
+            "table is under Impact & materiality screening.")
     else:
         st.caption(
             "No tested change moves completion by half a day or more — "
@@ -173,17 +192,15 @@ def comparison_tab() -> None:
         x=alt.X("Count:Q", title=None),
         y=alt.Y("Category:N", sort="-x", title=None,
                 axis=alt.Axis(labelLimit=280)))
-    st.altair_chart(
-        (_cc_base.mark_bar(cornerRadius=2).encode(
-            color=alt.condition(
-                "datum.Category == 'Actual dates changed retrospectively'",
-                alt.value("#9B3227"), alt.value("#14324A")),
-            tooltip=["Category", "Count"])
-         + _cc_base.mark_text(align="left", dx=5, fontSize=10.5)
-           .encode(text="Count:Q")
-         ).properties(height=28 * len(chart_df)),
-        width="stretch",
-    )
+    cat_chart = (_cc_base.mark_bar(cornerRadius=2).encode(
+        color=alt.condition(
+            "datum.Category == 'Actual dates changed retrospectively'",
+            alt.value("#9B3227"), alt.value("#14324A")),
+        tooltip=["Category", "Count"])
+        + _cc_base.mark_text(align="left", dx=5, fontSize=10.5)
+        .encode(text="Count:Q")
+        ).properties(height=28 * len(chart_df))
+    st.altair_chart(cat_chart, width="stretch")
 
     def _acts_table(refs):
         return pd.DataFrame([{
@@ -365,53 +382,6 @@ def comparison_tab() -> None:
             for c in attr.caveats:
                 st.write("•", c)
 
-        # ---- longest-path comparison, summary gantt -----------------
-        st.markdown("#### Driving longest path — earlier vs later")
-        by_o = {t.task_code: t for t in pool[old_name].tasks}
-        by_n = {t.task_code: t for t in pool[new_name].tasks}
-        o_codes = {c for c, _ in imp.lp_old}
-        n_codes = {c for c, _ in imp.lp_new}
-
-        def _lp_root(label, members, links, by_code, other_codes, tag):
-            codes = {c for c, _ in members}
-            succs: dict[str, list[str]] = {}
-            for p_, s_ in links:
-                if p_ in codes and s_ in codes:
-                    succs.setdefault(p_, []).append(s_)
-            acts = []
-            for c, n in members[:40]:
-                t = by_code.get(c)
-                if t is None:
-                    continue
-                acts.append({
-                    "id": c, "name": n,
-                    "start": t.act_start or t.early_start,
-                    "finish": t.act_finish or t.early_finish,
-                    "milestone": t.is_milestone,
-                    "status": ("shared" if c in other_codes else tag),
-                    "lid": f"{label}:{c}",
-                    "links": [f"{label}:{s}" for s in succs.get(c, [])]})
-            return {"name": label, "activities": acts}
-
-        _lp_html = build_gantt_html(
-            group_tree([
-                _lp_root(f"Longest path — {old_name}", imp.lp_old,
-                         imp.lp_old_links, by_o, n_codes, "left"),
-                _lp_root(f"Longest path — {new_name}", imp.lp_new,
-                         imp.lp_new_links, by_n, o_codes, "joined"),
-            ]),
-            title="Driving path comparison",
-            categories=LP_CATEGORIES)
-        st.iframe(_lp_html, height=420)
-        st.caption(
-            "The driving longest path of each revision (capped at 40 "
-            "rows each). Navy = on both paths; brick = joined the path "
-            "in the later revision (the new drivers); ochre = left it. "
-            "Where the paths differ is where the delay mechanism "
-            "changed between the revisions.")
-        gantt_fullscreen_button(_lp_html, "driving_path_comparison",
-                                f"lp_fs_{_fkey(old_name)}")
-
         with st.expander("Screening caveats (always apply)"):
             for c in imp.caveats:
                 st.write("•", c)
@@ -477,14 +447,26 @@ def comparison_tab() -> None:
             st.write("•", c)
 
     # the report carries EVERYTHING the page computed: the diff, the
-    # materiality rank, the completion attribution, the driving-path
-    # comparison and the provenance timeline
+    # materiality rank, the completion attribution and the provenance
+    # timeline — with the page's charts attached as leading figures
+    def _cmp_figures(a=attr, cc=cat_chart):
+        from programme.report_charts import chart_png
+        figs = []
+        if a is not None:
+            ch, _m = _strip_chart(cmp, a)
+            if ch is not None:
+                figs.append(("Completion at a glance — and the changes "
+                             "that move it", chart_png(ch)))
+        figs.append(("Change mix between the revisions", chart_png(cc)))
+        return figs or None
+
     narrative = ai_narrative_panel(
         f"nar_cmp_{old_name}_{new_name}",
         lambda tmpl, i=imp, a=attr, p=prov: build_comparison_prompt(
             cmp, tmpl, impact=i, attribution=a, provenance=p),
         "comparison",
         DEFAULT_TEMPLATES["comparison"],
+        chart_png_builder=_cmp_figures,
     )
     st.download_button(
         "⬇️ Download comparison report (Excel — all tables above)",

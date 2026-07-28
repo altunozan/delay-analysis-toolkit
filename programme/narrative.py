@@ -257,20 +257,17 @@ so contributions interact and need not sum to the total. Note how many
 changes were not re-scheduled and why (completed side, untested
 categories, test cap).
 
-### 9. Driving Path Comparison
-A table of the driving-path membership change:
-| Activity ID | Left / Joined the path |
-then 2-3 sentences reading the change: where the colours change is where
-the delay mechanism changed between the revisions.
-
-### 10. Change Provenance
+### 9. Change Provenance
 Where provenance data is provided, the window matrix as a table:
 | Window | Completion moved (d) | Retro actual changes | Top edit categories |
 then state which window introduced the bulk of the editing, which moved
 completion most, and where retrospective actual-date changes first appear.
 
-### 11. Limitations
-Every standing caveat and warning provided, in full.""",
+### 10. Limitations
+Every standing caveat and warning provided, in full. Note that the
+completion-at-a-glance chart and the change-mix chart are attached to this
+document as leading figures — refer to them; do not attempt to redraw
+them in text.""",
     "explain": """\
 ## Explain This Delay
 
@@ -760,22 +757,6 @@ def build_comparison_prompt(
         if len(impact.ranked) > 30:
             lines.append(f"... (+{len(impact.ranked) - 30} more)")
         lines.append("</impact_screening>\n")
-        lp_old_only = [c for c, _ in impact.lp_old
-                       if c not in {x for x, _ in impact.lp_new}]
-        lp_new_only = [c for c, _ in impact.lp_new
-                       if c not in {x for x, _ in impact.lp_old}]
-        lines.append("<longest_path_comparison>")
-        lines.append(f"- earlier revision driving path: "
-                     f"{len(impact.lp_old)} activities to "
-                     f"{impact.end_old}")
-        lines.append(f"- later revision driving path: "
-                     f"{len(impact.lp_new)} activities to "
-                     f"{impact.end_new}")
-        lines.append("- left the driving path: "
-                     + (", ".join(lp_old_only[:20]) or "none"))
-        lines.append("- joined the driving path: "
-                     + (", ".join(lp_new_only[:20]) or "none"))
-        lines.append("</longest_path_comparison>\n")
 
     if attribution is not None:
         def fmtd(d):

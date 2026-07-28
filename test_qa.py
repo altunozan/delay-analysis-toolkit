@@ -2174,9 +2174,8 @@ from programme import (assess_comparison_impact as _n15imp,
                        build_provenance as _n15prov)
 _n15c = _n15cmp(B, U, "B", "U")
 _n15i = _n15imp(B, U, "B", "U", comparison=_n15c, end_task_code="KD15")
-check("N15 impact carries both driving paths for the summary gantt",
-      len(_n15i.lp_old) > 0 and len(_n15i.lp_new) > 0
-      and all(len(x) == 2 for x in _n15i.lp_new_links[:5]))
+check("N15 impact screening resolves a trace terminal per revision",
+      _n15i.end_old and _n15i.end_new and _n15i.ranked)
 _n15a = _n15attr(B, U, "B", "U", comparison=_n15c, impact=_n15i,
                  end_task_code="KD15")
 check("N15b kernel completions computed for both revisions, "
@@ -2207,11 +2206,10 @@ check("N15f the test cap is honoured and disclosed",
 _n15pv = _n15prov([("B", B)] + fix[:1] + [("U", U)])
 _n15p = _n15bp(_n15c, None, impact=_n15i, attribution=_n15a,
                provenance=_n15pv)
-check("N15g the narrative prompt carries screening, attribution, "
-      "path comparison and provenance",
+check("N15g the narrative prompt carries screening, attribution "
+      "and provenance",
       all(t in _n15p for t in ("<impact_screening",
                                "<completion_attribution",
-                               "<longest_path_comparison>",
                                "<provenance")))
 from programme.narrative import DEFAULT_TEMPLATES as _n15tmpl
 check("N15g2 the report draft demands the tables, section by section",
@@ -2219,9 +2217,8 @@ check("N15g2 the report draft demands the tables, section by section",
           "| Change | Category | Completion with | Completion without "
           "| Contribution (d) |",
           "| Score | Path position | Category | Change | Detail |",
-          "| Activity ID | Left / Joined the path |",
           "| Window | Completion moved (d) | Retro actual changes",
-          "Materiality Screening")))
+          "Materiality Screening", "leading figures")))
 _n15wb = load_workbook(io.BytesIO(_n15bx(
     _n15c, None, impact=_n15i, attribution=_n15a, provenance=_n15pv)))
 check("N15h the workbook ships every table the page shows",
