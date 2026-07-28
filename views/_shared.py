@@ -427,6 +427,7 @@ def ai_narrative_panel(
     file_stub: str,
     default_template: str,
     chart_png_builder=None,
+    appendix_builder=None,
 ) -> str | None:
     """Provider/model/key picker + streaming narrative, shared by all modules.
 
@@ -463,17 +464,23 @@ def ai_narrative_panel(
 
         narrative = st.session_state.get(state_key)
         if narrative:
-            _figs = None
+            _figs = _appx = None
             if chart_png_builder is not None:
                 try:
                     _figs = chart_png_builder()
                 except Exception:
                     _figs = None       # a figure must never block the text
+            if appendix_builder is not None:
+                try:
+                    _appx = appendix_builder()
+                except Exception:
+                    _appx = None       # nor may the appendix
             st.download_button(
-                "⬇️ Download narrative (Word)",
+                "⬇️ Download narrative (Word"
+                + (" — with full appendix)" if _appx else ")"),
                 data=build_narrative_docx(
                     file_stub.replace("_", " ").title() + " — Narrative",
-                    narrative, images=_figs),
+                    narrative, images=_figs, appendix=_appx),
                 file_name=f"{file_stub}_narrative.docx",
                 mime="application/vnd.openxmlformats-officedocument."
                      "wordprocessingml.document",

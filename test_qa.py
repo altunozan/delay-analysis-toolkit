@@ -2253,6 +2253,35 @@ check("N15m self-comparison: zero movement and zero editing effect",
       (_n15self.kernel_moved_days or 0) == 0.0
       and (_n15self.editing_effect_days or 0) == 0.0
       and not _n15self.tested_changes)
+# N15o-r. Body stays readable, the appendix carries the full record.
+import zipfile as _n15zf
+from programme import comparison_appendix as _n15apx
+from programme import build_narrative_docx as _n15doc
+_n15ap = _n15apx(_n15c, impact=_n15i, attribution=_n15a,
+                 provenance=_n15pv)
+_n15ap_d = dict(_n15ap)
+check("N15o appendix carries EVERY row of every category",
+      len(_n15ap_d["Activities deleted"]) == len(_n15c.deleted)
+      and len(_n15ap_d["Constraint changes"])
+      == len(_n15c.constraint_changes)
+      and (len(_n15ap_d["Retrospective changes to actual dates "
+                        "(complete)"])
+           == len(_n15c.actual_date_changes)))
+check("N15p the forensic category leads the appendix",
+      _n15ap[0][0].startswith("Retrospective changes to actual dates"))
+check("N15q the prompt body caps at 5 and discloses every total",
+      all(f"total='{n}'" in _n15p for n in
+          (len(_n15c.deleted), len(_n15c.constraint_changes)))
+      and "showing='most material 5'" in _n15p
+      and "further row(s) NOT listed" in _n15p)
+_n15dx = _n15doc("t", "## S\nbody", appendix=_n15ap)
+_n15axml = _n15zf.ZipFile(io.BytesIO(_n15dx)).read(
+    "word/document.xml").decode("utf-8")
+check("N15r the Word document appends the tables as REAL tables",
+      "Appendix" in _n15axml
+      and _n15axml.count("<w:tbl>") >= len(_n15ap)
+      and "A1." in _n15axml)
+
 check("N15n the report draft leads with the editing-vs-progress "
       "question and its table",
       all(t in _n15tmpl["comparison"] for t in (

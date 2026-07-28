@@ -10,7 +10,7 @@ import state as sk
 from programme import (
     assess_comparison_impact, attribute_completion_impact,
     build_comparison_prompt, build_comparison_xlsx,
-    build_impact_xlsx, build_provenance,
+    build_impact_xlsx, build_provenance, comparison_appendix,
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from views._shared import (
@@ -566,6 +566,9 @@ def comparison_tab() -> None:
         "comparison",
         DEFAULT_TEMPLATES["comparison"],
         chart_png_builder=_cmp_figures,
+        appendix_builder=lambda i=imp, a=attr, p=prov:
+            comparison_appendix(cmp, impact=i, attribution=a,
+                                provenance=p),
     )
     st.download_button(
         "⬇️ Download comparison report (Excel — all tables above)",

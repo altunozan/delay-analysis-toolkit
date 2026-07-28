@@ -193,6 +193,12 @@ Every section that has data MUST carry its table — markdown tables render
 as real tables in the Word export, so tabulate first, then narrate. Figures
 verbatim from the data; never invent or round beyond what is supplied.
 
+TABLE LENGTH: show at most the FIVE most material rows per table (the data
+is already supplied in that order). Where a category has more, state the
+TOTAL count in the sentence beneath and add: "the complete table is at
+Appendix A". Never imply the five shown are all of them. The complete
+tables are appended to this same document, so the reader loses nothing.
+
 ### 1. Executive Summary
 3-4 sentences: the two revisions compared (with data dates), the movement
 of the scheduled completion date between them, the overall volume and
@@ -230,11 +236,12 @@ and the constraint changes in a like table. Call out the largest
 extensions and reductions in a sentence each.
 
 ### 6. Retrospective Changes to Actual Dates
-CRITICAL SECTION: a table of EVERY actualised date changed or removed,
-exactly as provided:
+CRITICAL SECTION. State the TOTAL number changed or removed in the first
+sentence — that figure is the finding — then the five most material:
 | Activity ID | Name | Was | Now | Delta (d) |
-If there are none, state explicitly that no actualised dates were altered
-— a positive indicator for the contemporaneity of the records.
+and point to the complete list at Appendix A. If there are none, state
+explicitly that no actualised dates were altered — a positive indicator
+for the contemporaneity of the records.
 
 ### 7. Materiality Screening
 Where screening data is provided, the ranked changes as a table (top 20):
@@ -709,55 +716,79 @@ def build_comparison_prompt(
         lines.append(f"- {k}: {v}")
     lines.append("</change_summary>\n")
 
-    def _acts(tag: str, refs, cap: int = 40):
+    # The BODY carries only the most material rows per category — the
+    # complete tables are appended to the same Word document as the
+    # appendix, so nothing is lost by keeping the narrative readable.
+    # Order is the screening's materiality where it ran, else magnitude.
+    BODY_ROWS = 5
+    _score = {}
+    if impact is not None:
+        for rc in impact.ranked:
+            _score[rc.ref] = max(_score.get(rc.ref, 0.0), rc.score)
+
+    def _rank(items, key):
+        return sorted(items, key=lambda x: -(
+            _score.get(key(x), 0.0)
+            or abs(getattr(x, "delta_days", None) or 0.0)))
+
+    def _more(tag: str, n_total: int) -> None:
+        if n_total > BODY_ROWS:
+            lines.append(
+                f"... ({n_total - BODY_ROWS} further row(s) NOT listed "
+                f"here — the complete {tag} table is in the report "
+                "appendix; cite the total, never imply these are all)")
+
+    def _acts(tag: str, refs):
         if not refs:
             return
-        lines.append(f"<{tag}>")
-        for a in refs[:cap]:
+        ranked = sorted(refs, key=lambda a: -(a.duration_days or 0.0))
+        lines.append(f"<{tag} total='{len(refs)}' showing='most "
+                     f"material {min(BODY_ROWS, len(refs))}'>")
+        for a in ranked[:BODY_ROWS]:
             d = f"{a.duration_days:.0f}d" if a.duration_days is not None else "—"
             kind = "MILESTONE" if a.is_milestone else d
             lines.append(f"- {a.task_code} '{a.name}' [{kind}] "
                          f"{fmt(a.start)} -> {fmt(a.finish)}")
-        if len(refs) > cap:
-            lines.append(f"... (+{len(refs) - cap} more)")
+        _more(tag, len(refs))
         lines.append(f"</{tag}>\n")
 
     _acts("activities_added", cmp.added)
     _acts("activities_deleted", cmp.deleted)
 
-    def _changes(tag: str, changes, cap: int = 40):
+    def _changes(tag: str, changes):
         if not changes:
             return
-        lines.append(f"<{tag}>")
-        for c in changes[:cap]:
+        ranked = _rank(changes, lambda c: c.task_code)
+        lines.append(f"<{tag} total='{len(changes)}' showing='most "
+                     f"material {min(BODY_ROWS, len(changes))}'>")
+        for c in ranked[:BODY_ROWS]:
             delta = (f" (delta {c.delta_days:+.1f}d)"
                      if c.delta_days is not None else "")
             lines.append(f"- {c.task_code} '{c.name}': {c.old_value} -> "
                          f"{c.new_value}{delta}")
-        if len(changes) > cap:
-            lines.append(f"... (+{len(changes) - cap} more)")
+        _more(tag, len(changes))
         lines.append(f"</{tag}>\n")
 
     _changes("duration_changes", cmp.duration_changes)
     _changes("constraint_changes", cmp.constraint_changes)
     _changes("calendar_reassignments", cmp.calendar_changes)
-    _changes("renamed_activities", cmp.renamed, cap=20)
+    _changes("renamed_activities", cmp.renamed)
     _changes("lag_changes", cmp.lag_changes)
-    # Never truncate the forensic category.
-    _changes("retrospective_actual_date_changes",
-             cmp.actual_date_changes, cap=10_000)
+    _changes("retrospective_actual_date_changes", cmp.actual_date_changes)
 
     def _logic(tag: str, links):
         if not links:
             return
-        lines.append(f"<{tag}>")
-        for lk in links[:40]:
+        ranked = _rank(links, lambda lk: f"{lk.pred_code} -"
+                                         f"{lk.link_type}-> {lk.succ_code}")
+        lines.append(f"<{tag} total='{len(links)}' showing='most "
+                     f"material {min(BODY_ROWS, len(links))}'>")
+        for lk in ranked[:BODY_ROWS]:
             lag = f" lag {lk.lag_days:+.1f}d" if lk.lag_days else ""
             lines.append(f"- {lk.pred_code} '{lk.pred_name}' "
                          f"-{lk.link_type}-> {lk.succ_code} "
                          f"'{lk.succ_name}'{lag}")
-        if len(links) > 40:
-            lines.append(f"... (+{len(links) - 40} more)")
+        _more(tag, len(links))
         lines.append(f"</{tag}>\n")
 
     _logic("logic_added", cmp.logic_added)

@@ -158,8 +158,41 @@ def _dedupe(items: list[str]) -> list[str]:
     return out
 
 
+def _data_table(doc, rows: list[dict], max_rows: int = 400) -> None:
+    """A list of row-dicts as a real Word table (appendix use)."""
+    from docx.shared import Pt
+    if not rows:
+        return
+    headers = list(rows[0].keys())
+    shown = rows[:max_rows]
+    t = doc.add_table(rows=len(shown) + 1, cols=len(headers))
+    t.style = "Table Grid"
+    for j, h in enumerate(headers):
+        cell = t.cell(0, j)
+        cell.text = str(h)
+        for p in cell.paragraphs:
+            for r in p.runs:
+                r.bold = True
+                r.font.size = Pt(8.5)
+    for i, row in enumerate(shown, start=1):
+        for j, h in enumerate(headers):
+            v = row.get(h)
+            cell = t.cell(i, j)
+            cell.text = "" if v is None else str(v)
+            for p in cell.paragraphs:
+                for r in p.runs:
+                    r.font.size = Pt(8.5)
+    if len(rows) > max_rows:
+        p = doc.add_paragraph()
+        run = p.add_run(f"({len(rows) - max_rows} further rows omitted "
+                        f"— the complete set is in the Excel workbook.)")
+        run.italic = True
+    doc.add_paragraph()
+
+
 def build_narrative_docx(title: str, narrative_md: str,
                          images: list[tuple[str, bytes]] | None = None,
+                         appendix: list[tuple[str, list[dict]]] | None = None,
                          ) -> bytes:
     """One module's AI narrative as a Word document.
 
@@ -184,6 +217,23 @@ def build_narrative_docx(title: str, narrative_md: str,
         doc.add_heading(cap, level=2)
         doc.add_picture(io.BytesIO(png), width=_Inches(6.4))
     _add_markdown(doc, narrative_md, base_heading_level=2)
+
+    # The complete record, so the document reads end to end without
+    # opening a second file. The body carries the top rows per
+    # category; every row lives here.
+    if appendix:
+        doc.add_page_break()
+        doc.add_heading("Appendix — complete change tables", level=1)
+        p = doc.add_paragraph()
+        p.add_run(
+            "The narrative above reports the most material rows per "
+            "category. The tables below are the complete record for "
+            "the same comparison, in the same order as the workbook."
+        ).italic = True
+        for i, (cap, rows) in enumerate(appendix, start=1):
+            doc.add_heading(f"A{i}. {cap} ({len(rows)})", level=2)
+            _data_table(doc, rows)
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

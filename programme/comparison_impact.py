@@ -925,3 +925,98 @@ def attribute_completion_impact(
             "slippage or untested categories (constraints, calendars, "
             "scope), not the tested edits.")
     return result
+
+
+# --------------------------------------------------------------------------- #
+# Appendix tables — the complete record, for the Word report
+# --------------------------------------------------------------------------- #
+
+def comparison_appendix(
+    cmp: ComparisonResult,
+    impact: ComparisonImpact | None = None,
+    attribution: CompletionAttribution | None = None,
+    provenance: ProvenanceResult | None = None,
+) -> list[tuple[str, list[dict]]]:
+    """(title, rows) per table — every change in full.
+
+    The narrative body carries only the top few rows per category, by
+    materiality; this is the complete record appended to the same
+    document so the reader never has to open a second file. Table
+    shapes match the Excel workbook exactly.
+    """
+    def acts(refs):
+        return [{"Activity ID": a.task_code, "Activity": a.name,
+                 "Type": "Milestone" if a.is_milestone else "Task",
+                 "Start": _d(a.start), "Finish": _d(a.finish),
+                 "Duration (d)": a.duration_days} for a in refs]
+
+    def fields(changes):
+        return [{"Activity / Link": c.task_code, "Name": c.name,
+                 "Was": c.old_value, "Now": c.new_value,
+                 "Delta (d)": c.delta_days} for c in changes]
+
+    def links(ls):
+        return [{"Predecessor": lk.pred_code, "Pred name": lk.pred_name,
+                 "Type": lk.link_type, "Successor": lk.succ_code,
+                 "Succ name": lk.succ_name, "Lag (d)": lk.lag_days}
+                for lk in ls]
+
+    def _d(x):
+        return f"{x:%Y-%m-%d}" if x else "—"
+
+    out: list[tuple[str, list[dict]]] = []
+
+    def add(title: str, rows: list[dict]) -> None:
+        if rows:
+            out.append((title, rows))
+
+    # the forensic category leads the appendix, complete and untruncated
+    add("Retrospective changes to actual dates (complete)",
+        fields(cmp.actual_date_changes))
+    add("Activities added", acts(cmp.added))
+    add("Activities deleted", acts(cmp.deleted))
+    add("Duration changes", fields(cmp.duration_changes))
+    add("Logic added", links(cmp.logic_added))
+    add("Logic removed", links(cmp.logic_removed))
+    add("Lag changes", fields(cmp.lag_changes))
+    add("Constraint changes", fields(cmp.constraint_changes))
+    add("Calendar reassignments", fields(cmp.calendar_changes))
+    add("Calendar definitions changed", fields(cmp.calendar_def_changes))
+    add("Scheduling options changed", fields(cmp.sched_options_changes))
+    add("Renamed activities", fields(cmp.renamed))
+
+    if impact is not None:
+        add("Materiality screening — full ranked list", [{
+            "Score": rc.score, "Path position": rc.band,
+            "Category": rc.category, "Activity / Link": rc.ref,
+            "Name": rc.name, "Change": rc.detail,
+            "Delta (d)": rc.delta_days, "TF now (d)": rc.total_float_new,
+            "Red flag": "YES" if rc.red_flag else "",
+        } for rc in impact.ranked])
+
+    if attribution is not None:
+        add("Completion attribution — every change tested", [{
+            "Category": a.category, "Change": a.ref, "Name": a.name,
+            "Detail": a.detail, "Band": a.band,
+            "Completion WITH change": _d(a.completion_with),
+            "Completion WITHOUT": _d(a.completion_without),
+            "Contribution (d)": a.contribution_days,
+            "Tested": "yes" if a.tested else "no", "Note": a.note,
+        } for a in attribution.changes])
+        add("Driving chain to completion", [{
+            "#": i, "Activity ID": c["code"], "Activity": c["name"],
+            "Remaining (d)": c["duration_days"],
+            "Edited this window": ("duration" if c["duration_changed"]
+                                   else "logic" if c["logic_changed"]
+                                   else ""),
+            "On the data date": "YES" if c["at_data_date"] else "",
+        } for i, c in enumerate(attribution.driving_chain, start=1)])
+
+    if provenance is not None and provenance.windows:
+        add("Change provenance by update window", [
+            {"Window": f"{w.old_label} -> {w.new_label}",
+             "Completion moved (d)": w.completion_moved_days,
+             "Retro actual changes": w.red_flag_count}
+            | {cat: w.counts.get(cat, 0) for cat in provenance.categories}
+            for w in provenance.windows])
+    return out
