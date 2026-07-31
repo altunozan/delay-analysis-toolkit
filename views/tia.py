@@ -622,10 +622,27 @@ def tia_tab() -> None:
         ms_names = {t.task_code: f"{t.task_code} — {t.name}"
                     for t in data.tasks}
         if ms_opts:
-            st.selectbox("Impacted milestone to prioritise in the "
-                         "results", ms_opts,
-                         format_func=lambda c: ms_names.get(c, c),
-                         key="tia_target_ms")
+            # the MEASURED completion obligation (C1): the headline
+            # pre/post/delta is computed AT this milestone, and the run
+            # is gated if it cannot be honoured. Defaults to the
+            # intake election so one election rules every module.
+            _cms = st.session_state.get(sk.CONTRACT_MS)
+            _idx = ms_opts.index(_cms) if _cms in ms_opts else 0
+            st.selectbox(
+                "Completion obligation to MEASURE (headline pre/post "
+                "is computed at this milestone)", ms_opts, index=_idx,
+                format_func=lambda c: ms_names.get(c, c),
+                key="tia_target_ms",
+                help="Defaults to the contractual completion milestone "
+                     "elected at intake. The impact table still shows "
+                     "every milestone; this election is what the "
+                     "headline delta answers.")
+            if _cms and _cms not in ms_opts:
+                st.warning(
+                    f"The intake-elected completion milestone "
+                    f"'{_cms}' is not an incomplete milestone in this "
+                    "file — if you run against a different milestone, "
+                    "the headline answers a different obligation.")
         st.markdown("**Analyst confirmation** — required before the run:")
         dd = data.project.data_date if data.project else None
         checks = {
@@ -692,6 +709,14 @@ def tia_tab() -> None:
     if step == _TIA_STEPS[5]:
         st.subheader("⑥ Review the results")
         m1, m2, m3, m4 = st.columns(4)
+        if res.headline_gated:
+            st.error("Headline completion impact is GATED — the "
+                     "elected milestone could not be measured. See the "
+                     "warnings below; no completion figure is shown "
+                     "because it would answer a different obligation.")
+        elif res.measured_at:
+            st.caption(f"Headline measured at **{res.measured_at}** "
+                       "(the elected completion obligation).")
         m1.metric("Completion (pre)", f"{res.completion_pre:%d %b %Y}"
                   if res.completion_pre else "—")
         m2.metric("Completion (post)", f"{res.completion_post:%d %b %Y}"
@@ -819,9 +844,17 @@ def tia_tab() -> None:
         elif st.button(f"Compute cumulative impact ({len(recs)} events, "
                        "date order)", key="tia_cum_go"):
             st.session_state["tia_cum"] = run_cumulative_tia(
-                data, chosen, recs)
+                data, chosen, recs,
+                target_milestone=st.session_state.get("tia_target_ms"))
         cum = st.session_state.get("tia_cum")
+        if cum and cum.get("gated"):
+            for w in cum.get("warnings", []):
+                st.error(w)
         if cum and cum.get("rows"):
+            if cum.get("measured_at"):
+                st.caption(f"Cumulative figures measured at "
+                           f"**{cum['measured_at']}** (the elected "
+                           "completion obligation).")
             c1, c2 = st.columns(2)
             c1.metric("Cumulative impact",
                       f"{cum['total_delta_days']:+.1f} days"

@@ -62,8 +62,13 @@ def _read_text(path_or_text: str) -> str:
 
 
 def _decode_bytes(data: bytes) -> str:
-    # XER exports are commonly cp1252; fall back to utf-8 / latin-1.
-    for enc in ("cp1252", "utf-8", "latin-1"):
+    # UTF-8 FIRST: utf-8 is self-validating (random cp1252 text almost
+    # never decodes as valid utf-8), while cp1252 accepts nearly any
+    # byte sequence — trying cp1252 first made the utf-8 branch
+    # unreachable and turned every utf-8 export into mojibake
+    # ("Café" -> "CafÃ©"). cp1252 remains the fallback for the legacy
+    # exports it actually fits.
+    for enc in ("utf-8", "cp1252", "latin-1"):
         try:
             return data.decode(enc)
         except UnicodeDecodeError:
@@ -128,6 +133,45 @@ def parse_xer(path_or_text: str | bytes, config: DCMAConfig | None = None) -> Xe
             "or a concatenation of project-structure blocks — re-export "
             "from P6 with activities included.")
     return data
+
+
+def structural_defects(data: XerData) -> list[str]:
+    """Evidential hard-gate findings (C4).
+
+    Every code-keyed calculation (CPM nodes, comparison, windows, CAB)
+    silently MERGES activities that share a visible Activity ID, and
+    the parser pools every project in the file — so a multi-project
+    export or a duplicate code can make an activity, its logic and its
+    delay contribution disappear without any error. These conditions
+    gate intake; they are not inventory footnotes.
+    """
+    out: list[str] = []
+    proj_tasks: dict[str, int] = {}
+    for row in data.raw_tables.get("TASK", []):
+        pid = (row.get("proj_id") or "").strip()
+        if pid:
+            proj_tasks[pid] = proj_tasks.get(pid, 0) + 1
+    if len(proj_tasks) > 1:
+        detail = ", ".join(f"{p} ({n} activities)"
+                           for p, n in sorted(proj_tasks.items()))
+        out.append(
+            f"Multi-project export: {len(proj_tasks)} projects carry "
+            f"activities in one file ({detail}). Code-keyed analysis "
+            "would pool them into one network — re-export ONE project "
+            "per .xer file.")
+    counts: dict[str, int] = {}
+    for t in data.tasks:
+        if t.task_code:
+            counts[t.task_code] = counts.get(t.task_code, 0) + 1
+    dups = sorted(c for c, n in counts.items() if n > 1)
+    if dups:
+        out.append(
+            f"{len(dups)} duplicate Activity ID(s) (e.g. "
+            + ", ".join(dups[:5]) + (" …" if len(dups) > 5 else "")
+            + ") — activities sharing a code silently merge in every "
+            "code-keyed calculation, deleting one of them from the "
+            "network. Make Activity IDs unique in P6 and re-export.")
+    return out
 
 
 def _build_models(data: XerData, config: DCMAConfig) -> None:

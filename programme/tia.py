@@ -44,6 +44,7 @@ from .cpm import (
     backward_pass as _backward_pass,
     build_network as _build_network,
     calendar_masks as _calendar_masks,
+    cyclic_nodes as _cyclic_nodes,
     forward_pass as _forward_pass,
     is_working as _is_working,
     parse_xer_date as _parse_xer_date,
@@ -409,6 +410,8 @@ class TIAResult:
     data_date: datetime | None = None
     completion_pre: datetime | None = None
     completion_post: datetime | None = None
+    measured_at: str = ""         # milestone the headline measures at
+    headline_gated: bool = False  # election could not be honoured
     completion_delta_days: float | None = None
     milestone_impacts: list[MilestoneImpact] = field(default_factory=list)
     fragnet_dates: dict = field(default_factory=dict)   # act_id -> (ES, EF)
@@ -471,10 +474,32 @@ def run_tia(
     names.update({f.act_id: f.name for f in fragnet})
     frag_ids = {f.act_id for f in fragnet}
 
+    # --- honour the completion election FIRST -------------------------
+    # (C1) the elected milestone is the measured obligation everywhere:
+    # headline dates, driving-path terminals, calibration. If it cannot
+    # be honoured the headline is GATED — no completion figure at all —
+    # rather than silently measuring whatever finishes last (a DLP or
+    # demob activity can otherwise replace the contract obligation).
+    if target_milestone:
+        if target_milestone in EF0 and target_milestone in EF1:
+            result.measured_at = target_milestone
+        else:
+            result.headline_gated = True
+            result.warnings.append(
+                f"HEADLINE GATED: the elected completion milestone "
+                f"'{target_milestone}' is not in the remaining network "
+                "(already complete, absent from this file, or excluded) "
+                "— no completion impact is reported, because measuring "
+                "a different activity would answer a different "
+                "contractual question. Re-elect the milestone in the "
+                "intake tab or review the programme.")
+
     def _chain(EF, ES, driver):
         if not EF:
             return []
-        cur = max(EF, key=lambda k: EF[k])
+        # trace to the MEASURED obligation, else the latest finisher
+        cur = (result.measured_at if result.measured_at in EF
+               else max(EF, key=lambda k: EF[k]))
         chain, seen = [], set()
         while cur and cur not in seen and len(chain) < 400:
             seen.add(cur)
@@ -487,6 +512,29 @@ def run_tia(
 
     result.path_pre = _chain(EF0, ES0, drv0)
     result.path_post = _chain(EF1, ES1, drv1)
+
+    # (M2) circular logic touching the MEASURED path gates the headline:
+    # cyclic nodes are scheduled from the data date, so their dates —
+    # and any delta through them — are order-dependent artefacts
+    cyc = _cyclic_nodes(nodes_p, preds_p)
+    if cyc:
+        on_path = cyc & ({p["id"] for p in result.path_pre}
+                         | {p["id"] for p in result.path_post})
+        if on_path:
+            result.headline_gated = True
+            result.warnings.append(
+                "HEADLINE GATED: circular logic involves the measured "
+                "driving path ("
+                + ", ".join(sorted(on_path)[:5])
+                + (" …" if len(on_path) > 5 else "")
+                + ") — dates through a cycle are order-dependent, so "
+                "no completion impact is reported. Repair the logic "
+                "and re-run.")
+        else:
+            result.warnings.append(
+                f"{len(cyc)} activities sit in circular logic away "
+                "from the measured path — the headline is unaffected, "
+                "but repair before wider reliance.")
 
     # --- total float (screening backward pass), pre and post --------------
     tf0 = _backward_pass(nodes, preds, EF0)
@@ -526,27 +574,53 @@ def run_tia(
     else:
         result.milestone_impacts = impacts[:top_milestones]
 
-    if EF0:
-        result.completion_pre = max(EF0.values())
-    # symmetric with pre: completion is measured over the REAL network
-    # only — fragnet activities report their own dates separately
-    real_post = [ef for code, ef in EF1.items() if code in nodes]
-    if real_post:
-        result.completion_post = max(real_post)
+    if result.headline_gated:
+        pass                        # no completion figures at all
+    elif result.measured_at:
+        # the headline IS the elected obligation, pre and post
+        result.completion_pre = EF0[result.measured_at]
+        result.completion_post = EF1[result.measured_at]
+    else:
+        if EF0:
+            result.completion_pre = max(EF0.values())
+        # symmetric with pre: completion is measured over the REAL
+        # network only — fragnet activities report their own dates
+        real_post = [ef for code, ef in EF1.items() if code in nodes]
+        if real_post:
+            result.completion_post = max(real_post)
+        if EF0:
+            latest = max(EF0, key=lambda k: EF0[k])
+            result.warnings.append(
+                "No completion milestone elected — the headline "
+                f"measures the latest network finisher "
+                f"('{latest}' {names.get(latest, '')[:40]!r}). If this "
+                "programme carries post-completion work (DLP, "
+                "demobilisation, close-out), elect the contractual "
+                "milestone at intake so the measured obligation is the "
+                "elected one.")
     if result.completion_pre and result.completion_post:
         result.completion_delta_days = round(
             (result.completion_post
              - result.completion_pre).total_seconds() / 86400, 1)
 
     # --- calibration vs P6's own forecast ---------------------------------
-    p6_fin = data.project.scheduled_finish if data.project else None
+    # measured at a milestone: calibrate against that milestone's OWN
+    # P6 dates in the file; network max: against the scheduled finish
+    if result.measured_at:
+        t_ms = next((t for t in inc.values()
+                     if t.task_code == result.measured_at), None)
+        p6_fin = t_ms.early_finish if t_ms is not None else None
+        p6_label = f"P6's early finish for {result.measured_at}"
+    else:
+        p6_fin = data.project.scheduled_finish if data.project else None
+        p6_label = "P6's own scheduled finish"
     if p6_fin and result.completion_pre:
         result.calibration_days = round(
             (result.completion_pre - p6_fin).total_seconds() / 86400, 1)
         result.warnings.append(
             f"Calibration: this engine's pre-impact completion "
-            f"({result.completion_pre:%Y-%m-%d}) differs from P6's own "
-            f"scheduled finish ({p6_fin:%Y-%m-%d}) by "
+            f"({result.completion_pre:%Y-%m-%d}) differs from "
+            f"{p6_label} ({p6_fin:%Y-%m-%d}) by "
             f"{result.calibration_days:+.0f} days — the approximation "
             "error of the simplified CPM. Judge the IMPACT (delta), not "
             "the absolute dates, and confirm in P6."
@@ -1036,17 +1110,26 @@ def run_cumulative_tia(
     records: list[tuple[DelayEvent, list[FragnetActivity]]],
     *,
     config: DCMAConfig | None = None,
+    target_milestone: str | None = None,
 ) -> dict:
     """Insert saved events chronologically; measure incremental deltas.
 
+    ``target_milestone`` — the elected completion obligation: every
+    completion figure is measured AT it. If elected but absent from the
+    remaining network the quantum is GATED (no rows), never silently
+    re-measured at the latest finisher (C1).
+
     Returns {"rows": [...], "total_delta_days", "completion_pre",
-    "completion_final", "concurrency": [...], "caveat"}.
+    "completion_final", "concurrency": [...], "warnings",
+    "measured_at", "gated", "caveat"}.
     """
     config = config or DCMAConfig()
     dd = data.project.data_date if data.project else None
     if dd is None or not records:
         return {"rows": [], "total_delta_days": None,
+                "completion_pre": None, "completion_final": None,
                 "concurrency": [], "warnings": [],
+                "measured_at": "", "gated": False,
                 "caveat": CUMULATIVE_CAVEAT}
     ordered = sorted(records,
                      key=lambda r: r[0].date_raised or dd)
@@ -1054,11 +1137,39 @@ def run_cumulative_tia(
     _, EF, _, _ = _forward_pass(dict(nodes),
                                 {k: list(v) for k, v in preds.items()},
                                 dd, started)
-    pre = max(EF.values()) if EF else None
+    warnings: list[str] = []
+    measured_at = ""
+    if target_milestone:
+        if target_milestone in EF:
+            measured_at = target_milestone
+        else:
+            # C1 gate: elected but unmeasurable — suppress the quantum
+            return {"rows": [], "total_delta_days": None,
+                    "completion_pre": None, "completion_final": None,
+                    "concurrency": [], "measured_at": "", "gated": True,
+                    "warnings": [
+                        f"QUANTUM GATED: the elected completion "
+                        f"milestone '{target_milestone}' is not in the "
+                        "remaining network — cumulative impact is not "
+                        "reported rather than measured at a different "
+                        "obligation."],
+                    "caveat": CUMULATIVE_CAVEAT}
+
+    def _completion(EFx) -> "datetime | None":
+        if measured_at:
+            return EFx.get(measured_at)
+        return max(EFx.values()) if EFx else None
+
+    pre = _completion(EF)
+    if not measured_at and EF:
+        warnings.append(
+            "No completion milestone elected — cumulative figures "
+            "measure the latest network finisher; elect the "
+            "contractual milestone at intake to measure the "
+            "obligation.")
 
     # fragnet IDs must be unique across ALL inserted events — a reused ID
     # would silently overwrite the earlier event's activity
-    warnings: list[str] = []
     seen_ids: dict[str, str] = {}
     for event, fragnet in ordered:
         for f in fragnet:
@@ -1092,7 +1203,7 @@ def run_cumulative_tia(
         ES_i, EF_i, _, _ = _forward_pass(
             dict(nodes_c), {k: list(v) for k, v in preds_c.items()},
             dd, started)
-        post = max(EF_i.values()) if EF_i else None
+        post = _completion(EF_i)
         delta = (round((post - prev).total_seconds() / 86400, 1)
                  if post and prev else None)
         f_es = [ES_i[f.act_id] for f in fragnet if f.act_id in ES_i]
@@ -1121,4 +1232,5 @@ def run_cumulative_tia(
     return {"rows": rows, "total_delta_days": total,
             "completion_pre": pre, "completion_final": prev,
             "concurrency": concurrency, "warnings": warnings,
+            "measured_at": measured_at, "gated": False,
             "caveat": CUMULATIVE_CAVEAT}

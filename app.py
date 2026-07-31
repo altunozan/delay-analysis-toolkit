@@ -12,6 +12,7 @@ Run with:  streamlit run app.py
 from __future__ import annotations
 
 import hmac
+import os
 
 import streamlit as st
 
@@ -55,8 +56,23 @@ def main() -> None:
     # public URL must not serve them unauthenticated.
     try:
         _pw = st.secrets.get("APP_PASSWORD", "")
+        _public_ok = str(st.secrets.get("ALLOW_PUBLIC", "")).lower() \
+            in ("1", "true", "yes")
     except Exception:                       # no secrets.toml locally
-        _pw = ""
+        _pw, _public_ok = "", False
+    # (M6) HOSTED deployments fail CLOSED: a missing secret must not
+    # silently expose the toolkit on a public URL. Local runs (no
+    # /mount/src) stay open for development. Public hosting is an
+    # explicit election (ALLOW_PUBLIC = "true"), never a default.
+    if os.path.exists("/mount/src") and not _pw and not _public_ok:
+        st.title("Forensic Delay-Analysis Toolkit")
+        st.error(
+            "**Access not configured.** This hosted deployment has no "
+            "APP_PASSWORD secret, so it refuses to serve rather than "
+            "run open to the public. Set APP_PASSWORD in the app's "
+            "Secrets (Settings → Secrets), or set ALLOW_PUBLIC = "
+            "\"true\" to elect public access explicitly.")
+        st.stop()
     if _pw and not st.session_state.get(sk.AUTH_OK):
         st.title("Forensic Delay-Analysis Toolkit")
         entered = st.text_input("Access password", type="password",

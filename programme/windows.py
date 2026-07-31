@@ -152,11 +152,14 @@ def analyse_windows(
         row = WindowRow(
             index=i + 1, from_label=l_old, to_label=l_new,
             start=dd_old, end=dd_new,
-            window_days=((dd_new - dd_old).days
-                         if dd_old and dd_new else None),
+            # total_seconds/86400, NOT .days — timedelta.days truncates
+            # toward whole days, so two +12h movements report [0, 0]
+            # and windows stop telescoping to the true overall change
+            window_days=(round((dd_new - dd_old).total_seconds() / 86400,
+                               1) if dd_old and dd_new else None),
             finish_old=f_old, finish_new=f_new,
-            movement_days=((f_new - f_old).days
-                           if f_old and f_new else None),
+            movement_days=(round((f_new - f_old).total_seconds() / 86400,
+                                 1) if f_old and f_new else None),
         )
 
         old_cp, new_cp = paths[l_old], paths[l_new]

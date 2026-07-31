@@ -38,6 +38,15 @@ def _wb_bytes(wb: Workbook) -> bytes:
     from buildinfo import build_stamp
     stamp = build_stamp()
     for ws in wb.worksheets:
+        # (H6) formula neutralisation: these workbooks never write
+        # intentional formulas, so any cell openpyxl typed as a formula
+        # got there from XER-derived text beginning with '=' (a hostile
+        # activity name or evidence field). Re-type it as a literal
+        # string — the text is preserved exactly, nothing executes.
+        for row in ws.iter_rows():
+            for c in row:
+                if c.data_type == "f":
+                    c.data_type = "s"
         ws.oddFooter.left.text = stamp
         ws.oddFooter.left.size = 7
         # every table gets an Excel autofilter: _header_row() recorded

@@ -265,6 +265,13 @@ def build_xlsx_report(
     from buildinfo import build_stamp
     stamp = build_stamp()
     for _ws in wb.worksheets:
+        # (H6) no intentional formulas exist in this workbook — any
+        # formula-typed cell is hostile XER text starting with '=';
+        # re-type as a literal string (text preserved, nothing runs)
+        for _row in _ws.iter_rows():
+            for _c in _row:
+                if _c.data_type == "f":
+                    _c.data_type = "s"
         _ws.oddFooter.left.text = stamp
         _ws.oddFooter.left.size = 7
     _ws0 = wb.worksheets[0]

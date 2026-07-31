@@ -75,8 +75,11 @@ check("A3 manual TF<=0 recount == CP module", manual_crit == len(cp_f.critical),
       f"manual={manual_crit} vs cp={len(cp_f.critical)}")
 
 # A4. Windows completion movement == project-level scheduled finish delta
+# (precise arithmetic: .days truncation was audit finding C5)
 wres = analyse_windows([("B", B), ("U", U)])
-manual_move = (U.project.scheduled_finish - B.project.scheduled_finish).days
+manual_move = round((U.project.scheduled_finish
+                     - B.project.scheduled_finish).total_seconds()
+                    / 86400, 1)
 check("A4 windows movement == scheduled finish delta",
       wres.windows[0].movement_days == manual_move,
       f"win={wres.windows[0].movement_days} vs manual={manual_move}")
@@ -2896,6 +2899,160 @@ _no_filter = [ws.title for ws in _wb_cp.worksheets
               ("AI Narrative", "Caveats") and not ws.auto_filter.ref]
 check("P4d every data sheet in the CP workbook is filterable",
       not _no_filter, str(_no_filter))
+
+# =========================================================================
+# X layer — exhaustive-audit fixes (C1-C5, H2/H3/H5/H6, M2/M5/M6)
+# SELF-CONTAINED: fresh parses + config, no reliance on suite globals.
+# =========================================================================
+print("== X. Exhaustive-audit fix pins ==")
+from datetime import datetime as _xdt
+
+from programme.tia import (DelayEvent as _XDE, FragnetActivity as _XFA,
+                           FragnetLink as _XFL,
+                           run_cumulative_tia as _xcum, run_tia as _xtia)
+
+with open(_pp("sample/Sample Update.xer"), "rb") as fh:
+    _XU = parse_xer(fh.read())
+_xev = _XDE("EV-X", "x", "")
+_xfrag = [_XFA("TIA-X10", "w", 20,
+               predecessors=[_XFL("RM-AC-005")],
+               successors=[_XFL("TOC05")])]
+
+# C1 — the elected milestone IS the headline, and gates when absent
+_xr = _xtia(_XU, "U", _xev, _xfrag, target_milestone="RM-AC-002")
+check("X-C1 headline measured AT the elected milestone",
+      _xr.measured_at == "RM-AC-002"
+      and _xr.completion_pre is not None
+      and _xr.completion_pre.year == 2016, str(_xr.completion_pre))
+_xr2 = _xtia(_XU, "U", _xev, _xfrag, target_milestone="NOT-A-CODE")
+check("X-C1b unmeasurable election GATES the headline",
+      _xr2.headline_gated and _xr2.completion_delta_days is None)
+_xr3 = _xtia(_XU, "U", _xev, _xfrag)
+check("X-C1c no election -> latest-finisher warning disclosed",
+      any("No completion milestone elected" in w for w in _xr3.warnings))
+_xc = _xcum(_XU, "U", [(_xev, _xfrag)], target_milestone="NOT-A-CODE")
+check("X-C1d cumulative quantum gated on unmeasurable election",
+      _xc["gated"] and not _xc["rows"])
+_xc2 = _xcum(_XU, "U", [(_xev, _xfrag)], target_milestone="TOC05")
+check("X-C1e cumulative measured at the election",
+      _xc2["measured_at"] == "TOC05" and not _xc2["gated"])
+
+# C2/H2 — FF back-computes ES (duration preserved, SS reads it);
+# negative lag steps working days backwards
+from programme.cpm import (add_working_days as _xadd,
+                           cyclic_nodes as _xcyc,
+                           forward_pass as _xfwd,
+                           sub_working_days as _xsub)
+_XMF = (frozenset(range(0, 5)), frozenset(), frozenset())
+check("X-H2 -1d lead from Monday lands Friday, not Sunday",
+      _xadd(_xdt(2026, 1, 5), -1, _XMF) == _xdt(2026, 1, 2))
+_xn = {"P": (10.0, _XMF), "S": (2.0, _XMF), "X": (5.0, _XMF)}
+_xp = {"P": [], "S": [("P", "FF", 0.0)], "X": [("S", "SS", 0.0)]}
+_xES, _xEF, _, _ = _xfwd(_xn, _xp, _xdt(2026, 1, 5), {})
+check("X-C2 FF-governed successor: finish aligned, duration preserved",
+      _xEF["S"] == _xEF["P"]
+      and _xES["S"] == _xsub(_xEF["S"], 2.0, _XMF))
+check("X-C2b downstream SS reads the back-computed ES",
+      _xES["X"] == _xES["S"])
+
+# C3 — non-convergence detected; collapse quantum suppressed
+from programme.collapsed_asbuilt import _schedule as _xsched
+_, _, _xcv = _xsched({"A": 5.0, "B": 5.0},
+                     [("A", "B", "FS", 1.0), ("B", "A", "FS", 1.0)],
+                     _xdt(2024, 1, 1))
+check("X-C3 positive cycle -> relaxation reports non-convergence",
+      _xcv is False)
+_, _, _xcv2 = _xsched({"A": 5.0, "B": 3.0}, [("A", "B", "FS", 0.0)],
+                      _xdt(2024, 1, 1))
+check("X-C3b acyclic network converges", _xcv2 is True)
+_xcabsrc = open(_pp("programme/collapsed_asbuilt.py")).read()
+check("X-C3c non-convergence SUPPRESSES quantum (returns early)",
+      _xcabsrc.count("QUANTUM SUPPRESSED") >= 2)
+
+# C4 — structural defects detected; intake refuses
+from dcma import structural_defects as _xsd
+check("X-C4 clean single-project file has no structural defects",
+      _xsd(_XU) == [])
+import re as _xre
+_xraw = open(_pp("sample/Sample Update.xer"), encoding="latin-1").read()
+_xm = _xre.search(r"^(%R\t.*?\tRM-AC-005\t.*)$", _xraw, _xre.M)
+_xrow = _xm.group(1).split("\t"); _xrow[1] = "99999999"
+_xdup = parse_xer(_xraw.replace(_xm.group(1),
+                                _xm.group(1) + "\n" + "\t".join(_xrow)))
+check("X-C4b duplicate Activity ID detected",
+      any("duplicate Activity ID" in d for d in _xsd(_xdup)))
+_xrow2 = _xm.group(1).split("\t"); _xrow2[1] = "99999998"
+_xrow2[2] = "77777"; _xrow2[13] = "ZZ-UNIQ-1"
+_xmp = parse_xer(_xraw.replace(_xm.group(1),
+                               _xm.group(1) + "\n" + "\t".join(_xrow2)))
+check("X-C4c multi-project export detected",
+      any("Multi-project" in d for d in _xsd(_xmp)))
+check("X-C4d intake REFUSES structurally defective files",
+      "structural_defects" in open(_pp("views/intake.py")).read()
+      and "refused — structural" in open(_pp("views/intake.py")).read())
+
+# C5 — fractional movement survives windows arithmetic
+_xwsrc = open(_pp("programme/windows.py")).read()
+check("X-C5 windows uses total_seconds, not truncating .days",
+      "total_seconds() / 86400" in _xwsrc
+      and ".days\n" not in _xwsrc.split("movement_days=")[1][:120])
+
+# M2 — a cycle ON the measured path gates the TIA headline
+_xloop = [_XFA("TIA-C", "loop", 10,
+               predecessors=[_XFL("TOC05")],
+               successors=[_XFL("TOC05")])]
+_xrc = _xtia(_XU, "U", _xev, _xloop, target_milestone="TOC05")
+check("X-M2 cycle on the measured path gates the headline",
+      _xrc.headline_gated and _xrc.completion_delta_days is None
+      and any("circular" in w for w in _xrc.warnings))
+check("X-M2b cyclic_nodes finds the trapped pair",
+      _xcyc({"A": (5.0, None), "B": (5.0, None), "C": (2.0, None)},
+            {"A": [("B", "FS", 0.0)], "B": [("A", "FS", 0.0)], "C": []})
+      == {"A", "B"})
+
+# H3 — UTF-8 decodes as UTF-8; cp1252-only bytes still fall back
+from dcma.xer_parser import _decode_bytes as _xdec
+check("X-H3 utf-8 round-trips (no mojibake)",
+      _xdec("Café — İnşaat".encode("utf-8")) == "Café — İnşaat")
+check("X-H3b cp1252 smart quotes still decode via fallback",
+      _xdec(b"\x93quoted\x94") == "“quoted”")
+
+# H5 — hostile task names are inert in both HTML builders
+from programme.gantt_html import build_apab_gantt_html as _xapab
+from programme.gantt_html import build_gantt_html as _xg
+_xrows = [{"task_code": "X</script><script>alert(1)</script>",
+           "name": "Evil</span><script>alert(2)</script>",
+           "row_kind": "", "planned_start": None, "planned_finish": None,
+           "actual_start": _xdt(2024, 1, 2),
+           "actual_finish": _xdt(2024, 2, 2), "finish_var_days": 3.0}]
+check("X-H5 apab gantt neutralises hostile names",
+      "<script>alert" not in _xapab(_xrows, title="t", data_date=None))
+_xtree = {"name": "g", "children": [], "activities": [
+    {"id": "A", "name": "</script><script>alert(3)</script>",
+     "start": "2024-01-01", "finish": "2024-02-01", "status": "done"}]}
+check("X-H5b tree gantt JSON cannot break out of its script tag",
+      "</script><script>alert(3)" not in _xg(_xtree))
+
+# H6 — formula-typed cells are re-typed as literal strings
+import io as _xio
+from openpyxl import Workbook as _XWB, load_workbook as _xload
+from programme.report_xlsx import _wb_bytes as _xwb
+_xw = _XWB(); _xws = _xw.active
+_xws["A1"] = "h"; _xws["A2"] = '=HYPERLINK("http://evil","x")'
+_xout = _xload(_xio.BytesIO(_xwb(_xw))).active
+check("X-H6 '=' cells exported as text, content preserved",
+      _xout["A2"].data_type != "f"
+      and _xout["A2"].value == '=HYPERLINK("http://evil","x")')
+
+# M5/M6 — source-structural pins
+_xint = open(_pp("views/intake.py")).read()
+check("X-M5 milestone options come from the inventory's current",
+      "inv.current" in _xint.split("_ms_opts")[0][-600:])
+_xapp = open(_pp("app.py")).read()
+check("X-M6 hosted deployment fails CLOSED without a secret",
+      "/mount/src" in _xapp and "ALLOW_PUBLIC" in _xapp
+      and _xapp.index("Access not configured")
+      < _xapp.index("Access password"))
 
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:

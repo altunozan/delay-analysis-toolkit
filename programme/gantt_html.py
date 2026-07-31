@@ -11,7 +11,22 @@ component iframe (and offline).
 
 from __future__ import annotations
 
+import html as _htmllib
 import json
+
+
+def _esc(s) -> str:
+    """(H5) XER-derived text is UNTRUSTED: a task name in a hostile
+    counterpart file can carry markup/script that would execute when
+    the exported standalone HTML is opened — and could silently alter
+    the visual record. Escape at every interpolation point."""
+    return _htmllib.escape(str(s), quote=True)
+
+
+def _js(obj) -> str:
+    """JSON destined for a <script> block: '<' is escaped so a
+    '</script>' inside an activity name cannot close the tag."""
+    return json.dumps(obj).replace("<", "\\u003c")
 
 _TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -469,11 +484,11 @@ def build_gantt_html(tree: dict, zoom_px_per_month: int = 34,
     ``data_date`` — ISO date for the dashed marker line.
     """
     return (_TEMPLATE
-            .replace("__TREE__", json.dumps(tree))
+            .replace("__TREE__", _js(tree))
             .replace("__ZOOM__", str(int(zoom_px_per_month)))
-            .replace("__DATA_DATE__", json.dumps(data_date))
-            .replace("__CATS__", json.dumps(categories or STATUS_CATEGORIES))
-            .replace("__TITLE__", json.dumps(title[:44])))
+            .replace("__DATA_DATE__", _js(data_date))
+            .replace("__CATS__", _js(categories or STATUS_CATEGORIES))
+            .replace("__TITLE__", _js(title[:44])))
 
 
 def group_tree(groups: list[dict]) -> dict:
@@ -726,7 +741,7 @@ def build_apab_gantt_html(
         _wt = w.get("label", "")
         over.append(f"<div class='curt{' alt' if i % 2 else ''}' "
                     f"style='left:{lo:.0f}px;width:{wd:.0f}px' "
-                    f"title='{_wt}'></div>")
+                    f"title='{_esc(_wt)}'></div>")
     if data_date is not None:
         over.append(f"<div class='ddl' style='left:{x(data_date):.0f}px'"
                     " title='data date'></div>")
@@ -747,7 +762,7 @@ def build_apab_gantt_html(
                       f"style='left:{x(ws_):.0f}px;"
                       f"width:{max(x(we_) - x(ws_), 2):.0f}px'></div>"
                       f"<div class='wlab' style='left:{x(ws_):.0f}px'>"
-                      f"{txt}</div>")
+                      f"{_esc(txt)}</div>")
         parts.append("<tr class='r' style='height:16px'>"
                      "<td class='lbl'><div><span class='aid'></span>"
                      "<span class='anm' style='font-size:9.5px;"
@@ -764,7 +779,7 @@ def build_apab_gantt_html(
         kind = r.get("row_kind") or ""
         if kind == "section":
             parts.append(f"<tr class='sec'><td class='lbl'><div>"
-                         f"{r['name']}</div></td>"
+                         f"{_esc(r['name'])}</div></td>"
                          f"<td style='min-width:{W:.0f}px'></td></tr>")
             continue
         is_kd = code in keydates
@@ -774,8 +789,8 @@ def build_apab_gantt_html(
         _nm_cls = "anm memnm" if kind == "member" else "anm"
         _nm = (("▣ " if kind == "umbrella" else
                 "↳ " if kind == "member" else "") + r["name"][:58])
-        lbl = (f"<td class='lbl'><div><span class='aid'>{code}</span>"
-               f"<span class='{_nm_cls}'>{_nm}</span>"
+        lbl = (f"<td class='lbl'><div><span class='aid'>{_esc(code)}</span>"
+               f"<span class='{_nm_cls}'>{_esc(_nm)}</span>"
                f"<span class='adt'>{f(r.get('planned_start'))}</span>"
                f"<span class='adt'>{f(r.get('planned_finish'))}</span>"
                f"<span class='adt'>{f(r.get('actual_start'))}</span>"
@@ -787,7 +802,7 @@ def build_apab_gantt_html(
         if ps and pf:
             kids.append(f"<div class='bar pl' style='left:{x(ps):.0f}px;"
                         f"width:{max(x(pf)-x(ps),3):.0f}px' "
-                        f"title='{code} planned {f(ps)} → {f(pf)}'>"
+                        f"title='{_esc(code)} planned {f(ps)} → {f(pf)}'>"
                         "</div>")
         if as_:
             ae = af or as_
@@ -805,7 +820,7 @@ def build_apab_gantt_html(
             kids.append(f"<div class='bar ab' style='left:{x(as_):.0f}px;"
                         f"width:{max(x(ae)-x(as_),3):.0f}px;"
                         f"background:{col};border:.5px solid {edge}' "
-                        f"title='{code} as-built "
+                        f"title='{_esc(code)} as-built "
                         f"{f(as_)} → {f(af)}'></div>")
         if is_kd and pf and af:
             xa, xp = x(af), x(pf)

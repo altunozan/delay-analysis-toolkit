@@ -82,7 +82,12 @@ def is_working(day: datetime, mask: tuple) -> bool:
 
 def add_working_days(start: datetime, days: float,
                       mask: tuple | None) -> datetime:
-    if not mask or days <= 0:
+    # (H2) negative days = a LEAD: step working days BACKWARDS on the
+    # calendar. The old elapsed-days shortcut put a -1d lead from
+    # Monday on a Sunday instead of Friday.
+    if days < 0:
+        return sub_working_days(start, -days, mask)
+    if not mask or days == 0:
         return start + timedelta(days=days)
     whole, frac = int(days), days - int(days)
     cur = start
@@ -98,7 +103,9 @@ def add_working_days(start: datetime, days: float,
 
 def sub_working_days(start: datetime, days: float,
                       mask: tuple | None) -> datetime:
-    if not mask or days <= 0:
+    if days < 0:
+        return add_working_days(start, -days, mask)
+    if not mask or days == 0:
         return start - timedelta(days=days)
     whole, frac = int(days), days - int(days)
     cur = start
@@ -110,6 +117,36 @@ def sub_working_days(start: datetime, days: float,
         if is_working(cur, mask):
             removed += 1
     return cur - timedelta(days=frac)
+
+
+def cyclic_nodes(
+    nodes: dict[str, tuple],
+    preds: dict[str, list[tuple[str, str, float]]],
+) -> set[str]:
+    """Nodes trapped in circular logic (Kahn residue).
+
+    (M2) The forward pass schedules these from the data date so a
+    diagnostic view never crashes — but their dates are order-dependent,
+    so quantum consumers must GATE when a cycle touches the measured
+    path rather than present a warned arbitrary number.
+    """
+    indeg = {n: 0 for n in nodes}
+    succs: dict[str, list[str]] = {n: [] for n in nodes}
+    for n, plist in preds.items():
+        for p, _, _ in plist:
+            if p in nodes and n in nodes:
+                succs[p].append(n)
+                indeg[n] += 1
+    queue = [n for n, d in indeg.items() if d == 0]
+    done = 0
+    while queue:
+        u = queue.pop()
+        done += 1
+        for v in succs[u]:
+            indeg[v] -= 1
+            if indeg[v] == 0:
+                queue.append(v)
+    return {n for n, d in indeg.items() if d > 0}
 
 
 def forward_pass(
@@ -177,7 +214,16 @@ def forward_pass(
         ef = add_working_days(es, max(n_days, 0.0), n_mask)
         drv = drv_start
         if ef_c is not None and ef_c > ef:
+            # (C2) an FF/SF bound governs the finish: back-compute the
+            # start on the activity's own calendar so the duration is
+            # PRESERVED, not stretched — downstream SS logic then reads
+            # the true ES. The FS/SS floor still holds (max), so an
+            # in-progress pin or an earlier-start constraint is never
+            # violated; in that corner the finish bound stretches the
+            # bar, which is the constraint case, not the default.
             ef, drv = ef_c, drv_fin
+            es = max(es, sub_working_days(ef_c, max(n_days, 0.0),
+                                          n_mask))
         ES[n], EF[n] = es, ef
         if drv is not None:
             driver[n] = drv

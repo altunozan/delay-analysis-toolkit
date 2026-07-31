@@ -103,13 +103,20 @@ def _actual_span_days(t, dd: datetime | None,
 
 def _schedule(nodes: dict[str, float],
               rels: list[tuple[str, str, str, float]],
-              anchor: datetime) -> tuple[dict, dict]:
+              anchor: datetime) -> tuple[dict, dict, bool]:
     """Calendar-day forward pass honouring FS/SS/FF/SF (lags in days).
 
     Iterative relaxation with a pass cap — P6 networks are acyclic, but
-    a cap keeps a malformed file from hanging the engine."""
+    a cap keeps a malformed file from hanging the engine.
+
+    Returns (ES, EF, converged). (C3) A positive cycle never converges:
+    the dates at the cap are a function of HOW MANY passes ran — i.e.
+    of unrelated network size — so a non-converged result is
+    arbitrary and the caller must SUPPRESS quantum, not present it.
+    """
     ES = {c: anchor for c in nodes}
     EF = {c: anchor + timedelta(days=d) for c, d in nodes.items()}
+    converged = False
     for _ in range(len(nodes) + 50):
         changed = False
         for pred, succ, lt, lag in rels:
@@ -129,8 +136,9 @@ def _schedule(nodes: dict[str, float],
                 EF[succ] = bound + timedelta(days=nodes[succ])
                 changed = True
         if not changed:
+            converged = True
             break
-    return ES, EF
+    return ES, EF, converged
 
 
 def collapse_asbuilt(
@@ -186,7 +194,20 @@ def collapse_asbuilt(
             return EF[anchor_code]
         return max(EF.values()) if EF else None
 
-    ES1, EF1 = _schedule(dict(nodes), rels, anchor)
+    ES1, EF1, conv1 = _schedule(dict(nodes), rels, anchor)
+    if not conv1:
+        # (C3) non-convergence = a positive cycle: the dates are an
+        # artefact of the pass cap and of unrelated network size.
+        # QUANTUM IS SUPPRESSED — a warned-but-shown arbitrary number
+        # is exactly what an audit will find.
+        result.warnings.append(
+            "QUANTUM SUPPRESSED: the as-built logic contains a "
+            "positive cycle — the relaxation did not converge, so any "
+            "completion date would be an artefact of iteration count, "
+            "not of the network. Repair the circular logic (OOS "
+            "module / revision comparison) and re-run; no collapse "
+            "figures are reported from this model.")
+        return result
     result.model_completion = _completion(EF1)
     if anchor_code and anchor_code not in nodes:
         result.warnings.append(
@@ -218,7 +239,13 @@ def collapse_asbuilt(
     collapsed_nodes = dict(nodes)
     for c in result.removed_codes:
         collapsed_nodes[c] = 0.0
-    ES2, EF2 = _schedule(collapsed_nodes, rels, anchor)
+    ES2, EF2, conv2 = _schedule(collapsed_nodes, rels, anchor)
+    if not conv2:
+        result.warnings.append(
+            "QUANTUM SUPPRESSED: the collapsed run did not converge "
+            "(positive cycle after extraction) — no delta is reported.")
+        result.model_completion = None
+        return result
     result.collapsed_completion = _completion(EF2)
     if result.model_completion and result.collapsed_completion:
         result.delta_days = round(

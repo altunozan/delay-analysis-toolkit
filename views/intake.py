@@ -9,7 +9,7 @@ import pandas as pd
 import streamlit as st
 
 import state as sk
-from dcma import DCMAConfig, parse_xer
+from dcma import DCMAConfig, parse_xer, structural_defects
 from programme import (
     inventory_appendix,
     CLOUD_BUDGET_MB, CLOUD_PARSE_FACTOR, ProjectStore, STORE_CAVEATS,
@@ -150,6 +150,17 @@ def intake_tab() -> None:
                     stash_raw(uname, raw)
                     data = parse_xer(raw, DCMAConfig())
                     del raw
+                    # (C4) evidential hard gate — a multi-project file
+                    # or duplicate Activity IDs silently merge nodes in
+                    # every code-keyed calculation. Refuse the file.
+                    _defects = structural_defects(data)
+                    if _defects:
+                        st.error(f"**'{uname}' refused — structural "
+                                 "defect(s) that would silently corrupt "
+                                 "the analysis:**\n\n"
+                                 + "\n\n".join(f"- {d}"
+                                               for d in _defects))
+                        continue
                 except Exception as exc:  # noqa: BLE001 - per-file errors
                     st.warning(f"Skipped '{uname}': {exc}")
                     continue
@@ -189,7 +200,14 @@ def intake_tab() -> None:
     # impact bands). Without it, modules trace to the latest finisher —
     # and post-PC activities (demob, DLP, handover admin) silently
     # become the measured completion.
-    _latest_data = files[-1][1] if files else None
+    # milestone options come from the inventory's CURRENT revision (the
+    # latest data date), not files[-1] — the pool is in upload order
+    _by_name = dict(files)
+    _latest_data = None
+    if inv.current is not None:
+        _latest_data = _by_name.get(inv.current.file_name)
+    if _latest_data is None and files:
+        _latest_data = files[-1][1]
     _ms_opts = ["(auto — latest finisher)"]
     _ms_map = {}
     if _latest_data is not None:
