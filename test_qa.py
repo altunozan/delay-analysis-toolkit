@@ -2785,6 +2785,118 @@ check("N21d intake refuses before allocating on an unsafe estimate",
       and _n21src.index("Refusing to parse")
       < _n21src.index("Parsing programmes"))
 
+# =========================================================================
+# P layer — audit fix pins (misdescribed outputs, election, contrast,
+# Excel work-product)
+# =========================================================================
+print("== P. Audit fix pins ==")
+
+# SELF-CONTAINED: by this point in the suite several early globals
+# (_p, cfg, ...) have been shadowed by later layers — everything this
+# layer needs is re-derived locally
+import os as _os_p
+
+from dcma.config import DCMAConfig as _DCMAConfigP
+
+
+def _pp(rel: str) -> str:
+    return _os_p.path.join(_os_p.path.dirname(_os_p.path.abspath(__file__)),
+                           rel)
+
+
+_cfgP = _DCMAConfigP()
+with open(_pp("sample/Sample Baseline.xer"), "rb") as fh:
+    _BP = parse_xer(fh.read())
+with open(_pp("sample/Sample Update.xer"), "rb") as fh:
+    _UP = parse_xer(fh.read())
+
+# P1: check 12 tests CONTINUITY, and the counts feeding narratives are
+# computed, never hardcoded
+_hp = _pp("sample/programmes/harbour_point_dcp03/"
+          "Harbour Point DCP-03 - Baseline Programme Rev 0.xer")
+with open(_hp, "rb") as fh:
+    _HPB = parse_xer(fh.read())
+_c12_hp = next(c for c in run_all_checks(_HPB, _cfgP) if c.number == 12)
+_c12_b = next(c for c in run_all_checks(_BP, _cfgP) if c.number == 12)
+check("P1 check 12 passes a genuinely continuous path (1 segment)",
+      str(_c12_hp.status).endswith("PASS")
+      and "1 segment" in _c12_hp.metric_value, _c12_hp.metric_value)
+check("P1b check 12 fails disconnected low-float segments",
+      str(_c12_b.status).endswith("FAIL")
+      and "DISCONNECTED" in _c12_b.summary, _c12_b.metric_value)
+check("P1c no hardcoded 'of 14' denominator in views",
+      all("of 14 " not in open(_pp(f)).read()
+          for f in ("views/report.py", "views/tia.py")))
+
+import io as _io4
+
+# P2: revision election — reversed upload order still lands is_current
+# on the latest data date, and the shared resolver follows it
+from programme import build_inventory
+_fwd = [("Sample Baseline.xer", _BP), ("Sample Update.xer", _UP)]
+_inv_r = build_inventory(list(reversed(_fwd)))
+check("P2 reversed upload: is_current still the latest data date",
+      _inv_r.current is not None
+      and _inv_r.current.file_name == "Sample Update.xer")
+from views._shared import current_default_index
+_names_r = [n for n, _ in reversed(_fwd)]        # update first
+check("P2b resolver elects the current revision, not position",
+      _names_r[current_default_index(_names_r, _inv_r)]
+      == "Sample Update.xer")
+
+# P3: disclosure text contrast >= AA 4.5:1, computed from the theme
+# constants so a palette edit cannot silently regress it
+import re as _re
+
+
+def _lum(hexc):
+    ch = [int(hexc[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    ch = [x / 12.92 if x <= 0.04045 else ((x + 0.055) / 1.055) ** 2.4
+          for x in ch]
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+
+
+def _contrast(fg, bg):
+    a, b = sorted((_lum(fg), _lum(bg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+_theme = open(_pp("views/_theme.py")).read()
+_soft = _re.search(r"--dsi-soft:\s*#([0-9A-Fa-f]{6})", _theme).group(1)
+_paper = _re.search(r"--dspaper:\s*#([0-9A-Fa-f]{6})", _theme).group(1)
+check("P3 annotation voice meets AA on paper (>= 4.5:1)",
+      _contrast(_soft, _paper) >= 4.5,
+      f"{_contrast(_soft, _paper):.2f}:1")
+_gantt_src = open(_pp("programme/gantt_html.py")).read()
+_muted = _re.search(r"--muted:\s*#([0-9A-Fa-f]{6})", _gantt_src).group(1)
+_canvas = _re.search(r"--canvas:\s*#([0-9A-Fa-f]{6})", _gantt_src).group(1)
+check("P3b gantt annotation voice meets AA on canvas",
+      _contrast(_muted, _canvas) >= 4.5,
+      f"{_contrast(_muted, _canvas):.2f}:1")
+
+# P4: band exported as data, autofilter on every single-table sheet
+from dcma.report_xlsx import build_xlsx_report as _dcma_xlsx
+_cp_p = extract_longest_path(_BP, "Baseline")
+_wb_cp = load_workbook(_io4.BytesIO(build_critical_path_xlsx(_cp_p, None)))
+_ws_cp = _wb_cp["Critical Path"]
+_hdrs = [c.value for c in _ws_cp[5]]
+check("P4 CP export carries Band as a COLUMN, not colour only",
+      "Band" in _hdrs and _ws_cp.cell(
+          row=6, column=_hdrs.index("Band") + 1).value
+      in ("Critical", "Near-critical"))
+check("P4b CP sheet has an autofilter", bool(_ws_cp.auto_filter.ref))
+_wb_d = load_workbook(_io4.BytesIO(
+    _dcma_xlsx(_BP, run_all_checks(_BP, _cfgP), "Baseline")))
+check("P4c DCMA scorecard + detail sheets have autofilters",
+      bool(_wb_d["Summary"].auto_filter.ref)
+      and all(bool(ws.auto_filter.ref) for ws in _wb_d.worksheets
+              if ws.title[0].isdigit()))
+_no_filter = [ws.title for ws in _wb_cp.worksheets
+              if ws.max_row > 6 and ws.title not in
+              ("AI Narrative", "Caveats") and not ws.auto_filter.ref]
+check("P4d every data sheet in the CP workbook is filterable",
+      not _no_filter, str(_no_filter))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

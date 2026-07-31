@@ -19,7 +19,7 @@ from dcma.report_xlsx import build_xlsx_report
 from programme import dcma_appendix
 from views._shared import (
     STATUS_BG, STATUS_COLORS, _cfgkey, _fkey, ai_narrative_panel, cached_dcma,
-    get_parsed_files,
+    current_default_index, get_parsed_files,
 )
 
 
@@ -278,7 +278,11 @@ def dcma_tab() -> None:
         return
 
     names = [n for n, _ in files]
-    chosen = st.selectbox("Programme to assess", names, key="dcma_file")
+    # default = the inventory's is_current revision (latest data date),
+    # NOT files[0] — the pool is in upload order
+    chosen = st.selectbox("Programme to assess", names,
+                          index=current_default_index(names),
+                          key="dcma_file")
     data = dict(files)[chosen]
 
     cfg = dcma_config_panel()

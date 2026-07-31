@@ -46,6 +46,24 @@ def get_parsed_files() -> list[tuple[str, object]]:
     return st.session_state.get(sk.XER_POOL, [])
 
 
+def current_default_index(names: list[str], inv=None) -> int:
+    """Default selectbox index for a "which programme" picker.
+
+    The parsed pool is stored in UPLOAD order; only the inventory sorts
+    by data date and stamps ``is_current`` on the latest. Any page that
+    defaults by position into the raw pool is electing "whatever was
+    uploaded first/last" — this resolver reads the inventory's election
+    instead, so the default survives files being uploaded in any order.
+    ``inv`` is injectable for tests; it falls back to session state.
+    """
+    if inv is None:
+        inv = st.session_state.get(sk.INVENTORY)
+    cur = getattr(inv, "current", None) if inv is not None else None
+    if cur is not None and getattr(cur, "file_name", None) in names:
+        return names.index(cur.file_name)
+    return len(names) - 1 if names else 0
+
+
 def gantt_fullscreen_button(html: str, stub: str, key: str) -> None:
     """Standalone-HTML download for a chart — the guaranteed full-screen
     path (the in-chart ⛶ button depends on the iframe's permission)."""

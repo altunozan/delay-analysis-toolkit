@@ -106,10 +106,18 @@ def report_tab() -> None:
     # DCMA on baseline
     results = run_all_checks(pool[base_name], DCMAConfig())
     fails = [r for r in results if r.status == CheckStatus.FAIL]
-    passes = [r for r in results if r.status == CheckStatus.PASS]
+    # denominators COMPUTED, never hardcoded: run_all_checks returns the
+    # 14 core points plus supplementary checks (15+, labelled "supp.")
+    core = [r for r in results if r.number <= 14]
+    supp = [r for r in results if r.number > 14]
+    core_pass = sum(1 for r in core if r.status == CheckStatus.PASS)
+    supp_pass = sum(1 for r in supp if r.status == CheckStatus.PASS)
     sec = ReportSection("Programme Examination (DCMA 14-Point)")
     sec.key_findings = [
-        f"Baseline '{base_name}': {len(passes)} of 14 checks passed.",
+        f"Baseline '{base_name}': {core_pass} of {len(core)} core DCMA "
+        "checks passed"
+        + (f"; {supp_pass} of {len(supp)} supplementary checks passed."
+           if supp else "."),
         "Checks not met: " + ", ".join(f"{r.number} {r.name}"
                                        for r in fails) + "."
         if fails else "All checks met.",

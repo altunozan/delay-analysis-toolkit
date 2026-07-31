@@ -16,7 +16,7 @@ import json
 _TEMPLATE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   :root {
-    --canvas: #FCFCFA; --panel: #F1F5F9; --ink: #14324A; --muted: #5B7994;
+    --canvas: #FCFCFA; --panel: #F1F5F9; --ink: #14324A; --muted: #55708B;
     --line: #C6D4E0; --strong: #8FA9BE; --navy: #14324A;
     --done: #2f9e44; --done-b: #23763375;
     --active: #f2a33c; --active-b: #b9770e75;
@@ -563,7 +563,7 @@ def build_apab_gantt_html(
         r.get("planned_start"), r.get("planned_finish"),
         r.get("actual_start"), r.get("actual_finish")) if d]
     if not use or not dates:
-        return ("<body style='background:#FCFCFA;color:#5B7994;"
+        return ("<body style='background:#FCFCFA;color:#55708B;"
                 "font-family:sans-serif'>No dated activities to draw."
                 "</body>")
     t0, t1 = min(dates), max(dates)
@@ -617,17 +617,17 @@ def build_apab_gantt_html(
          border-right:1.5px solid #14324A; }
   .lbl div { display:flex; gap:8px; align-items:center;
              padding:0 8px; font-size:11.5px; white-space:nowrap; }
-  .aid { width:104px; color:#5B7994; overflow:hidden; flex:none;
+  .aid { width:104px; color:#55708B; overflow:hidden; flex:none;
          font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:10.5px; }
   .anm { width:230px; overflow:hidden; text-overflow:ellipsis; flex:none; }
-  .adt { width:74px; color:#5B7994; font-size:10.5px; flex:none;
+  .adt { width:74px; color:#55708B; font-size:10.5px; flex:none;
          font-family:ui-monospace,"SF Mono",Menlo,monospace;
          font-variant-numeric:tabular-nums; }
   .var { width:52px; text-align:right; font-weight:700; flex:none;
          font-family:ui-monospace,"SF Mono",Menlo,monospace;
          font-variant-numeric:tabular-nums; }
   .late { color:#9B3227; } .early { color:#3F6B4F; }
-  .hdr .lbl div { color:#5B7994; font-size:9.5px; font-weight:600;
+  .hdr .lbl div { color:#55708B; font-size:9.5px; font-weight:600;
                   border-bottom:2px solid #14324A; height:26px;
                   text-transform:uppercase; letter-spacing:.09em;
                   font-family:ui-monospace,"SF Mono",Menlo,monospace; }
@@ -645,30 +645,30 @@ def build_apab_gantt_html(
   .ab  { top:19px; height:7px; }
   .dia { position:absolute; width:10px; height:10px; top:11px;
          transform:rotate(45deg); }
-  .conn { position:absolute; top:15px; border-top:1.5px dashed #5B7994; }
+  .conn { position:absolute; top:15px; border-top:1.5px dashed #55708B; }
   .dlab { position:absolute; top:5px; font-size:9.5px; font-weight:700;
           white-space:nowrap;
           font-family:ui-monospace,"SF Mono",Menlo,monospace; }
-  .leg { padding:5px 14px; font-size:10px; color:#5B7994;
+  .leg { padding:5px 14px; font-size:10px; color:#55708B;
          background:#F1F5F9; border-bottom:1px solid #C6D4E0;
          text-transform:uppercase; letter-spacing:.08em;
          font-family:ui-monospace,"SF Mono",Menlo,monospace; }
   .sw { display:inline-block; width:14px; height:7px; margin:0 4px;
         vertical-align:middle; }
   .mon { position:absolute; top:0; bottom:0; border-left:1px solid #D3E0EA;
-         color:#5B7994; font-size:9px; padding-left:3px;
+         color:#55708B; font-size:9px; padding-left:3px;
          font-family:ui-monospace,"SF Mono",Menlo,monospace; }
   .tblock { display:flex; border-top:2px solid #14324A; background:#FCFCFA;
             font-family:ui-monospace,"SF Mono",Menlo,monospace; font-size:9px;
             flex-wrap:wrap; }
   .tblock div { border-right:1px solid #14324A; padding:4px 9px; }
   .tblock div:last-child { border-right:0; }
-  .tblock span { display:block; color:#5B7994; letter-spacing:.11em;
+  .tblock span { display:block; color:#55708B; letter-spacing:.11em;
                  font-size:7.5px; text-transform:uppercase; }
   .tblock b { font-size:10px; letter-spacing:.02em; }
   .curt { position:absolute; top:0; bottom:0;
           background:rgba(20,50,74,.05);
-          border-left:1.5px dashed #5B7994; }
+          border-left:1.5px dashed #55708B; }
   .curt.alt { background:rgba(155,50,39,.045); }
   .wlab { position:absolute; top:1px; font-size:9px; font-weight:700;
           color:#14324A; white-space:nowrap; padding-left:4px;
@@ -701,7 +701,7 @@ def build_apab_gantt_html(
 <span class='sw' style='background:repeating-linear-gradient(135deg,#3F6B4F 0 2px,transparent 2px 5px),#E8F0EA;border:.5px solid #3F6B4F'></span>as-built on time (135&#176; open)
 <span class='sw' style='height:0;border-top:1.5px solid #14324A'></span>as-planned
 <span style='color:#14324A'>&#9670;</span> key date actual
-<span style='color:#5B7994'>&#9671;</span> planned
+<span style='color:#55708B'>&#9671;</span> planned
 """ + fs_btn + """</div>
 <div id='wrap'><table class='cmp'>"""]
 
@@ -751,7 +751,7 @@ def build_apab_gantt_html(
         parts.append("<tr class='r' style='height:16px'>"
                      "<td class='lbl'><div><span class='aid'></span>"
                      "<span class='anm' style='font-size:9.5px;"
-                     "color:#5B7994'>ANALYSIS WINDOWS — project start "
+                     "color:#55708B'>ANALYSIS WINDOWS — project start "
                      "→ key date 1 → … (label = delay accrued in the "
                      "window; delay AT each key date is measured "
                      "direct, actual vs planned finish)</span>"
@@ -810,7 +810,7 @@ def build_apab_gantt_html(
         if is_kd and pf and af:
             xa, xp = x(af), x(pf)
             kids.append(f"<div class='dia' style='left:{xp-5:.0f}px;"
-                        "outline:1.5px solid #5B7994'></div>")
+                        "outline:1.5px solid #55708B'></div>")
             kids.append(f"<div class='dia' style='left:{xa-5:.0f}px;"
                         "background:#14324A'></div>")
             lo, hi = min(xa, xp), max(xa, xp)

@@ -529,32 +529,116 @@ def check_11_missed_tasks(data: XerData, config: DCMAConfig) -> CheckResult:
 # Check 12: Critical Path Test
 # ---------------------------------------------------------------------------
 def check_12_critical_path(data: XerData, config: DCMAConfig) -> CheckResult:
+    """The test is CONTINUITY, not population: the threshold this check
+    advertises is ">= 1 continuous critical path", so counting low-float
+    activities alone is not enough. The low-float population is screened
+    for a connected chain that spans from the earliest critical start
+    (the data-date side) to the latest critical finish (completion) —
+    the same connected-components walk as the critical-path engine
+    (programme/critical_path.py; re-implemented here because dcma/ sits
+    below programme/ in the dependency order)."""
     tol = config.critical_float_tolerance_days
     activities = [t for t in _eligible_activities(data) if t.is_incomplete]
-    critical = []
+    if not activities:
+        # fully progressed programme (e.g. an as-built): there is no
+        # remaining path to test — that is not a defect
+        return CheckResult(
+            number=12, name="Critical Path Test", status=CheckStatus.NA,
+            metric_label="Critical activities / chain segments",
+            metric_value="N/A",
+            threshold=">= 1 continuous critical path",
+            summary="All activities are complete — no remaining "
+                    "network exists, so the forward-path test does "
+                    "not apply.",
+            na_reason="No incomplete activities.")
+    crit_tasks = []
     for t in activities:
         hpd = data.hours_per_day(t, config)
         tf = t.total_float_days(hpd)
         if tf is not None and tf <= tol:
-            critical.append(t.task_code)
-
+            crit_tasks.append(t)
+    critical = [t.task_code for t in crit_tasks]
     has_critical = len(critical) > 0
-    status = CheckStatus.PASS if has_critical else CheckStatus.FAIL
+
+    # connected components of the critical subnetwork (links between
+    # two critical activities, either direction)
+    crit_ids = {t.task_id for t in crit_tasks}
+    adjacency: dict[str, set[str]] = {tid: set() for tid in crit_ids}
+    for rel in data.relationships:
+        if rel.task_id in crit_ids and rel.pred_task_id in crit_ids:
+            adjacency[rel.pred_task_id].add(rel.task_id)
+            adjacency[rel.task_id].add(rel.pred_task_id)
+    seen: set[str] = set()
+    components: list[set[str]] = []
+    for tid in crit_ids:
+        if tid in seen:
+            continue
+        comp: set[str] = set()
+        stack = [tid]
+        while stack:
+            cur = stack.pop()
+            if cur in comp:
+                continue
+            comp.add(cur)
+            stack.extend(adjacency.get(cur, ()))
+        seen |= comp
+        components.append(comp)
+    segments = len(components)
+
+    # the driving component must span earliest start -> latest finish
+    spanning = False
+    stray_codes: list[str] = []
+    if has_critical:
+        by_id = {t.task_id: t for t in crit_tasks}
+        starts = [t for t in crit_tasks if (t.act_start or t.early_start)]
+        fins = [t for t in crit_tasks if (t.act_finish or t.early_finish)]
+        if starts and fins:
+            first = min(starts,
+                        key=lambda t: t.act_start or t.early_start)
+            last = max(fins,
+                       key=lambda t: t.act_finish or t.early_finish)
+            driving = next((c for c in components if last.task_id in c),
+                           set())
+            spanning = first.task_id in driving
+            stray_codes = sorted(by_id[tid].task_code
+                                 for tid in crit_ids - driving)
+        else:
+            spanning = segments == 1     # undated file: continuity only
+
+    status = (CheckStatus.PASS if has_critical and spanning
+              else CheckStatus.FAIL)
     pct = _pct(len(critical), len(activities))
+    if not has_critical:
+        summary = ("No critical-path activities found; schedule may "
+                   "lack a valid critical path.")
+    elif spanning:
+        summary = (
+            f"{len(critical)} activities (TF <= {tol:.0f}d) form a "
+            "continuous critical path from earliest start to latest "
+            "finish"
+            + (f"; {len(stray_codes)} low-float activities sit outside "
+               "the driving chain." if stray_codes else "."))
+    else:
+        summary = (
+            f"{len(critical)} low-float activities (TF <= {tol:.0f}d) "
+            f"form {segments} DISCONNECTED chain segments — no single "
+            "continuous path spans the programme; missing logic or "
+            "constraints are likely breaking the path (see checks 1 "
+            "and 5).")
     return CheckResult(
         number=12,
         name="Critical Path Test",
         status=status,
-        metric_label="Critical (near-zero float) activities",
-        metric_value=f"{len(critical)} of {len(activities)} ({pct:.1f}%)",
+        metric_label="Critical activities / chain segments",
+        metric_value=(f"{len(critical)} of {len(activities)} "
+                      f"({pct:.1f}%) in {segments} segment(s)"),
         threshold=">= 1 continuous critical path",
-        summary=(
-            f"{len(critical)} activities sit on the critical path "
-            f"(total float <= {tol:.0f}d)."
-            if has_critical else
-            "No critical-path activities found; schedule may lack a valid critical path."
-        ),
-        affected_ids=critical,
+        summary=summary,
+        affected_ids=stray_codes if spanning else critical,
+        detail_rows=[{
+            "Activity ID": c,
+            "Finding": "Low-float activity outside the driving chain",
+        } for c in stray_codes],
     )
 
 

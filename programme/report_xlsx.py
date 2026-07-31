@@ -40,6 +40,17 @@ def _wb_bytes(wb: Workbook) -> bytes:
     for ws in wb.worksheets:
         ws.oddFooter.left.text = stamp
         ws.oddFooter.left.size = 7
+        # every table gets an Excel autofilter: _header_row() recorded
+        # where the header sits. Sheets with MULTIPLE stacked tables are
+        # skipped — one filter range would swallow the lower table and
+        # filtering would hide its rows. Computed before the stamp line
+        # below so the stamp never lands inside a filter range.
+        anchors = getattr(ws, "_hdr_anchors", [])
+        if len(anchors) == 1 and not ws.auto_filter.ref:
+            row, ncols = anchors[0]
+            if ws.max_row > row and ncols:
+                ws.auto_filter.ref = (
+                    f"A{row}:{get_column_letter(ncols)}{ws.max_row}")
     ws0 = wb.worksheets[0]
     c = ws0.cell(row=ws0.max_row + 2, column=1, value=stamp)
     c.font = Font(size=8, italic=True, color="808080")
@@ -64,6 +75,10 @@ def _header_row(ws, row: int, headers: list[str]) -> None:
         c.fill = HEADER_FILL
         c.font = HEADER_FONT
         c.border = THIN_BORDER
+    # record the table anchor so _wb_bytes can set the autofilter
+    if not hasattr(ws, "_hdr_anchors"):
+        ws._hdr_anchors = []
+    ws._hdr_anchors.append((row, len(headers)))
 
 
 def _autofit(ws, widths: dict[int, int]) -> None:
@@ -231,7 +246,7 @@ def build_critical_path_xlsx(cp, narrative: str | None = None) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Critical Path"
-    _title(ws, f"Planned Critical Path — {cp.programme_label}", 7)
+    _title(ws, f"Planned Critical Path — {cp.programme_label}", 8)
 
     ws.cell(row=3, column=1, value=(
         f"{len(cp.critical)} critical (TF <= {cp.float_tolerance_days:.0f}d), "
@@ -240,24 +255,30 @@ def build_critical_path_xlsx(cp, narrative: str | None = None) -> bytes:
         f"{'continuous path' if cp.is_continuous else f'{cp.chain_segments} broken segments'}"
     )).font = Font(italic=True)
 
-    headers = ["Activity ID", "Activity Name", "Type", "Early Start",
-               "Early Finish", "Duration (d)", "Total Float (d)"]
+    # Band is DATA, not decoration: the membership carried only by the
+    # fill colour is unreadable to a filter, a screen reader, or a
+    # printed page — the same colour-only defect purged from the gantts
+    headers = ["Activity ID", "Activity Name", "Type", "Band",
+               "Early Start", "Early Finish", "Duration (d)",
+               "Total Float (d)"]
     _header_row(ws, 5, headers)
     row = 6
     for a in cp.activities:
+        band = ("Critical" if a.band == "critical" else "Near-critical")
         values = [a.task_code, a.name,
-                  "Milestone" if a.is_milestone else "Task",
+                  "Milestone" if a.is_milestone else "Task", band,
                   _fmt(a.early_start), _fmt(a.early_finish),
                   a.duration_days, a.total_float_days]
         for col, v in enumerate(values, start=1):
             c = ws.cell(row=row, column=col, value=v)
             c.border = THIN_BORDER
-            if col == 7 and isinstance(v, float):
+            if col == 8 and isinstance(v, float):
                 c.fill = SLIP_FILL if v < 0 else (
                     GAIN_FILL if a.band == "critical" else PatternFill(
                         "solid", fgColor="FFF2CC"))
         row += 1
-    _autofit(ws, {1: 16, 2: 55, 3: 11, 4: 12, 5: 12, 6: 12, 7: 14})
+    _autofit(ws, {1: 16, 2: 55, 3: 11, 4: 13, 5: 12, 6: 12, 7: 12,
+                  8: 14})
     ws.freeze_panes = "A6"
 
     if cp.links:

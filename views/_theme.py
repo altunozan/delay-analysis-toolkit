@@ -17,7 +17,7 @@ _THEME_CSS = """
 <style>
 :root {
   --dsi:      #14324A;   /* drafting ink            */
-  --dsi-soft: #5B7994;   /* annotation / secondary  */
+  --dsi-soft: #55708B;   /* annotation / secondary  */
   --dsr:      #9B3227;   /* revision red (slip)     */
   --dsg:      #3F6B4F;   /* gain / on-programme     */
   --dsline:   #C6D4E0;   /* hairline                */

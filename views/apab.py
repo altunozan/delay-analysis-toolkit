@@ -181,6 +181,30 @@ def apab_tab() -> None:
                        help=None if achieved else
                        "Milestone not achieved — the as-built side is "
                        "the programme's own forecast.")
+        # ---- basis sensitivity ----------------------------------- #
+        # the SAME measurement under the other basis election, shown
+        # alongside the elected one — the magnitude of the date-basis
+        # choice is disclosed here, not discoverable only by flipping
+        # the radio and remembering
+        alt = "early" if date_basis == "late" else "late"
+        sens_lines = []
+        for ms, delay, _ach in mets:
+            alt_delay = _ms_delay(
+                planned_vs_actual(baseline, latest,
+                                  {c for c, _ in paths[ms]},
+                                  date_basis=alt), ms)
+            pair = {date_basis: delay, alt: alt_delay}
+            sens_lines.append(
+                f"**{ms}**: "
+                + " · ".join(
+                    (f"**{pair[b]:+.0f} d on {b} dates (elected)**"
+                     if b == date_basis else
+                     f"{pair[b]:+.0f} d on {b} dates")
+                    if pair[b] is not None else f"— on {b} dates"
+                    for b in ("late", "early")))
+        st.caption("Basis sensitivity — the same measurement under "
+                   "both baseline date elections:  \n"
+                   + "  \n".join(sens_lines))
         _g2 = build_apab_gantt_html(
             display,
             title=f"As-planned ({date_basis} dates) vs as-built",

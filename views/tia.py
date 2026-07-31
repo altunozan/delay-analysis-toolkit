@@ -161,13 +161,13 @@ def tia_tab() -> None:
         st.caption(f"Data date: **{dd:%d %b %Y}**" if dd
                    else "⚠️ No data date in this file.")
         # Schedule-Health gateway
-        fails = [r for r in run_all_checks(data, DCMAConfig())
-                 if r.status == CheckStatus.FAIL]
+        results = run_all_checks(data, DCMAConfig())
+        fails = [r for r in results if r.status == CheckStatus.FAIL]
         serious = [r for r in fails if r.number in (1, 2, 5, 7, 9, 11)]
         if serious:
             st.warning(
                 "**Schedule-Health gateway:** this update fails "
-                f"{len(fails)} of 14 DCMA checks, including "
+                f"{len(fails)} of {len(results)} DCMA checks, including "
                 + ", ".join(f"#{r.number} {r.name}" for r in serious)
                 + ". Serious defects (open logic, leads, constraints, "
                 "negative float, invalid dates, out-of-sequence) weaken "

@@ -123,6 +123,7 @@ def build_xlsx_report(
 
     _autofit(ws, {1: 4, 2: 20, 3: 9, 4: 38, 5: 26, 6: 14, 7: 9, 8: 60})
     ws.freeze_panes = f"A{row - len(results)}"
+    ws.auto_filter.ref = f"A{row - len(results) - 1}:H{row - 1}"
 
     # ------------------------------------------------------------------ #
     # Detail sheets — one per check with affected activities
@@ -151,6 +152,9 @@ def build_xlsx_report(
                 c.border = THIN_BORDER
         _autofit(dws, {i: 28 for i in range(1, len(cols) + 1)})
         dws.freeze_panes = f"A{hrow + 1}"
+        dws.auto_filter.ref = (
+            f"A{hrow}:{get_column_letter(len(cols))}"
+            f"{hrow + len(r.detail_rows)}")
 
     # ------------------------------------------------------------------ #
     # Traceback sheets (optional)
@@ -183,6 +187,7 @@ def build_xlsx_report(
                 tws.cell(row=i, column=col, value=v).border = THIN_BORDER
         _autofit(tws, {1: 5, 2: 18, 3: 46, 4: 10, 5: 12, 6: 12, 7: 9,
                        8: 24, 9: 30})
+        tws.auto_filter.ref = f"A4:I{4 + len(c.steps)}"
         tws.freeze_panes = "A5"
 
     if trace is not None and trace.float_driver_groups:

@@ -157,7 +157,7 @@ def windows_tab() -> None:
         _lbls = _wb.mark_text(dy=-8, fontWeight="bold", fontSize=12).encode(
             y=alt.Y("top:Q"), text="lbl:N")
         _zero = alt.Chart(pd.DataFrame({"y": [0.0]})).mark_rule(
-            strokeDash=[4, 3], color="#5B7994").encode(y="y:Q")
+            strokeDash=[4, 3], color="#55708B").encode(y="y:Q")
         st.altair_chart(
             (_bars + _lbls + _zero).properties(
                 height=300, title=f"{_pick} — movement decomposed"),
