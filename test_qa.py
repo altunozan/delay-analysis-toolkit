@@ -3054,6 +3054,63 @@ check("X-M6 hosted deployment fails CLOSED without a secret",
       and _xapp.index("Access not configured")
       < _xapp.index("Access password"))
 
+# =========================================================================
+# S layer — release-stress pins (2026-07-31 stress campaign)
+# =========================================================================
+print("== S. Release-stress pins ==")
+
+# S1 — THE stress finding: cumulative TIA gates a cycle-creating event
+_sloop = [_XFA("TIA-S1", "loop", 5, predecessors=[_XFL("TOC05")],
+               successors=[_XFL("TOC05")])]
+# explicit dates: the clean event must SORT first (undated events sort
+# to the data date, i.e. after June 2016)
+_sev1 = _XDE("EV-S1", "earlier", "", _xdt(2016, 3, 1))
+_sev2 = _XDE("EV-S2", "later", "", _xdt(2016, 6, 1))
+_sc = _xcum(_XU, "U", [(_sev1, _xfrag), (_sev2, _sloop)],
+            target_milestone="TOC05")
+check("S1 cumulative gates the cycle-creating event",
+      _sc["gated"] and _sc["total_delta_days"] is None
+      and any("QUANTUM GATED" in w for w in _sc["warnings"]))
+check("S1b rows before the gated event remain (earlier increments valid)",
+      len(_sc["rows"]) == 1
+      and _sc["rows"][0]["event_id"] == "EV-S1")
+
+# S2 — CPM corner pins from the truth table
+_sMF = (frozenset(range(0, 5)), frozenset(), frozenset())
+_sES, _sEF, _, _ = _xfwd(
+    {"P": (2.0, _sMF), "Q": (10.0, _sMF), "S": (5.0, _sMF)},
+    {"P": [], "Q": [], "S": [("Q", "FS", 0.0), ("P", "FF", 0.0)]},
+    _xdt(2026, 1, 5), {})
+check("S2 late FS floor beats an early FF bound",
+      _sES["S"] == _sEF["Q"]
+      and _sEF["S"] == _xadd(_sES["S"], 5, _sMF))
+_sES, _sEF, _, _ = _xfwd(
+    {"P": (30.0, _sMF), "S": (2.0, _sMF)},
+    {"P": [], "S": [("P", "FF", 0.0)]},
+    _xdt(2026, 1, 5), {"S": _xdt(2026, 1, 5)})
+check("S2b in-progress pin never violated by FF back-compute",
+      _sES["S"] >= _xdt(2026, 1, 5) and _sEF["S"] >= _sEF["P"])
+_sES, _sEF, _, _ = _xfwd(
+    {"A": (10.0, _sMF), "B": (3.0, _sMF)},
+    {"A": [], "B": [("A", "SS", -2.0)]}, _xdt(2026, 1, 12), {})
+check("S2c negative SS lag cannot pull before the project floor",
+      _sES["B"] == _xdt(2026, 1, 12))
+
+# S3 — windows telescope exactly on the fixtures (fractional-safe)
+_srevs = []
+for _sf in ("revA.xer", "revB.xer", "revC.xer"):
+    with open(_pp(f"sample/revisions/{_sf}"), "rb") as fh:
+        _srevs.append((_sf, parse_xer(fh.read())))
+_sw = analyse_windows(_srevs)
+_smoves = [r.movement_days for r in _sw.windows
+           if r.movement_days is not None]
+_sdirect = round((_srevs[-1][1].project.scheduled_finish
+                  - _srevs[0][1].project.scheduled_finish).total_seconds()
+                 / 86400, 1)
+check("S3 windows telescope exactly to the direct movement",
+      abs(sum(_smoves) - _sdirect) < 0.05,
+      f"sum={sum(_smoves)} direct={_sdirect}")
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

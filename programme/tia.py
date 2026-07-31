@@ -1200,9 +1200,43 @@ def run_cumulative_tia(
             for l in f.successors:
                 preds_c.setdefault(l.other_id, []).append(
                     (f.act_id, l.link_type, l.lag_days))
-        ES_i, EF_i, _, _ = _forward_pass(
+        ES_i, EF_i, _, drv_i = _forward_pass(
             dict(nodes_c), {k: list(v) for k, v in preds_c.items()},
             dd, started)
+        # (M2, cumulative) an event whose fragnet creates circular
+        # logic on the measured path invalidates THIS and every LATER
+        # increment — dates through a cycle are order-dependent. Gate
+        # from this event onward; earlier rows measured an acyclic
+        # network and remain valid.
+        cyc = _cyclic_nodes(nodes_c, preds_c)
+        if cyc:
+            term = (measured_at if measured_at in EF_i
+                    else (max(EF_i, key=lambda k: EF_i[k])
+                          if EF_i else None))
+            on_path, cur, seen_w = set(), term, set()
+            while cur and cur not in seen_w:
+                seen_w.add(cur)
+                if cur in cyc:
+                    on_path.add(cur)
+                cur = drv_i.get(cur)
+            if on_path or (term in cyc):
+                warnings.append(
+                    f"QUANTUM GATED at {event.event_id}: its fragnet "
+                    "creates circular logic on the measured path ("
+                    + ", ".join(sorted(on_path or {term})[:4])
+                    + ") — this and all later increments are "
+                    "suppressed; rows above remain valid. Repair the "
+                    "fragnet logic and re-run.")
+                return {"rows": rows, "total_delta_days": None,
+                        "completion_pre": pre, "completion_final": None,
+                        "concurrency": [], "warnings": warnings,
+                        "measured_at": measured_at, "gated": True,
+                        "caveat": CUMULATIVE_CAVEAT}
+            warnings.append(
+                f"{event.event_id}: {len(cyc)} activities sit in "
+                "circular logic away from the measured path — the "
+                "increments are unaffected, but repair before wider "
+                "reliance.")
         post = _completion(EF_i)
         delta = (round((post - prev).total_seconds() / 86400, 1)
                  if post and prev else None)
