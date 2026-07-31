@@ -34,17 +34,31 @@ from theme import DEFAULT_THEME, THEMES
 def build_report_specs(base, cur, top: int = 12):
     from programme import extract_longest_path
 
-    specs = [
-        frame_to_bar(
+    # milestone-slip slides need TWO DISTINCT data dates; two valid
+    # revisions sharing one (a re-baseline pair, adjacent re-issues)
+    # previously aborted the WHOLE deck via ValueError — one
+    # unavailable view must degrade to a disclosed limitation instead
+    specs = []
+    try:
+        specs.append(frame_to_bar(
             pb.milestone_slip_frame(base, cur, top=top),
             title="Top milestone slips (days, + = later)", mode="stacked",
             orientation="horizontal", show_values=True, show_totals=False,
-            deltas=[], sort="desc"),
-        frame_to_gantt(
+            deltas=[], sort="desc"))
+        specs.append(frame_to_gantt(
             pb.comparison_gantt_frame(base, cur, top=top),
             title="Milestones — baseline vs current",
-            show_remarks=True, show_date_labels=True),
-    ]
+            show_remarks=True, show_date_labels=True))
+    except ValueError as exc:
+        import pandas as _pd
+        specs.append(frame_to_bar(
+            _pd.DataFrame([{"Milestone": "(not available)",
+                            "Slip (days)": 0.0}]),
+            title=("Milestone slip — NOT AVAILABLE: " + str(exc)
+                   + " (both revisions share a data date, or no "
+                   "milestone matched)"),
+            mode="stacked", orientation="horizontal", show_values=False,
+            show_totals=False, deltas=[], sort="desc"))
 
     cp = extract_longest_path(base, "Baseline")
     lp_rows = [

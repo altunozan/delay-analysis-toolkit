@@ -36,87 +36,29 @@ CSTR_LABEL = {
 START_FLOOR_CSTR = {"CS_MSO", "CS_MSOA", "CS_MANDSTART"}
 
 
-def calendar_masks(data: XerData) -> dict[str, tuple]:
-    """clndr_id -> (working weekdays Mon=0..Sun=6, holiday dates).
+# --------------------------------------------------------------------- #
+# Calendar arithmetic DELEGATES to dcma.calendar — ONE implementation
+# (ported from the parallel QA tree, 2026-07-31) shared with the DCMA
+# layer so the two layers can never convert the same lag or holiday
+# differently. The mask is a 6-tuple: positions 0..2 keep the original
+# (weekdays, holidays, extras) contract; 3..5 add hours/day and shift
+# intervals, making FRACTIONAL working-day arithmetic shift-aware
+# (Monday 08:00 + 0.5wd on an 8h shift = Monday 12:00, not 20:00) and
+# working_days_between the exact inverse of the date arithmetic.
+# Whole-day behaviour is unchanged.
+# --------------------------------------------------------------------- #
+from dcma.calendar import (                                    # noqa: E402
+    add_working_days,
+    calendar_masks,
+    is_working,
+    relationship_lag_hours_per_day,
+    sub_working_days,
+    working_days_between,
+)
 
-    P6 stores shifts per day 1..7 (Sun..Sat); a day with no shift content
-    is non-working. Dated exceptions live in the same blob as ordinal
-    days since 1899-12-30: an exception with no shift content is a
-    holiday; one WITH shift content is an extra working day.
-    Unparseable calendars fall back to 7-day elapsed.
-    """
-    masks: dict[str, tuple] = {}
-    for row in data.raw_tables.get("CALENDAR", []):
-        cid = (row.get("clndr_id") or "").strip()
-        blob = row.get("clndr_data") or ""
-        working: set[int] = set()
-        weekly = blob.split("Exceptions")[0]
-        for d in range(1, 8):
-            m = re.search(r"\(0\|\|" + str(d) + r"\(\)?([^)]*)", weekly)
-            if m and (":" in m.group(1) or "|" in m.group(1)):
-                working.add((d + 5) % 7)          # P6 1=Sun -> Mon=0 idx 6
-        holidays: set = set()
-        extra: set = set()
-        for m in re.finditer(r"\(d\|(\d+)\)\(\)?([^)]*)", blob):
-            try:
-                day = (P6_EPOCH + timedelta(days=int(m.group(1)))).date()
-            except (ValueError, OverflowError):
-                continue
-            if ":" in m.group(2) or "|" in m.group(2):
-                extra.add(day)
-            else:
-                holidays.add(day)
-        if 0 < len(working) < 7 or holidays:
-            masks[cid] = (frozenset(working or range(7)),
-                          frozenset(holidays), frozenset(extra))
-    return masks
-
-
-def is_working(day: datetime, mask: tuple) -> bool:
-    wd, hol, extra = mask
-    d = day.date()
-    if d in extra:
-        return True
-    return day.weekday() in wd and d not in hol
-
-
-def add_working_days(start: datetime, days: float,
-                      mask: tuple | None) -> datetime:
-    # (H2) negative days = a LEAD: step working days BACKWARDS on the
-    # calendar. The old elapsed-days shortcut put a -1d lead from
-    # Monday on a Sunday instead of Friday.
-    if days < 0:
-        return sub_working_days(start, -days, mask)
-    if not mask or days == 0:
-        return start + timedelta(days=days)
-    whole, frac = int(days), days - int(days)
-    cur = start
-    added = 0
-    guard = 0
-    while added < whole and guard < 20000:
-        cur += timedelta(days=1)
-        guard += 1
-        if is_working(cur, mask):
-            added += 1
-    return cur + timedelta(days=frac)
-
-
-def sub_working_days(start: datetime, days: float,
-                      mask: tuple | None) -> datetime:
-    if days < 0:
-        return add_working_days(start, -days, mask)
-    if not mask or days == 0:
-        return start - timedelta(days=days)
-    whole, frac = int(days), days - int(days)
-    cur = start
-    removed = 0
-    guard = 0
-    while removed < whole and guard < 20000:
-        cur -= timedelta(days=1)
-        guard += 1
-        if is_working(cur, mask):
-            removed += 1
-    return cur - timedelta(days=frac)
+__all_calendar__ = ["add_working_days", "calendar_masks", "is_working",
+                    "relationship_lag_hours_per_day", "sub_working_days",
+                    "working_days_between"]
 
 
 def cyclic_nodes(
@@ -294,7 +236,10 @@ def backward_pass(
                 c = sub_working_days(lf, lag, p_mask)
                 if cap_ls[p] is None or c < cap_ls[p]:
                     cap_ls[p] = c
-    return {n: round((LF[n] - EF[n]).total_seconds() / 86400, 1)
+    # total float in WORKING-day units on each activity's own calendar —
+    # working_days_between is the exact inverse of the date arithmetic
+    # above, so TF is in the same units the durations were scheduled in
+    return {n: round(working_days_between(EF[n], LF[n], nodes[n][1]), 1)
             for n in nodes if n in EF}
 
 
@@ -373,8 +318,14 @@ def build_network(data: XerData, config, dd):
         p = code_of.get(rel.pred_task_id)
         if s is None or p is None:
             continue
-        t = inc[rel.pred_task_id]
-        hpd = data.hours_per_day(t, config)
-        lag = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
+        # lag basis = the file's own SCHEDOPTIONS election
+        # (sched_calendar_on_relationship_lag; P6 default: predecessor)
+        if rel.lag_hr:
+            hpd, _basis = relationship_lag_hours_per_day(
+                data, inc[rel.pred_task_id].clndr_id,
+                inc[rel.task_id].clndr_id, config)
+            lag = rel.lag_hr / hpd
+        else:
+            lag = 0.0
         preds[s].append((p, REL_TO_SHORT.get(rel.pred_type, "FS"), lag))
     return inc, nodes, preds, started, masks, warnings

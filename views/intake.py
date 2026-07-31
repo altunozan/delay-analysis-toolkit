@@ -153,6 +153,9 @@ def intake_tab() -> None:
                     # (C4) evidential hard gate — a multi-project file
                     # or duplicate Activity IDs silently merge nodes in
                     # every code-keyed calculation. Refuse the file.
+                    for _note in getattr(data, "parse_notes", []):
+                        if "EVIDENTIAL" in _note:
+                            st.warning(f"'{uname}': {_note}")
                     _defects = structural_defects(data)
                     if _defects:
                         st.error(f"**'{uname}' refused — structural "

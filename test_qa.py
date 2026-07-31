@@ -646,8 +646,11 @@ check("A25c impacted xer: not-started with duration",
 
 # A26. Calendar-exact CPM + cumulative TIA + concurrency
 from programme import run_cumulative_tia
+# NOTE `calibration_days or 99` was a zero-truthiness bug: a PERFECT
+# calibration of exactly 0.0 evaluated to 99 and failed the pin
 check("A26 calendar-exact calibration within 2 days of P6",
-      abs(_r.calibration_days or 99) < 2, f"calib={_r.calibration_days}")
+      _r.calibration_days is not None and abs(_r.calibration_days) < 2,
+      f"calib={_r.calibration_days}")
 from datetime import datetime as _dt6
 _evA = DelayEvent("EV-A", "a", date_raised=_dt6(2018, 5, 1))
 _evB = DelayEvent("EV-B", "b", date_raised=_dt6(2018, 5, 20))
@@ -3110,6 +3113,133 @@ _sdirect = round((_srevs[-1][1].project.scheduled_finish
 check("S3 windows telescope exactly to the direct movement",
       abs(sum(_smoves) - _sdirect) < 0.05,
       f"sum={sum(_smoves)} direct={_sdirect}")
+
+# =========================================================================
+# Y layer — cross-tree convergence fixes (2026-07-31 qa-copy comparison)
+# =========================================================================
+print("== Y. Convergence-fix pins ==")
+from datetime import timedelta as _ytd
+
+# Y1 windows: movement measured AT the elected milestone, gated when absent
+_yw = analyse_windows([("B", _BP), ("U", _UP)], end_task_code="TOC05")
+_yw0 = analyse_windows([("B", _BP), ("U", _UP)])
+check("Y1 windows movement basis follows the election",
+      _yw.windows[0].movement_days != _yw0.windows[0].movement_days
+      and any("ELECTED milestone" in c for c in _yw.caveats),
+      f"{_yw.windows[0].movement_days} vs {_yw0.windows[0].movement_days}")
+_ywb = analyse_windows([("B", _BP), ("U", _UP)], end_task_code="NOPE")
+check("Y1b unmeasurable election gates window movement",
+      _ywb.windows[0].movement_days is None
+      and any("not reported" in w for w in _ywb.warnings))
+
+# Y2 comparison_impact: headline at the election; gated when absent
+from programme import assess_comparison_impact as _yci
+_yr = _yci(_BP, _UP, "B", "U", end_task_code="TOC05")
+_yrb = _yci(_BP, _UP, "B", "U", end_task_code="NOPE")
+check("Y2 impact headline measured at the elected milestone",
+      _yr.completion_moved_days is not None
+      and _yr.completion_moved_days != _yci(
+          _BP, _UP, "B", "U").completion_moved_days)
+check("Y2b impact headline gated on unmeasurable election",
+      _yrb.completion_moved_days is None
+      and any("GATED" in w for w in _yrb.warnings))
+
+# Y3 notice: one hour late is LATE (the -0.0 compliant bug)
+from programme.notice import assess_notice as _yan
+_yna = _yan(_xdt(2026, 1, 5, 8), _xdt(2026, 1, 6, 9), 1)
+check("Y3 notice 1h late -> LATE with sub-day margin",
+      _yna.status == "late" and _yna.margin_days is not None
+      and -0.05 < _yna.margin_days < 0)
+
+# Y4 SCHEDOPTIONS lag basis: rcal_Successor honoured end to end
+_ymini = (
+    "ERMHDR\t24.12\t2026-01-01\tProject\tADMIN\tu\tdb\tPM\tUSD\n"
+    "%T\tPROJECT\n%F\tproj_id\tproj_short_name\tclndr_id"
+    "\tlast_recalc_date\n%R\t1\tP1\t1\t2026-01-05 08:00\n"
+    "%T\tCALENDAR\n%F\tclndr_id\tclndr_name\tday_hr_cnt\tclndr_data\n"
+    "%R\t1\tTen\t10\t(0||CalendarData()())\n"
+    "%R\t2\tFive\t5\t(0||CalendarData()())\n"
+    "%T\tSCHEDOPTIONS\n%F\tschedoptions_id\tproj_id"
+    "\tsched_calendar_on_relationship_lag\n%R\t1\t1\trcal_Successor\n"
+    "%T\tTASK\n%F\ttask_id\tproj_id\ttask_code\ttask_name\ttask_type"
+    "\tstatus_code\tclndr_id\ttarget_drtn_hr_cnt\tremain_drtn_hr_cnt\n"
+    "%R\t10\t1\tA\ta\tTT_Task\tTK_NotStart\t1\t10\t10\n"
+    "%R\t11\t1\tB\tb\tTT_Task\tTK_NotStart\t2\t5\t5\n"
+    "%T\tTASKPRED\n%F\ttask_pred_id\ttask_id\tpred_task_id\tproj_id"
+    "\tpred_proj_id\tpred_type\tlag_hr_cnt\n"
+    "%R\t1\t11\t10\t1\t1\tPR_FS\t10\n%E\n")
+_ymd = parse_xer(_ymini.encode())
+from dcma.calendar import relationship_lag_hours_per_day as _ylag
+_yhpd, _ylabel = _ylag(_ymd, "1", "2")
+check("Y4 rcal_Successor elects the successor calendar",
+      _yhpd == 5.0 and "successor" in _ylabel, f"{_yhpd} {_ylabel}")
+from programme.cpm import build_network as _ybn
+_, _, _ypreds, _, _, _ = _ybn(_ymd, _DCMAConfigP(), _ymd.project.data_date)
+_ylagdays = _ypreds["B"][0][2]
+check("Y4b CPM lag converted on the elected basis (10h / 5h/d = 2d)",
+      abs(_ylagdays - 2.0) < 1e-9, str(_ylagdays))
+
+# Y5 shift-aware fractional arithmetic + exact inverse
+from dcma.calendar import (add_working_days as _yadd,
+                           calendar_masks as _ycm,
+                           working_days_between as _ywdb)
+_ymk = next(v for v in _ycm(_XU).values()
+            if v[3] == 8.0 and len(v[4]) == 5)
+_yr2 = _yadd(_xdt(2026, 1, 5, 8), 0.5, _ymk)
+check("Y5 Mon 08:00 + 0.5wd on 8h shift = Mon 12:00",
+      _yr2 == _xdt(2026, 1, 5, 12), str(_yr2))
+check("Y5b working_days_between inverts the arithmetic",
+      abs(_ywdb(_xdt(2026, 1, 5, 8), _yr2, _ymk) - 0.5) < 1e-6)
+
+# Y6 progress: milestone step preserved, ramp from its own start
+from programme.progress import (_spread as _ysp, _to_curve as _ytc,
+                                _value_at as _yva)
+_yb, _yi = {}, {}
+_ysp(_yb, _xdt(2026, 1, 1), _xdt(2026, 1, 31), 1.0, _yi)
+_ysp(_yb, _xdt(2026, 1, 15), _xdt(2026, 1, 15), 1.0, _yi)
+_yc = _ytc(_yb, 2.0, _yi)
+check("Y6 planned at 7 Jan ~10% (was earned-early 31%+)",
+      abs(_yva(_yc, _xdt(2026, 1, 7)) - 10.0) < 0.5)
+check("Y6b milestone is a STEP (23.3 -> 73.3 across its date)",
+      abs(_yva(_yc, _xdt(2026, 1, 14, 23)) - 23.2) < 0.5
+      and abs(_yva(_yc, _xdt(2026, 1, 15, 0, 0, 1)) - 73.3) < 0.5)
+
+# Y7 tier-2 structural gates + encoding disclosure
+_ydang = _xraw
+import re as _yre
+_ym = _yre.search(r"^(%R\t\d+\t\d+\t\d+\t\d+\t\d+\tPR_FS\t.*)$",
+                  _ydang, _yre.M)
+_yrow = _ym.group(1).split("\t")
+_yrow[1], _yrow[3] = "88888888", "77777777"
+_yD = parse_xer(_ydang.replace(_ym.group(1),
+                               _ym.group(1) + "\n" + "\t".join(_yrow)))
+check("Y7 dangling LOCAL join is a structural defect",
+      any("do not exist" in d for d in _xsd(_yD)))
+_yrow2 = _ym.group(1).split("\t")
+_yrow2[1], _yrow2[3], _yrow2[5] = "88888887", "77777776", "99999"
+_yD2 = parse_xer(_ydang.replace(_ym.group(1),
+                                _ym.group(1) + "\n" + "\t".join(_yrow2)))
+check("Y7b external-project logic is NOT gated", _xsd(_yD2) == [])
+_yinv = (
+    "ERMHDR\t1\n%T\tPROJECT\n%F\tproj_id\tproj_short_name\n%R\t1\tP\n"
+    "%T\tTASK\n%F\ttask_id\tproj_id\ttask_code\ttask_name\ttask_type"
+    "\tstatus_code\tclndr_id\tact_start_date\tact_end_date\n"
+    "%R\t10\t1\tA100\tx\tTT_Task\tTK_Complete\t1"
+    "\t2026-02-01 08:00\t2026-01-01 17:00\n%E\n")
+check("Y7c finish-before-start is a structural defect",
+      any("impossible date" in d for d in _xsd(parse_xer(_yinv.encode()))))
+# bytes input discloses its encoding; text input has none to disclose
+check("Y7d encoding disclosed in parse notes (bytes input)",
+      any("decoded as utf-8" in n
+          for n in parse_xer(_yinv.encode()).parse_notes)
+      and parse_xer(_yinv).parse_notes == [])
+
+# Y8 decision-grade calibration gate
+_yt = _xtia(_XU, "U", _xev, _xfrag, target_milestone="TOC05")
+check("Y8 TIA decision_grade set from calibration tolerance",
+      _yt.decision_grade is True and _yt.calibration_days is not None)
+check("Y8b tolerance is documented in config",
+      _DCMAConfigP().calibration_tolerance_days == 30.0)
 
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:

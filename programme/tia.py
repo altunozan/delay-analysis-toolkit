@@ -419,6 +419,7 @@ class TIAResult:
     path_post: list = field(default_factory=list)
     tie_in_float: list = field(default_factory=list)   # per tie-back dicts
     calibration_days: float | None = None   # our pre vs P6's own forecast
+    decision_grade: bool | None = None      # calibration within tolerance
     warnings: list[str] = field(default_factory=list)
     caveats: list[str] = field(default_factory=list)
 
@@ -625,6 +626,17 @@ def run_tia(
             "error of the simplified CPM. Judge the IMPACT (delta), not "
             "the absolute dates, and confirm in P6."
         )
+        tol = config.calibration_tolerance_days
+        result.decision_grade = abs(result.calibration_days) <= tol
+        if not result.decision_grade:
+            result.warnings.append(
+                f"DIAGNOSTIC ONLY: calibration "
+                f"{result.calibration_days:+.0f}d exceeds the documented "
+                f"±{tol:.0f}d tolerance — this model does not reproduce "
+                "the source programme closely enough to carry a "
+                "contractual figure. Use for investigation and lines of "
+                "enquiry; re-run after repairing the schedule, and "
+                "confirm any quantum natively in P6.")
     if (result.completion_delta_days is not None
             and result.completion_delta_days <= 0 and fragnet):
         detail = ""
@@ -1238,7 +1250,9 @@ def run_cumulative_tia(
                 "increments are unaffected, but repair before wider "
                 "reliance.")
         post = _completion(EF_i)
-        delta = (round((post - prev).total_seconds() / 86400, 1)
+        # 2 dp so displayed increments SUM to the displayed total
+        # (two 0.44d fragnets: rows 0.4+0.4 vs total 0.9 did not)
+        delta = (round((post - prev).total_seconds() / 86400, 2)
                  if post and prev else None)
         f_es = [ES_i[f.act_id] for f in fragnet if f.act_id in ES_i]
         f_ef = [EF_i[f.act_id] for f in fragnet if f.act_id in EF_i]
@@ -1261,7 +1275,7 @@ def run_cumulative_tia(
                     f"{a} and {b} both add delay and their chains overlap "
                     f"{lo:%Y-%m-%d} → {hi:%Y-%m-%d} — concurrency "
                     "candidate (screening only).")
-    total = (round((prev - pre).total_seconds() / 86400, 1)
+    total = (round((prev - pre).total_seconds() / 86400, 2)
              if prev and pre else None)
     return {"rows": rows, "total_delta_days": total,
             "completion_pre": pre, "completion_final": prev,

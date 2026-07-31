@@ -178,7 +178,9 @@ def _build_chain(data: XerData, config: DCMAConfig,
         succ = eligible[rel.task_id]
         if pred is None:
             return None
-        hpd = data.hours_per_day(pred, config)
+        from dcma.calendar import relationship_lag_hours_per_day
+        hpd, _ = relationship_lag_hours_per_day(
+            data, pred.clndr_id, succ.clndr_id, config)
         lag_days = (rel.lag_hr / hpd) if rel.lag_hr else 0.0
         if rel.pred_type in ("PR_FS", "PR_FF"):
             p_date = pred.early_finish or pred.act_finish
@@ -229,7 +231,9 @@ def _build_chain(data: XerData, config: DCMAConfig,
         pred = all_by_id.get(rel.pred_task_id)
         if pred is None:
             break
-        hpd = data.hours_per_day(pred, config)
+        from dcma.calendar import relationship_lag_hours_per_day
+        hpd, _ = relationship_lag_hours_per_day(
+            data, pred.clndr_id, cur.clndr_id, config)
         lag = round(rel.lag_hr / hpd, 1) if rel.lag_hr else 0.0
         link_text = (f"{_LINK_LABELS.get(rel.pred_type, rel.pred_type)}"
                      f" {lag:+.1f}d (gap {s / 24.0:.1f}d)")

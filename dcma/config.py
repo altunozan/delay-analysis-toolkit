@@ -30,6 +30,14 @@ class DCMAConfig:
     override any field before running the engine.
     """
 
+    # --- Calibration tolerance (all calibrated quantum methods) ---
+    # A method whose simplified model differs from the source
+    # programme's own dates by more than this is DIAGNOSTIC ONLY: the
+    # arithmetic still reconciles internally, but the model does not
+    # reproduce the source closely enough to carry a contractual
+    # figure. 30 days follows the field-corpus screen (2026-07-31).
+    calibration_tolerance_days: float = 30.0
+
     # --- Check 1: Logic ---
     # Target: <= 5% of incomplete activities missing a predecessor/successor.
     logic_max_pct: float = 5.0

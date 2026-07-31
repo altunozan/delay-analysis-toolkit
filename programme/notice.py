@@ -89,8 +89,12 @@ def assess_notice(
         used = _business_days_between(awareness_date, notice_date)
     else:
         used = (notice_date - awareness_date).total_seconds() / 86400
-    margin = round(period_days - used, 1)
-    if margin >= 0:
+    # decide on the UNROUNDED margin: rounding first turned a notice
+    # 1 hour late into margin -0.0, and -0.0 >= 0 read as COMPLIANT.
+    # Full precision decides; rounding is display-only.
+    margin_raw = period_days - used
+    margin = round(margin_raw, 2)
+    if margin_raw >= 0:
         return NoticeAssessment(
             "compliant", margin,
             f"Notice given {used:.0f} {label}(s) after awareness — "

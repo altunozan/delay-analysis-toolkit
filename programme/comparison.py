@@ -52,7 +52,13 @@ def _cstr_text(ctype: str, cdate: datetime | None) -> str:
     if not ctype:
         return "none"
     label = CONSTRAINT_LABELS.get(ctype, ctype)
-    return f"{label} {cdate:%Y-%m-%d}" if cdate else label
+    # time-of-day included: a Must Start On moved 08:00 -> 12:00 the
+    # same day is a real change and must not compare equal
+    if cdate is None:
+        return label
+    if cdate.hour or cdate.minute:
+        return f"{label} {cdate:%Y-%m-%d %H:%M}"
+    return f"{label} {cdate:%Y-%m-%d}"
 
 
 @dataclass
@@ -311,7 +317,9 @@ def compare_revisions(
                 continue
             pred = by_code[p]
             hpd = data.hours_per_day(pred, config)
-            lag = round(r.lag_hr / hpd, 1) if r.lag_hr else 0.0
+            # RAW lag for the change threshold — rounding first hid a
+            # real 0.06d -> 0.24d (+0.18d) edit behind 0.1 vs 0.2
+            lag = (r.lag_hr / hpd) if r.lag_hr else 0.0
             rels[(p, s, r.pred_type)] = lag
         return rels
 
@@ -342,9 +350,9 @@ def compare_revisions(
             result.lag_changes.append(FieldChange(
                 f"{p} -{_LINK_LABELS.get(lt, lt)}-> {s}",
                 name_of(new_by_code, s),
-                old_value=f"{old_rels[key]:+.1f}d",
-                new_value=f"{new_rels[key]:+.1f}d",
-                delta_days=round(new_rels[key] - old_rels[key], 1)))
+                old_value=f"{old_rels[key]:+.2f}d",
+                new_value=f"{new_rels[key]:+.2f}d",
+                delta_days=round(new_rels[key] - old_rels[key], 2)))
 
     # --- sort largest-first where a magnitude exists ---------------------
     result.duration_changes.sort(

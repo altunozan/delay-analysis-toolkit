@@ -104,8 +104,15 @@ def _phys_pct(data: XerData) -> dict[str, float]:
 
 
 def _spread(buckets: dict[datetime, float], start: datetime,
-            finish: datetime, weight: float) -> None:
-    """Distribute weight uniformly across [start, finish] by month bucket."""
+            finish: datetime, weight: float,
+            instants: dict[datetime, float] | None = None) -> None:
+    """Distribute weight uniformly across [start, finish] by month bucket.
+
+    Instantaneous weight (a milestone) goes to ``instants`` AT ITS OWN
+    DATE — bucketing it at month-end and interpolating linearly earned
+    the milestone before its date (a 15 Jan milestone read as ~73%
+    planned on 7 Jan). The curve builder emits a true STEP for it.
+    """
     if weight <= 0:
         return
     if finish < start:
@@ -113,11 +120,14 @@ def _spread(buckets: dict[datetime, float], start: datetime,
     # Continuous-time overlap per month so bucket fractions sum to exactly 1.
     span = (finish - start).total_seconds()
     if span <= 0:                                   # instantaneous (milestone)
-        nxt = (datetime(start.year + 1, 1, 1) if start.month == 12
-               else datetime(start.year, start.month + 1, 1))
-        key = nxt - timedelta(days=1)
-        buckets[key] = buckets.get(key, 0.0) + weight
+        if instants is not None:
+            instants[start] = instants.get(start, 0.0) + weight
+        else:
+            buckets[start] = buckets.get(start, 0.0) + weight
         return
+    # zero-weight anchor at the span start so interpolation ramps FROM
+    # the work's own start, not from the previous curve point
+    buckets.setdefault(start, 0.0)
     cur = datetime(start.year, start.month, 1)
     while cur <= finish:
         nxt = (datetime(cur.year + 1, 1, 1) if cur.month == 12
@@ -130,11 +140,43 @@ def _spread(buckets: dict[datetime, float], start: datetime,
 
 
 def _to_curve(buckets: dict[datetime, float],
-              total: float) -> list[CurvePoint]:
-    pts, cum = [], 0.0
-    for date in sorted(buckets):
-        cum += buckets[date]
-        pts.append(CurvePoint(date, min(100.0 * cum / total, 100.0)))
+              total: float,
+              instants: dict[datetime, float] | None = None,
+              ) -> list[CurvePoint]:
+    """Cumulative curve: continuous ramps + true STEPS for instants.
+
+    Continuous weight is a piecewise-linear function through the month
+    anchors; instantaneous weight (milestones) is a step overlay
+    sampled one second either side of its date. Interpolating the two
+    together is what previously earned a milestone before its date.
+    """
+    cont: list[tuple[datetime, float]] = []
+    cum = 0.0
+    for d in sorted(buckets):
+        cum += buckets[d]
+        cont.append((d, cum))
+
+    def _cont_at(t: datetime) -> float:
+        if not cont:
+            return 0.0
+        if t <= cont[0][0]:
+            return cont[0][1] if t == cont[0][0] else 0.0
+        for (d0, c0), (d1, c1) in zip(cont, cont[1:]):
+            if d0 <= t <= d1:
+                span = (d1 - d0).total_seconds() or 1.0
+                return c0 + (c1 - c0) * ((t - d0).total_seconds() / span)
+        return cont[-1][1]
+
+    inst = sorted((instants or {}).items())
+    dates = {d for d, _ in cont}
+    for d, _w in inst:
+        dates.add(d - timedelta(seconds=1))
+        dates.add(d)
+    pts = []
+    for t in sorted(dates):
+        step = sum(w for d, w in inst if d <= t)
+        pts.append(CurvePoint(
+            t, min(100.0 * (_cont_at(t) + step) / total, 100.0)))
     return pts
 
 
@@ -146,8 +188,8 @@ def _value_at(curve: list[CurvePoint], when: datetime) -> float | None:
         return 0.0 if when < curve[0].date else curve[0].cum_pct
     for a, b in zip(curve, curve[1:]):
         if a.date <= when <= b.date:
-            span = (b.date - a.date).days or 1
-            f = (when - a.date).days / span
+            span = (b.date - a.date).total_seconds() or 1.0
+            f = (when - a.date).total_seconds() / span
             return a.cum_pct + f * (b.cum_pct - a.cum_pct)
     return curve[-1].cum_pct
 
@@ -196,14 +238,16 @@ def compute_progress(
         )
 
     buckets: dict[datetime, float] = {}
+    instants: dict[datetime, float] = {}
     for t in baseline.tasks:
         if t.is_loe_or_wbs:
             continue
         s = t.target_start or t.early_start or t.act_start
         f = t.target_finish or t.early_finish or t.act_finish or s
         if s and f:
-            _spread(buckets, s, f, weights.get(t.task_id, 0.0))
-    result.planned_curve = _to_curve(buckets, total)
+            _spread(buckets, s, f, weights.get(t.task_id, 0.0),
+                    instants)
+    result.planned_curve = _to_curve(buckets, total, instants)
 
     # --- recorded curve + per-revision points -----------------------------
     for label, data in updates:
@@ -238,17 +282,19 @@ def compute_progress(
         tot = sum(w.values())
         pct = _phys_pct(data)
         rbuckets: dict[datetime, float] = {}
+        rinstants: dict[datetime, float] = {}
         for t in data.tasks:
             if t.is_loe_or_wbs or t.act_start is None:
                 continue
             if t.act_finish is not None:
                 _spread(rbuckets, t.act_start, t.act_finish,
-                        w.get(t.task_id, 0.0))
+                        w.get(t.task_id, 0.0), rinstants)
             elif dd is not None:
                 _spread(rbuckets, t.act_start, dd,
-                        w.get(t.task_id, 0.0) * pct.get(t.task_id, 0.0) / 100.0)
-        if rbuckets and tot > 0:
-            curve = _to_curve(rbuckets, tot)
+                        w.get(t.task_id, 0.0) * pct.get(t.task_id, 0.0) / 100.0,
+                        rinstants)
+        if (rbuckets or rinstants) and tot > 0:
+            curve = _to_curve(rbuckets, tot, rinstants)
             if dd is not None:
                 curve = [p for p in curve if p.date <= dd] or curve
             result.recorded_curve = curve

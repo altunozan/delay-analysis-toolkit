@@ -84,7 +84,10 @@ def _floats(data: XerData, config: DCMAConfig) -> dict[str, tuple[str, float]]:
             continue
         tf = t.total_float_days(data.hours_per_day(t, config))
         if tf is not None:
-            out[t.task_code] = (t.name, round(tf, 1))
+            # RAW float: rounding at source turned TF -0.04 into -0.0,
+            # dropping it from the negative count and muting real
+            # sub-day erosion; medians/mins round for display only
+            out[t.task_code] = (t.name, tf)
     return out
 
 

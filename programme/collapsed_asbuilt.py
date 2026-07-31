@@ -70,6 +70,7 @@ class CollapseResult:
     collapsed_completion: datetime | None = None    # after extraction
     delta_days: float | None = None                 # model - collapsed
     calibration_days: float | None = None           # model vs recorded
+    decision_grade: bool | None = None              # within tolerance
     removed_codes: list[str] = field(default_factory=list)
     n_modelled: int = 0
     n_excluded_unstarted: int = 0
@@ -182,8 +183,19 @@ def collapse_asbuilt(
         if p and s:
             # lag hours -> calendar days at the successor's calendar
             # hours-per-day (matches how the OOS repair encodes lags)
-            hpd_s = data.hours_per_day(by_task_id[r.task_id], config)
-            lag_days = ((r.lag_hr or 0.0) / hpd_s) if r.lag_hr else 0.0
+            # lag basis = the file's own SCHEDOPTIONS election, via the
+            # same central helper as the CPM kernel — converting with
+            # the successor's h/day manufactured false calibration error
+            # whenever the two calendars differed
+            if r.lag_hr:
+                from dcma.calendar import relationship_lag_hours_per_day
+                _hpd, _ = relationship_lag_hours_per_day(
+                    data, by_task_id[r.pred_task_id].clndr_id
+                    if r.pred_task_id in by_task_id else "",
+                    by_task_id[r.task_id].clndr_id, config)
+                lag_days = r.lag_hr / _hpd
+            else:
+                lag_days = 0.0
             rels.append((p, s, _REL_LABEL.get(r.pred_type, "FS"),
                          lag_days))
     anchor = min(t.act_start for t in started)
@@ -218,7 +230,9 @@ def collapse_asbuilt(
         result.calibration_days = round(
             (result.model_completion
              - result.asbuilt_completion).total_seconds() / 86400.0, 1)
-        if abs(result.calibration_days) > 30:
+        result.decision_grade = (abs(result.calibration_days)
+                                 <= config.calibration_tolerance_days)
+        if not result.decision_grade:
             result.warnings.append(
                 f"Model validation gap of {result.calibration_days:+.0f} "
                 "calendar days between the unstatused model's completion "

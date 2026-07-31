@@ -202,7 +202,10 @@ def screen_concurrency(
         both = _intersect(emp, con)
         cw.both_days = _total_days(both)
         moved = (cw.movement_days or 0.0) > 0
-        cw.concurrent_candidate = cw.both_days > 0 and moved
+        # candidacy from the RAW intersection — a real one-hour overlap
+        # rounds to 0.0 days and must still surface as a candidate;
+        # the rounded figure is display-only
+        cw.concurrent_candidate = bool(both) and moved
         # pacing shape: every contractor overlap sits INSIDE the employer
         # envelope for this window
         if cw.concurrent_candidate and emp and con:

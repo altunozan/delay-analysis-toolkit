@@ -141,13 +141,39 @@ def analyse_windows(
                      branch_tolerance_hours=branch_tolerance_hours)
         paths[label] = {a.task_code: a.name for a in cp.critical}
         tasks_by_code[label] = {t.task_code: t for t in data.tasks}
+        # a fallback from the elected terminal must reach the reader —
+        # dropping it silently mixes target movement with a fallback path
+        for w in cp.warnings:
+            result.warnings.append(f"{label}: {w}")
+
+    if end_task_code:
+        result.caveats.append(
+            f"Window movement is measured at the ELECTED milestone "
+            f"'{end_task_code}' (its stored finish in each revision), "
+            "the same terminal the driving paths trace to — not the "
+            "project scheduled finish.")
+
+    def _movement_finish(d, label):
+        """The finish the movement is measured at, per revision."""
+        if end_task_code:
+            t = tasks_by_code.get(label, {}).get(end_task_code)
+            fin = (t.act_finish or t.early_finish) if t is not None \
+                else None
+            if fin is None:
+                result.warnings.append(
+                    f"{label}: elected milestone '{end_task_code}' has "
+                    "no stored finish — movement for its windows is not "
+                    "reported (the project finish is a different "
+                    "obligation and is not substituted).")
+            return fin
+        return d.project.scheduled_finish if d.project else None
 
     for i in range(len(revisions) - 1):
         (l_old, d_old), (l_new, d_new) = revisions[i], revisions[i + 1]
         dd_old = d_old.project.data_date if d_old.project else None
         dd_new = d_new.project.data_date if d_new.project else None
-        f_old = d_old.project.scheduled_finish if d_old.project else None
-        f_new = d_new.project.scheduled_finish if d_new.project else None
+        f_old = _movement_finish(d_old, l_old)
+        f_new = _movement_finish(d_new, l_new)
 
         row = WindowRow(
             index=i + 1, from_label=l_old, to_label=l_new,

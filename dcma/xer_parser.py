@@ -30,6 +30,8 @@ class XerData:
     header: list[str] = field(default_factory=list)
     raw_tables: dict[str, list[dict[str, str]]] = field(default_factory=dict)
 
+    parse_notes: list[str] = field(default_factory=list)
+
     projects: list[Project] = field(default_factory=list)
     tasks: list[Task] = field(default_factory=list)
     relationships: list[Relationship] = field(default_factory=list)
@@ -51,14 +53,24 @@ class XerData:
         return config.default_hours_per_day
 
 
-def _read_text(path_or_text: str) -> str:
-    """Accept either a file path or raw XER text/bytes content."""
+def _read_text(path_or_text: str) -> tuple[str, str | None]:
+    """Accept a file path or raw XER text/bytes; also name the encoding."""
     if isinstance(path_or_text, bytes):
-        return _decode_bytes(path_or_text)
+        return _decode_bytes_with_note(path_or_text)
     if os.path.exists(path_or_text) and len(path_or_text) < 4096:
         with open(path_or_text, "rb") as fh:
-            return _decode_bytes(fh.read())
-    return path_or_text
+            return _decode_bytes_with_note(fh.read())
+    return path_or_text, None
+
+
+def _decode_bytes_with_note(data: bytes) -> tuple[str, str]:
+    """Decode + name the encoding actually used (evidential disclosure)."""
+    for enc in ("utf-8", "cp1252"):
+        try:
+            return data.decode(enc), enc
+        except UnicodeDecodeError:
+            continue
+    return data.decode("latin-1", errors="replace"), "latin-1"
 
 
 def _decode_bytes(data: bytes) -> str:
@@ -79,9 +91,18 @@ def _decode_bytes(data: bytes) -> str:
 def parse_xer(path_or_text: str | bytes, config: DCMAConfig | None = None) -> XerData:
     """Parse XER content (file path, raw text, or bytes) into XerData."""
     config = config or DCMAConfig()
-    text = _read_text(path_or_text)
+    text, _enc = _read_text(path_or_text)
 
     data = XerData()
+    if _enc is not None:
+        data.parse_notes.append(f"Source decoded as {_enc}.")
+        if _enc == "latin-1":
+            data.parse_notes.append(
+                "EVIDENTIAL NOTE: the file is neither valid UTF-8 nor "
+                "strict cp1252 — decoded via lossless latin-1 fallback. "
+                "Byte values 0x80-0x9F in names/currency are "
+                "semantically ambiguous; arithmetic is unaffected. The "
+                "clean remedy is a fresh UTF-8 export from P6.")
     current_table: str | None = None
     current_fields: list[str] = []
 
@@ -171,6 +192,54 @@ def structural_defects(data: XerData) -> list[str]:
             + ") — activities sharing a code silently merge in every "
             "code-keyed calculation, deleting one of them from the "
             "network. Make Activity IDs unique in P6 and re-export.")
+
+    # --- dangling INTERNAL relationship joins (tier-2, 2026-07-31) -----
+    # CPM silently drops a TASKPRED row whose endpoint is missing while
+    # DCMA Check 1 counts it as logic — the same row means two different
+    # things to two modules. GENUINE external-project logic (pred/succ
+    # proj_id differs from the local project) is legitimate and stays a
+    # non-gating exclusion; a broken LOCAL join gates the file.
+    local_projs = set(proj_tasks)
+    known_ids = set(data.tasks_by_id)
+    dangling: list[str] = []
+    for row in data.raw_tables.get("TASKPRED", []):
+        tid = (row.get("task_id") or "").strip()
+        pid_ = (row.get("pred_task_id") or "").strip()
+        for end_id, end_proj_key in ((tid, "proj_id"),
+                                     (pid_, "pred_proj_id")):
+            if not end_id or end_id in known_ids:
+                continue
+            end_proj = (row.get(end_proj_key) or "").strip()
+            if end_proj and end_proj not in local_projs:
+                continue                    # external logic — disclosed,
+                                            # excluded, never gated
+            dangling.append(end_id)
+    if dangling:
+        uniq = sorted(set(dangling))
+        out.append(
+            f"{len(uniq)} relationship endpoint(s) reference activities "
+            "that do not exist in this file and are not external-project "
+            "logic (e.g. " + ", ".join(uniq[:5])
+            + (" …" if len(uniq) > 5 else "")
+            + ") — the CPM would silently drop these links while the "
+            "logic checks count them. Repair or re-export.")
+
+    # --- chronology inversions (finish before start) -------------------
+    inversions: list[str] = []
+    for t in data.tasks:
+        for a, b, lbl in ((t.act_start, t.act_finish, "actual"),
+                          (t.early_start, t.early_finish, "early"),
+                          (t.target_start, t.target_finish, "target")):
+            if a is not None and b is not None and b < a:
+                inversions.append(f"{t.task_code} ({lbl})")
+    if inversions:
+        out.append(
+            f"{len(inversions)} impossible date pair(s) — finish before "
+            "start (e.g. " + ", ".join(inversions[:5])
+            + (" …" if len(inversions) > 5 else "")
+            + ") — quantitative methods would silently normalise these "
+            "into plausible results (zero durations, instantaneous "
+            "progress). Correct the dates in P6 and re-export.")
     return out
 
 

@@ -120,7 +120,13 @@ def check_02_leads(data: XerData, config: DCMAConfig) -> CheckResult:
         if rel.lag_hr < 0:
             succ = data.tasks_by_id.get(rel.task_id)
             pred = data.tasks_by_id.get(rel.pred_task_id)
-            hpd = data.hours_per_day(succ, config) if succ else config.default_hours_per_day
+            # lag basis = the file's SCHEDOPTIONS election (central
+            # helper, shared with the CPM kernel) — successor h/day
+            # misstated the XER detail whenever calendars differed
+            from dcma.calendar import relationship_lag_hours_per_day
+            hpd, _ = relationship_lag_hours_per_day(
+                data, pred.clndr_id if pred else "",
+                succ.clndr_id if succ else "", config)
             label = succ.task_code if succ else rel.task_id
             affected.append(label)
             detail.append({
@@ -156,7 +162,13 @@ def check_03_lags(data: XerData, config: DCMAConfig) -> CheckResult:
         if rel.lag_hr > 0:
             succ = data.tasks_by_id.get(rel.task_id)
             pred = data.tasks_by_id.get(rel.pred_task_id)
-            hpd = data.hours_per_day(succ, config) if succ else config.default_hours_per_day
+            # lag basis = the file's SCHEDOPTIONS election (central
+            # helper, shared with the CPM kernel) — successor h/day
+            # misstated the XER detail whenever calendars differed
+            from dcma.calendar import relationship_lag_hours_per_day
+            hpd, _ = relationship_lag_hours_per_day(
+                data, pred.clndr_id if pred else "",
+                succ.clndr_id if succ else "", config)
             label = succ.task_code if succ else rel.task_id
             affected.append(label)
             detail.append({

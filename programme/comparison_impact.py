@@ -213,8 +213,35 @@ def assess_comparison_impact(
         new, new_label, end_task_code=end_task_code,
         near_critical_days=near_critical_days, config=config)
     result.end_old, result.end_new = _lp_old.end_choice, _lp_new.end_choice
+    # the longest-path extraction warns when it falls back from the
+    # elected terminal — those warnings must reach the reader, or a
+    # fallback path is silently presented as target-anchored
+    for _lbl, _lp in ((old_label, _lp_old), (new_label, _lp_new)):
+        for _w in _lp.warnings:
+            result.warnings.append(f"{_lbl}: {_w}")
 
-    if cmp.old_finish and cmp.new_finish:
+    if end_task_code:
+        # the headline answers the ELECTED obligation: that activity's
+        # stored finish in each revision — never the PROJECT scheduled
+        # finish, which can describe a different endpoint entirely
+        def _stored_fin(d):
+            t = next((x for x in d.tasks
+                      if x.task_code == end_task_code), None)
+            return (t.act_finish or t.early_finish) if t else None
+
+        _f_old, _f_new = _stored_fin(old), _stored_fin(new)
+        if _f_old and _f_new:
+            result.completion_moved_days = round(
+                (_f_new - _f_old).total_seconds() / 86400, 1)
+        else:
+            _side = "earlier" if not _f_old else "later"
+            result.warnings.append(
+                f"HEADLINE GATED: elected milestone '{end_task_code}' "
+                f"has no stored finish in the {_side} revision — "
+                "completion movement is not reported (the project "
+                "scheduled finish is a different obligation and is not "
+                "substituted).")
+    elif cmp.old_finish and cmp.new_finish:
         result.completion_moved_days = round(
             (cmp.new_finish - cmp.old_finish).total_seconds() / 86400, 1)
 
@@ -539,8 +566,16 @@ def attribute_completion_impact(
         return result
 
     def completion(EF: dict) -> datetime | None:
-        if end_task_code and end_task_code in EF:
-            return EF[end_task_code]
+        """The measured endpoint of ONE run.
+
+        When a contractual target is elected, it is the ONLY endpoint —
+        a run where it cannot be measured returns None and the affected
+        quantum is BLOCKED with a warning, never silently substituted
+        with the network maximum (which would subtract two different
+        obligations and report the difference as completion movement).
+        """
+        if end_task_code:
+            return EF.get(end_task_code)
         return max(EF.values()) if EF else None
 
     result.anchor_code = (end_task_code
@@ -549,12 +584,26 @@ def attribute_completion_impact(
     ES0, EF0, _, driver0 = forward_pass(nodes, preds, dd_new, started)
     base = completion(EF0)
     result.kernel_completion_new = base
+    if end_task_code and base is None:
+        result.warnings.append(
+            f"ATTRIBUTION GATED: the elected completion milestone "
+            f"'{end_task_code}' is not in the later revision's remaining "
+            "network (complete, absent, or disconnected) — kernel "
+            "attribution is not measured rather than re-anchored to the "
+            "latest finisher.")
+        return result
 
     o_inc, o_nodes, o_preds, o_started, _m, _w = build_network(
         old, config, dd_old)
     if o_nodes:
         _, o_EF, _, _ = forward_pass(o_nodes, o_preds, dd_old, o_started)
         result.kernel_completion_old = completion(o_EF)
+        if end_task_code and result.kernel_completion_old is None:
+            result.warnings.append(
+                f"Kernel movement not reported: elected milestone "
+                f"'{end_task_code}' is not in the earlier revision's "
+                "remaining network — the two runs would measure "
+                "different obligations.")
     if result.kernel_completion_old and base:
         result.kernel_moved_days = round(
             (base - result.kernel_completion_old).total_seconds() / 86400,
@@ -815,6 +864,10 @@ def attribute_completion_impact(
         if base and comp1:
             ac.contribution_days = round(
                 (base - comp1).total_seconds() / 86400, 1)
+        elif end_task_code and comp1 is None:
+            ac.note = (f"reverting this change removes '{end_task_code}' "
+                       "from the remaining network — contribution gated, "
+                       "not re-anchored")
         result.changes.append(ac)
 
     # ---- ALL revertible changes undone together -------------------
@@ -837,6 +890,11 @@ def attribute_completion_impact(
             result.editing_effect_days = round(
                 (base - result.completion_no_edits).total_seconds()
                 / 86400, 1)
+        elif end_task_code and result.completion_no_edits is None:
+            result.warnings.append(
+                f"Editing effect gated: with every revertible change "
+                f"undone, '{end_task_code}' leaves the remaining network "
+                "— no editing-effect figure is reported.")
 
     result.changes.sort(
         key=lambda a: -abs(a.contribution_days or 0.0))
