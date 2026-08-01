@@ -18,16 +18,19 @@ runs, and the longest path is re-derived over the combined network.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
 import state as sk
 from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
-    build_apab_gantt_html, build_apab_report_prompt, build_simple_xlsx,
-    extract_actual_trace, extract_asbuilt_longest_path, keydate_windows,
-    planned_vs_actual,
+    ROLLUP_CAVEATS, build_apab_gantt_html, build_apab_report_prompt,
+    build_rollup, build_simple_xlsx, extract_actual_trace,
+    extract_asbuilt_longest_path, keydate_windows, planned_vs_actual,
 )
+from views._umbrella import umbrella_editor
 from programme.narrative import DEFAULT_TEMPLATES
 from programme.rlpa import (
     RLPA_CAVEATS, aggregate_votes, build_classification_prompt,
@@ -72,6 +75,38 @@ def _trace_table(trace, inferred=frozenset()):
     return pd.DataFrame(rows)
 
 
+def _display_rows(rows: list[dict], groups: dict[str, list[str]],
+                  path_codes: set[str]):
+    """Measurement rows with umbrella members interleaved beneath their
+    group header — the same rollup the As-Planned vs As-Built page
+    renders, so grouping behaves identically on both pages."""
+    if not groups:
+        rows = sorted(rows, key=lambda r: (r["actual_start"]
+                                           or datetime.max))
+        return rows, None
+    roll = build_rollup(rows, groups, path_codes)
+    by_key = {u.key: u for u in roll.umbrellas}
+    out = []
+    for r in roll.measurement_rows():
+        if r.get("is_umbrella"):
+            out.append({**r, "row_kind": "umbrella"})
+            u = by_key.get(r["task_code"])
+            for m in (u.members if u else []):
+                out.append({
+                    "task_code": m.task_code, "name": m.name,
+                    "row_kind": "member",
+                    "planned_start": m.planned_start,
+                    "planned_finish": m.planned_finish,
+                    "actual_start": m.actual_start,
+                    "actual_finish": m.actual_finish,
+                    "start_var_days": m.start_var_days,
+                    "finish_var_days": m.finish_var_days,
+                    "in_baseline": m.in_baseline})
+        else:
+            out.append(r)
+    return out, roll
+
+
 def _ms_delay(rows):
     pf = [r["planned_finish"] for r in rows if r.get("planned_finish")]
     af = [r["actual_finish"] for r in rows if r.get("actual_finish")]
@@ -103,6 +138,7 @@ def apab_v2_tab() -> None:
 
     paths: dict = st.session_state.get(_PATHS) or {}
     basis_by: dict = st.session_state.get(_BASIS) or {}
+    groups = st.session_state.get(sk.UMBRELLAS) or {}
     date_basis = st.session_state.get(_DATE_BASIS, "late")
 
     def _rows_for(ms):
@@ -112,6 +148,11 @@ def apab_v2_tab() -> None:
                               date_basis=date_basis),
             key=lambda r: (r["actual_start"] is None,
                            r["actual_start"]))
+
+    def _disp_for(ms):
+        codes = {c for c, _ in paths.get(ms, [])}
+        disp, _roll = _display_rows(_rows_for(ms), groups, codes)
+        return disp
 
     # ========= ① determine the retrospective longest path =========== #
     if step.startswith("①"):
@@ -249,6 +290,17 @@ def apab_v2_tab() -> None:
             st.session_state[_BASIS] = basis_by
             st.success(f"Adopted for {ms}: {basis}. Continue to step ②.")
 
+        # ---- umbrella grouping (optional, path activities) ---------- #
+        union = {c for m in paths for c, _ in paths.get(m, [])}
+        if union:
+            st.divider()
+            st.markdown("##### Group the path into umbrella work "
+                        "packages (optional)")
+            cp_rows = planned_vs_actual(baseline, latest, union,
+                                        date_basis=date_basis)
+            groups = umbrella_editor(cp_rows, union,
+                                     key_prefix="apab2_umb")
+
         # ---- qualification (separate section, words not numbers) ---- #
         if res:
             st.divider()
@@ -307,13 +359,13 @@ def apab_v2_tab() -> None:
         st.session_state[_DATE_BASIS] = date_basis
         display, mets = [], []
         for ms in paths:
-            rows = _rows_for(ms)
-            mets.append((ms, _ms_delay(rows)))
+            disp = _disp_for(ms)
+            mets.append((ms, _ms_delay(disp)))
             display.append({"task_code": "", "row_kind": "section",
                             "name": f"PATH TO {ms} — "
                             + (by_code[ms].name[:44]
                                if ms in by_code else "")})
-            display.extend(rows)
+            display.extend(disp)
         cols = st.columns(max(len(mets), 1))
         for col, (ms, delay) in zip(cols, mets):
             col.metric(f"Delay to {ms}",
@@ -325,10 +377,11 @@ def apab_v2_tab() -> None:
             data_date=dd)
         st.iframe(_g2, height=560)
         st.caption("Per row: as-planned dimension line BELOW, as-built "
-                   "bar ABOVE. Planned dates are the baseline's "
-                   f"{date_basis.upper()} dates. The path basis "
-                   "(including any inferred links) is recorded in "
-                   "step ① and the report.")
+                   "bar ABOVE. ▣ = umbrella work package (measured on "
+                   "its path members), ↳ = member. Planned dates are "
+                   f"the baseline's {date_basis.upper()} dates. The "
+                   "path basis (including any inferred links) is "
+                   "recorded in step ① and the report.")
         gantt_fullscreen_button(_g2, "apab2_step2_gantt", "apab2_fs2")
 
     # ========= ③ windows ============================================ #
@@ -341,14 +394,16 @@ def apab_v2_tab() -> None:
         saved = st.session_state.get(_KD, {})
         pickable, seen = [], set()
         for ms in paths:
-            for r in _rows_for(ms):
-                if r["task_code"] not in seen:
+            for r in _disp_for(ms):
+                if (r.get("row_kind") != "member"
+                        and r["task_code"] not in seen):
                     seen.add(r["task_code"])
                     pickable.append(r)
         edited = st.data_editor(pd.DataFrame([{
             "Key date": r["task_code"] in saved,
             "ID": r["task_code"],
-            "Activity": r["name"][:56],
+            "Activity": (("▣ " if r.get("row_kind") == "umbrella"
+                          else "") + r["name"][:56]),
             "As-built finish": (f"{r['actual_finish']:%Y-%m-%d}"
                                 if r.get("actual_finish") else "—"),
             "Why it is key": saved.get(r["task_code"], ""),
@@ -362,7 +417,8 @@ def apab_v2_tab() -> None:
             st.info("Tick at least ONE key date — the first window "
                     "runs from the PROJECT START to it.")
         for ms in paths:
-            rows = _rows_for(ms)
+            rows = [r for r in _disp_for(ms)
+                    if r.get("row_kind") != "member"]
             kwin = keydate_windows(rows, [c for c in kd
                                           if c in {r["task_code"]
                                                    for r in rows}])
@@ -390,14 +446,15 @@ def apab_v2_tab() -> None:
         display, mets, windows_by_ms, all_windows = [], [], {}, []
         sections_data = []
         for ms in paths:
-            rows = _rows_for(ms)
-            delay = _ms_delay(rows)
+            disp = _disp_for(ms)
+            rows = [r for r in disp if r.get("row_kind") != "member"]
+            delay = _ms_delay(disp)
             mets.append((ms, delay))
             display.append({"task_code": "", "row_kind": "section",
                             "name": f"PATH TO {ms} — "
                             + (by_code[ms].name[:44]
                                if ms in by_code else "")})
-            display.extend(rows)
+            display.extend(disp)
             kwin = keydate_windows(rows, [c for c in kd
                                           if c in {r["task_code"]
                                                    for r in rows}])
@@ -446,9 +503,13 @@ def apab_v2_tab() -> None:
             "over the deterministic screen; confidence stated in "
             "words from cross-run agreement" if inferred_rows else
             "No inferred links in play — recorded programme data only",
+            f"{len(groups)} umbrella work package(s); measured on "
+            "path members only" if groups else
+            "No umbrella grouping adopted",
         ])
         with st.expander("Method caveats (always apply)"):
-            for c in RLPA_CAVEATS:
+            for c in RLPA_CAVEATS + (list(ROLLUP_CAVEATS)
+                                     if groups else []):
                 st.write("•", c)
 
         _caveats = RLPA_CAVEATS + [
@@ -475,6 +536,7 @@ def apab_v2_tab() -> None:
                 "As-Planned vs As-Built v2 (RLPA)",
                 sheets={"Comparison": [
                     {k: v for k, v in r.items() if k != "row_kind"}
+                    | {"kind": r.get("row_kind", "")}
                     for r in display],
                     "Windows": [w for ws in windows_by_ms.values()
                                 for w in ws] or [{}],
