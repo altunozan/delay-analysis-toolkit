@@ -30,8 +30,10 @@ from programme import (
 )
 from programme.narrative import DEFAULT_TEMPLATES
 from programme.rlpa import (
-    RLPA_CAVEATS, aggregate_votes, build_inference_prompt, derive_paths,
-    parse_inference, path_idle_gaps, screen_missing_links,
+    RLPA_CAVEATS, aggregate_votes, build_classification_prompt,
+    build_inference_prompt, derive_paths, needs_classification,
+    parse_classification, parse_inference, path_idle_gaps,
+    screen_missing_links,
 )
 from views._shared import (
     ai_credentials_panel, ai_narrative_panel, basis_panel,
@@ -147,15 +149,46 @@ def apab_v2_tab() -> None:
                     "programme never linked, AI-proposed from a "
                     "deterministic screen, majority-voted over "
                     f"{_RUNS} independent runs)")
-        pairs = screen_missing_links(latest)
-        st.caption(f"{len(pairs)} unlinked pair(s) survive the "
-                   "deterministic screen (finish-before-start, shared "
-                   "work-area context, physically possible order). The "
-                   "AI can only select from these.")
+        classified = st.session_state.get("apab2_classified", {})
+        extra_ctx = classified.get(id(latest))
+        pairs = screen_missing_links(latest, extra_context=extra_ctx)
+        uncoded = needs_classification(latest)
+        st.caption(
+            f"{len(pairs)} unlinked pair(s) survive the deterministic "
+            "screen (finish-before-start, shared coded "
+            "location/discipline/system or WBS or naming context, "
+            "physically possible order). The AI can only select from "
+            "these."
+            + (" This file carries little usable activity coding — a "
+               "one-off AI classification pass (names and WBS only) "
+               "will run first to recover zones and disciplines."
+               if uncoded and not extra_ctx else ""))
         ai_credentials_panel("apab2")
         provider, model, api_key = resolve_ai_credentials()
         if st.button(f"Run inference ({_RUNS} passes)", type="primary",
                      disabled=not (api_key and pairs), key="apab2_go"):
+            if uncoded and not extra_ctx:
+                with st.spinner("Classification pass — recovering "
+                                "zones/disciplines from names…"):
+                    try:
+                        text = "".join(stream_narrative(
+                            provider, api_key,
+                            build_classification_prompt(latest),
+                            model or None))
+                        extra_ctx = parse_classification(text, latest)
+                    except NarrativeError as exc:
+                        st.warning(f"Classification pass failed ({exc})"
+                                   " — continuing on the file's own "
+                                   "coding.")
+                        extra_ctx = None
+                if extra_ctx:
+                    classified[id(latest)] = extra_ctx
+                    st.session_state["apab2_classified"] = classified
+                    pairs = screen_missing_links(
+                        latest, extra_context=extra_ctx)
+                    st.caption(f"Classification recovered context for "
+                               f"{len(extra_ctx)} activities; "
+                               f"{len(pairs)} pair(s) now screened in.")
             prompt = build_inference_prompt(pairs)
             runs, rejected = [], []
             progress = st.progress(0.0, "Running inference…")

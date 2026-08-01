@@ -118,21 +118,85 @@ class RLPAResult:
     caveats: list[str] = field(default_factory=list)
 
 
+# activity-code TYPE names mapped onto the screen's uniform keys.
+# Responsibility-type codes are deliberately NOT relevance context: a
+# shared subcontractor is a resource-continuity signal, the classic
+# false-dependency trap, never evidence of technical logic.
+_CODE_KEYS = {
+    "location": ("location", "area", "zone", "building", "level",
+                 "floor", "chainage", "room"),
+    "discipline": ("discipline", "trade"),
+    "system": ("system", "subsystem", "package"),
+}
+
+
+def activity_context(data: XerData) -> dict[str, dict[str, str]]:
+    """Per-task coded context {task_code: {location/discipline/system}}
+    read straight from the file's activity codes plus the deepest WBS
+    node — the context the programme already records, no AI involved."""
+    type_names = {
+        (r.get("actv_code_type_id") or "").strip():
+        (r.get("actv_code_type") or r.get("actv_code_type_name") or "")
+        .strip()
+        for r in data.raw_tables.get("ACTVTYPE", [])
+    }
+    values = {}
+    for r in data.raw_tables.get("ACTVCODE", []):
+        cid = (r.get("actv_code_id") or "").strip()
+        if cid:
+            values[cid] = (
+                type_names.get((r.get("actv_code_type_id") or "").strip(),
+                               ""),
+                (r.get("actv_code_name") or r.get("short_name") or "")
+                .strip())
+    ids = {t.task_id: t.task_code for t in data.tasks}
+    wbs_names = {
+        (r.get("wbs_id") or "").strip():
+        (r.get("wbs_name") or r.get("wbs_short_name") or "").strip()
+        for r in data.raw_tables.get("PROJWBS", [])
+    }
+    out: dict[str, dict[str, str]] = {}
+    for r in data.raw_tables.get("TASKACTV", []):
+        code = ids.get((r.get("task_id") or "").strip())
+        cid = (r.get("actv_code_id") or "").strip()
+        if not code or cid not in values:
+            continue
+        type_name, value = values[cid]
+        lowered = type_name.lower()
+        for key, tokens in _CODE_KEYS.items():
+            if any(tok in lowered for tok in tokens):
+                out.setdefault(code, {})[key] = value
+                break
+    for r in data.raw_tables.get("TASK", []):
+        code = (r.get("task_code") or "").strip()
+        wbs = wbs_names.get((r.get("wbs_id") or "").strip())
+        if code and wbs:
+            out.setdefault(code, {}).setdefault("wbs", wbs)
+    return out
+
+
 def screen_missing_links(
     data: XerData,
     *,
     max_gap_working_days: float = 30.0,
     max_pairs: int = 120,
     max_per_successor: int = 4,
+    extra_context: dict[str, dict[str, str]] | None = None,
 ) -> list[CandidatePair]:
     """Deterministic screen: unlinked completed pairs the AI may consider.
 
     Gates, all binary: no recorded relationship either way (direct);
     the predecessor's actual finish precedes the successor's actual
     start; the working-day gap on the successor's calendar is within
-    the window; the pair shares naming/WBS context (or the predecessor
-    is an interface-type activity); the work-type order is not
-    physically backwards.
+    the window (extended where the pair shares a coded location — the
+    coding, not raw date proximity, then carries the relevance); the
+    pair shares context — a coded location/discipline/system value or
+    WBS node, naming tokens, an ID prefix, or an interface-type
+    predecessor; and the work-type order is not physically backwards.
+
+    ``extra_context`` merges BENEATH the file's own coding (codes win)
+    — the slot the optional AI classification pre-pass fills for
+    programmes that carry no usable coding.
     """
     tasks = [t for t in data.tasks
              if not t.is_loe_or_wbs and t.act_start and t.act_finish]
@@ -143,13 +207,21 @@ def screen_missing_links(
         if p and s:
             linked.add((p, s))
             linked.add((s, p))
+    context = {code: dict(vals)
+               for code, vals in (extra_context or {}).items()}
+    for code, vals in activity_context(data).items():
+        context.setdefault(code, {}).update(vals)   # file coding wins
     masks = calendar_masks(data)
-    finished = sorted(tasks, key=lambda t: t.act_finish)
+    # tightest hand-offs first: the activity that finished the day
+    # before the successor started is the likeliest true driver, so the
+    # per-successor cap must keep it, never crowd it out
+    finished = sorted(tasks, key=lambda t: t.act_finish, reverse=True)
     out: list[CandidatePair] = []
     per_succ: dict[str, int] = {}
     for succ in sorted(tasks, key=lambda t: t.act_start):
         succ_tokens = _tokens(succ.name)
         succ_rank = _work_rank(succ.name)
+        succ_ctx = context.get(succ.task_code, {})
         for pred in finished:
             if pred.task_id == succ.task_id:
                 continue
@@ -159,36 +231,120 @@ def screen_missing_links(
                 continue
             if per_succ.get(succ.task_code, 0) >= max_per_successor:
                 break
+            pred_ctx = context.get(pred.task_code, {})
+            shared_codes = {
+                key: succ_ctx[key]
+                for key in ("location", "discipline", "system", "wbs")
+                if key in succ_ctx and succ_ctx.get(key)
+                and succ_ctx.get(key) == pred_ctx.get(key)
+            }
+            window = (max_gap_working_days * 2
+                      if "location" in shared_codes
+                      else max_gap_working_days)
             gap = working_days_between(
                 pred.act_finish, succ.act_start, masks.get(succ.clndr_id))
-            if gap > max_gap_working_days:
+            if gap > window:
                 continue
             shared = succ_tokens & _tokens(pred.name)
             interface = any(tok in pred.name.lower()
                             for tok in _INTERFACE_TOKENS)
             prefix = (pred.task_code.split("-")[0]
                       == succ.task_code.split("-")[0])
-            if not (shared or interface or prefix):
+            if not (shared_codes or shared or interface or prefix):
                 continue
             pred_rank = _work_rank(pred.name)
             if (pred_rank is not None and succ_rank is not None
                     and pred_rank > succ_rank):
                 continue
-            context = (("shared: " + ", ".join(sorted(shared)[:3]))
-                       if shared else
-                       "interface activity" if interface else
-                       "same work area prefix")
+            bits = [f"same {k}: {v}" for k, v in shared_codes.items()]
+            if shared:
+                bits.append("shared: " + ", ".join(sorted(shared)[:3]))
+            if not bits:
+                bits.append("interface activity" if interface
+                            else "same work area prefix")
             out.append(CandidatePair(
                 pred_code=pred.task_code, pred_name=pred.name,
                 pred_finish=pred.act_finish,
                 succ_code=succ.task_code, succ_name=succ.name,
                 succ_start=succ.act_start,
                 gap_working_days=round(gap, 1),
-                shared_context=context,
+                shared_context="; ".join(bits),
             ))
             per_succ[succ.task_code] = per_succ.get(succ.task_code, 0) + 1
     out.sort(key=lambda c: c.gap_working_days)
     return out[:max_pairs]
+
+
+def needs_classification(data: XerData) -> bool:
+    """True when the file's own coding cannot carry the screen: fewer
+    than half of the completed activities have a coded location or
+    discipline."""
+    ctx = activity_context(data)
+    done = [t for t in data.tasks
+            if not t.is_loe_or_wbs and t.act_start and t.act_finish]
+    if not done:
+        return False
+    coded = sum(1 for t in done
+                if ctx.get(t.task_code, {}).get("location")
+                or ctx.get(t.task_code, {}).get("discipline"))
+    return coded * 2 < len(done)
+
+
+def build_classification_prompt(data: XerData) -> str:
+    """One-off classification pass (role R-A): normalise each activity
+    to zone / discipline / work type from its name and WBS, for files
+    that carry no usable coding. Names and WBS only — no dates, float,
+    logic or party names are transmitted."""
+    ctx = activity_context(data)
+    lines = []
+    for t in data.tasks:
+        if t.is_loe_or_wbs or not (t.act_start and t.act_finish):
+            continue
+        wbs = ctx.get(t.task_code, {}).get("wbs", "")
+        lines.append(f"{t.task_code} | {t.name}"
+                     + (f" | WBS: {wbs}" if wbs else ""))
+    return (
+        "Classify each construction programme activity below. For each, "
+        "give the physical location/zone it belongs to (a short "
+        "consistent label — reuse the same label for the same place), "
+        "its discipline (e.g. Civil, Structural, Electrical, "
+        "Mechanical, Finishes, Commissioning), and nothing else. If a "
+        "field cannot be told from the name, use \"\". Respond with "
+        "JSON ONLY, exactly this shape:\n"
+        '{"acts":[{"id":"<ID>","location":"<zone>",'
+        '"discipline":"<discipline>"}]}\n\n'
+        "ACTIVITIES:\n" + "\n".join(lines)
+    )
+
+
+def parse_classification(text: str, data: XerData,
+                         ) -> dict[str, dict[str, str]]:
+    """Verbatim-verified parse of the classification pass: unknown
+    activity IDs are dropped; values are trimmed labels, never dates
+    or numbers."""
+    valid = {t.task_code for t in data.tasks if not t.is_loe_or_wbs}
+    match = re.search(r"\{.*\}", text or "", re.S)
+    if not match:
+        return {}
+    try:
+        payload = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for item in payload.get("acts", []) or []:
+        if not isinstance(item, dict):
+            continue
+        code = str(item.get("id", "")).strip()
+        if code not in valid:
+            continue
+        entry = {}
+        for key in ("location", "discipline"):
+            value = " ".join(str(item.get(key, "")).split())[:60]
+            if value:
+                entry[key] = value
+        if entry:
+            out[code] = entry
+    return out
 
 
 def build_inference_prompt(pairs: list[CandidatePair],

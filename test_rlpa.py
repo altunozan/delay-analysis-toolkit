@@ -458,6 +458,114 @@ def test_poor_links_stay_out_unless_they_extend_the_chain():
                        for a in extended[0][2].activities]
 
 
+def _coded_data(code_type="Area / Location", value_both="Zone 7"):
+    """Two activities whose NAMES share nothing, related only through
+    an activity code — plus enough structure for the screen."""
+    from dcma.models import Calendar, Project
+    from dcma.xer_parser import XerData
+    tasks = [
+        task("1", "STR-01", "Masonry works north wing", 1, 5),
+        task("2", "ELE-01", "Cabling and containment", 8, 12),
+        task("3", "PC-001", "Completion", 12, 12, milestone=True),
+    ]
+    rels = [Relationship("2", "3", "PR_FS", 0.0)]
+    return XerData(
+        header=["ERMHDR"],
+        raw_tables={
+            "TASK": [{"task_id": t.task_id, "task_code": t.task_code,
+                      "wbs_id": ""} for t in tasks],
+            "TASKPRED": [],
+            "CALENDAR": [{"clndr_id": "CAL-1", "clndr_name": "7d",
+                          "day_hr_cnt": "8", "clndr_data": ""}],
+            "ACTVTYPE": [{"actv_code_type_id": "T1",
+                          "actv_code_type": code_type}],
+            "ACTVCODE": [{"actv_code_id": "C1",
+                          "actv_code_type_id": "T1",
+                          "actv_code_name": value_both}],
+            "TASKACTV": [{"task_id": "1", "actv_code_id": "C1"},
+                         {"task_id": "2", "actv_code_id": "C1"}],
+        },
+        projects=[Project("P1", "RLPA", dt(1), None, dt(12), dt(12))],
+        tasks=tasks,
+        relationships=rels,
+        calendars={"CAL-1": Calendar("CAL-1", "7d", 8.0)},
+        tasks_by_id={t.task_id: t for t in tasks},
+    )
+
+
+def test_screen_reads_activity_codes_not_just_names():
+    """Masonry -> cabling share no words; a shared Area/Location code
+    must carry the pair into the candidate list."""
+    from programme.rlpa import screen_missing_links
+    pairs = screen_missing_links(_coded_data())
+    keys = {(p.pred_code, p.succ_code) for p in pairs}
+    assert ("STR-01", "ELE-01") in keys, keys
+    kept = next(p for p in pairs
+                if (p.pred_code, p.succ_code) == ("STR-01", "ELE-01"))
+    assert "location" in kept.shared_context
+
+
+def test_responsibility_codes_are_never_relevance():
+    """A shared Responsibility code is a resource signal, not logic —
+    it must NOT screen the pair in."""
+    from programme.rlpa import screen_missing_links
+    pairs = screen_missing_links(
+        _coded_data(code_type="Responsibility (asserted)",
+                    value_both="SC-04"))
+    keys = {(p.pred_code, p.succ_code) for p in pairs}
+    assert ("STR-01", "ELE-01") not in keys, keys
+
+
+def test_per_successor_cap_keeps_tightest_handoffs():
+    """With more candidates than the cap, the predecessors that
+    finished CLOSEST to the successor's start must survive."""
+    from dcma.models import Calendar, Project
+    from dcma.xer_parser import XerData
+    from programme.rlpa import screen_missing_links
+    tasks = [task(str(i), f"Z-{i:03d}", f"Zone works stage {i}",
+                  i, i + 1) for i in range(1, 8)]
+    tasks.append(task("9", "Z-900", "Zone final inspection", 10, 11))
+    data = XerData(
+        header=["ERMHDR"],
+        raw_tables={"TASK": [], "TASKPRED": [],
+                    "CALENDAR": [{"clndr_id": "CAL-1",
+                                  "clndr_name": "7d",
+                                  "day_hr_cnt": "8", "clndr_data": ""}]},
+        projects=[Project("P1", "RLPA", dt(1), None, dt(11), dt(11))],
+        tasks=tasks,
+        relationships=[],
+        calendars={"CAL-1": Calendar("CAL-1", "7d", 8.0)},
+        tasks_by_id={t.task_id: t for t in tasks},
+    )
+    pairs = screen_missing_links(data, max_per_successor=3)
+    preds = [p.pred_code for p in pairs if p.succ_code == "Z-900"]
+    assert len(preds) == 3
+    # the three LATEST finishers (Z-005..Z-007), not the earliest
+    assert set(preds) == {"Z-005", "Z-006", "Z-007"}, preds
+
+
+def test_classification_pass_is_verbatim_verified():
+    from programme.rlpa import (needs_classification,
+                                parse_classification,
+                                screen_missing_links)
+    data = _rlpa_data()          # no codes at all -> needs the pass
+    assert needs_classification(data)
+    text = ('{"acts":[{"id":"A-100","location":"Zone A",'
+            '"discipline":"Civil"},'
+            '{"id":"E-200","location":"Zone A",'
+            '"discipline":"Electrical"},'
+            '{"id":"GHOST-9","location":"Nowhere","discipline":"X"}]}')
+    ctx = parse_classification(text, data)
+    assert "GHOST-9" not in ctx and ctx["A-100"]["location"] == "Zone A"
+    coded = _coded_data()
+    assert not needs_classification(coded) is None  # callable sanity
+    # the recovered context feeds the screen exactly like file coding
+    pairs = screen_missing_links(data, extra_context=ctx)
+    kept = next(p for p in pairs
+                if (p.pred_code, p.succ_code) == ("A-100", "E-200"))
+    assert "location" in kept.shared_context
+
+
 ALL_TESTS = [
     test_pipeline_builds_path_with_first_class_interruption,
     test_graph_is_deterministic_and_sealed,
@@ -472,6 +580,10 @@ ALL_TESTS = [
     test_vote_aggregation_maps_to_words_not_numbers,
     test_derived_path_walks_through_inferred_link,
     test_poor_links_stay_out_unless_they_extend_the_chain,
+    test_screen_reads_activity_codes_not_just_names,
+    test_responsibility_codes_are_never_relevance,
+    test_per_successor_cap_keeps_tightest_handoffs,
+    test_classification_pass_is_verbatim_verified,
 ]
 
 
