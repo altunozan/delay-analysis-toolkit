@@ -21,6 +21,7 @@ import state as sk
 from views._shared import status_strip
 from views._theme import inject_theme
 from views.apab import apab_tab
+from views.apab_v2 import apab_v2_tab
 from views.asbuilt import asbuilt_tab
 from views.collapsed_asbuilt import collapsed_asbuilt_tab
 from views.comparison import comparison_tab
@@ -134,6 +135,9 @@ def main() -> None:
             st.Page(apab_tab, title="As-Planned vs As-Built",
                     icon=":material/bar_chart:",
                     url_path="as-planned-vs-as-built"),
+            st.Page(apab_v2_tab, title="As-Planned vs As-Built v2 (RLPA)",
+                    icon=":material/route:",
+                    url_path="as-planned-vs-as-built-v2"),
             st.Page(windows_tab, title="Windows Analysis",
                     icon=":material/grid_view:",
                     url_path="windows-analysis"),
