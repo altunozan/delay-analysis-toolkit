@@ -45,11 +45,13 @@ Thumbs.db
 htmlcov/
 
 # Project-specific
-# Ignore all sample XERs (may be client data) EXCEPT the two bundled demo
-# programmes, which ship so the deployed app has a working sample toggle.
+# Ignore all sample XERs (may be client data) EXCEPT the bundled Harbour
+# Point demo set, which ships so the deployed app has a working sample
+# toggle. Any file added here MUST be synthetic — never client data.
 sample/*.xer
-!sample/Sample Baseline.xer
-!sample/Sample Update.xer
+!sample/Harbour Point DCP-03 - Baseline Programme Rev 0.xer
+!sample/Harbour Point DCP-03 - Update Programme Rev 8.xer
+!sample/Harbour Point DCP-03 - As-Built Programme Rev 12.xer
 *.xlsx
 *.tmp
 deckforge/.deckforge_autosave.pkl
