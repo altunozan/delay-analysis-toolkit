@@ -79,9 +79,6 @@ project (fully documented, generated from one coherent network by
 `sample/programmes/harbour_point_dcp03/build_programmes.py`):
 - `Harbour Point DCP-03 - Baseline Programme Rev 0.xer` — 60-activity
   contract baseline, zero-float critical path, data date 08 Jan 2024
-- `Harbour Point DCP-03 - Update Programme Rev 8.xer` — mid-project
-  progress update, data date 01 Sep 2025 (commissioning under way,
-  handover not started)
 - `Harbour Point DCP-03 - As-Built Programme Rev 12.xer` — all
   activities complete, 12 Dec 2025 completion, **+92 calendar days
   late** with the delay story documented event by event in

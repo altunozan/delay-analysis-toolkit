@@ -50,7 +50,6 @@ htmlcov/
 # toggle. Any file added here MUST be synthetic — never client data.
 sample/*.xer
 !sample/Harbour Point DCP-03 - Baseline Programme Rev 0.xer
-!sample/Harbour Point DCP-03 - Update Programme Rev 8.xer
 !sample/Harbour Point DCP-03 - As-Built Programme Rev 12.xer
 *.xlsx
 *.tmp
