@@ -3,14 +3,14 @@
 Usage:
     python3 test_engine.py [path/to/file.xer]
 
-Defaults to "sample/Sample Baseline.xer" when no path is given.
+Defaults to "sample/Harbour Point DCP-03 - Baseline Programme Rev 0.xer" when no path is given.
 """
 
 import sys
 
 from dcma import DCMAConfig, parse_xer, run_all_checks
 
-xer_path = sys.argv[1] if len(sys.argv) > 1 else "sample/Sample Baseline.xer"
+xer_path = sys.argv[1] if len(sys.argv) > 1 else "sample/Harbour Point DCP-03 - Baseline Programme Rev 0.xer"
 data = parse_xer(xer_path, DCMAConfig())
 
 print(f"Project: {data.project.short_name}")

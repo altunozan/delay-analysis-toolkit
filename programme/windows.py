@@ -140,6 +140,24 @@ def analyse_windows(
                      end_task_code=end_task_code,
                      branch_tolerance_hours=branch_tolerance_hours)
         paths[label] = {a.task_code: a.name for a in cp.critical}
+        if not paths[label]:
+            # A fully progressed revision (a final as-built) has no
+            # remaining-works path, but the movement traceback must not
+            # go dark — fall back to the as-built longest path through
+            # completed work, and say so.
+            eligible = [t for t in data.tasks if not t.is_loe_or_wbs]
+            if eligible and all(t.is_complete for t in eligible):
+                from programme.asbuilt_path import \
+                    extract_asbuilt_longest_path
+                ab = extract_asbuilt_longest_path(
+                    data, end_task_code=end_task_code)
+                paths[label] = {a.task_code: a.name
+                                for a in ab.activities}
+                result.warnings.append(
+                    f"{label}: fully progressed revision — the driving "
+                    "path shown is the as-built longest path through "
+                    "completed work; a remaining-works path does not "
+                    "exist in an as-built file.")
         tasks_by_code[label] = {t.task_code: t for t in data.tasks}
         # a fallback from the elected terminal must reach the reader —
         # dropping it silently mixes target movement with a fallback path

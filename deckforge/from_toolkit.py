@@ -9,8 +9,8 @@ an update XER — no UI, fully reproducible:
     4. Progress S-curve (planned vs actual)
 
 Usage:
-    python3 deckforge/from_toolkit.py "sample/Sample Baseline.xer" \
-        "sample/Sample Update.xer" -o report_deck.pptx --top 12 \
+    python3 deckforge/from_toolkit.py "sample/Harbour Point DCP-03 - Baseline Programme Rev 0.xer" \
+        "sample/Harbour Point DCP-03 - As-Built Programme Rev 12.xer" -o report_deck.pptx --top 12 \
         --title "Programme review" --agenda chapters
 """
 
