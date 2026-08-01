@@ -1,384 +1,458 @@
-"""As-Planned vs As-Built v2 — Retrospective Longest Path Analysis.
+"""As-Planned vs As-Built v2 — Retrospective Longest Path.
 
-Nine-step programme-only engine (rlpa_apvab_v2): fitness gates, blocked
-candidate generation with binary admissibility gates, E1–E7 evidence and
-H1–H5 symmetric hypothesis testing, first-class interruption nodes with
-N1–N7 negative evidence, backward path query from an actual-dated
-milestone, APvAB window comparison and migration.
+The same four steps as the As-Planned vs As-Built method, with one
+extension in step ①: alongside the two computed candidates (recorded
+logic and actual sequence), the AI proposes dependencies that were
+never linked in the programme — blockwork before first-fix electrical
+— from a deterministically screened list, over multiple independent
+runs, and the longest path is re-derived over the combined network.
 
-Three-layer doctrine on the page: evidence tables are Layer 1, tier and
-classification tables are Layer 2, and the analyst's rejections here are
-Layer 3 — a rejection re-runs the path query over the same sealed
-evidence graph; it never edits the evidence. The AI panel is role R-B
-(narrative prose over completed Layer-2 output) and nothing else.
+① Determine the retrospective longest path — three candidates per
+  elected milestone, up to three inferred-logic options; the analyst
+  adopts one. Confidence is a word (strong / medium / poor), never a
+  number, and every inferred link is disclosed in its own section.
+② Planned vs as-built bars on the adopted path.
+③ Analysis windows from key dates.
+④ Full gantt + AI narrative + workbook.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-
 import pandas as pd
 import streamlit as st
 
-from rlpa_apvab_v2 import analyse, html_report, snapshot_from_xer_data
-from rlpa_apvab_v2.config import RLPAConfig, UNCALIBRATED_STATEMENT
-from rlpa_apvab_v2.domain import (
-    ActivityNode,
-    InterruptionClass,
-    InterruptionNode,
-    MilestoneNode,
-    NodeKind,
+import state as sk
+from dcma.narrative import NarrativeError, stream_narrative
+from programme import (
+    build_apab_gantt_html, build_apab_report_prompt, build_simple_xlsx,
+    extract_actual_trace, extract_asbuilt_longest_path, keydate_windows,
+    planned_vs_actual,
 )
-from rlpa_apvab_v2.graph import primitive
-from views._shared import ai_narrative_panel, fetch_raw, get_parsed_files
+from programme.narrative import DEFAULT_TEMPLATES
+from programme.rlpa import (
+    RLPA_CAVEATS, aggregate_votes, build_inference_prompt, derive_paths,
+    parse_inference, path_idle_gaps, screen_missing_links,
+)
+from views._shared import (
+    ai_credentials_panel, ai_narrative_panel, basis_panel,
+    gantt_fullscreen_button, get_parsed_files, resolve_ai_credentials,
+)
 
-_RESULT_KEY = "apab_v2_result"
-_SIG_KEY = "apab_v2_sig"
-_REJECT_KEY = "apab_v2_rejections"
+_PATHS = "apab2_paths"          # ms -> list[(code, name)]
+_BASIS = "apab2_basis"          # ms -> basis label
+_MS = "apab2_ms"                # elected milestone code
+_RLPA = "apab2_rlpa"            # RLPAResult of the last inference run
+_KD = "apab2_keydates"          # code -> why
+_DATE_BASIS = "apab2_date_basis"
 
-_CAVEATS = [
-    "Retrospective Longest Path Analysis, programme data only — no "
-    "correspondence, site records or external documents are read, and "
-    "none may be inferred.",
-    "The as-built critical path is INFERRED from execution; the "
-    "as-planned path is CALCULATED from baseline logic. They are never "
-    "presented on a common confidence scale.",
-    "Interruptions are first-class elements of the path; an unexplained "
-    "interruption is a finding, not a failure of the trace.",
-    "Tier assignments are rule-derived and uncalibrated; they express "
-    "the pattern of evidence assembled, not a validated likelihood.",
-    "This is not an Impacted As-Planned, Time Impact, Collapsed "
-    "As-Built, concurrency, apportionment or entitlement analysis.",
-]
-
-_NARRATIVE_TEMPLATE = """\
-## As-Planned vs As-Built v2 — Programme-Derived Findings (RLPA)
-
-### 1. Method and Reliability
-State the method (Retrospective Longest Path Analysis, programme data
-only), the files analysed, the fitness-gate results and the reliability
-rating. Reproduce the calibration statement verbatim.
-
-### 2. Probable As-Built Controlling Chain
-The chain in order, naming each element (activity, interruption or
-milestone) with its tier. Never average or sum tiers; name the weakest
-links and why they are weak.
-
-### 3. Unexplained Interruptions (headline)
-Each unexplained interruption: workfront, period, working days, what was
-excluded, the coverage qualification, and the specific question the
-records must answer.
-
-### 4. As-Planned versus As-Built Position
-Where the executed chain diverged from the planned chain, per window,
-with the divergence classification (execution / scope / logic /
-artefact). State the as-planned health warning.
-
-### 5. Contested Interpretations and Open Questions
-Contest-flagged links with both cases stated neutrally, and every
-question referred to the analyst.
-"""
+_RUNS = 3
 
 
-def _prompt(result, template: str) -> str:
-    sections = {
-        "run": primitive(result.run),
-        "interruptions": primitive(result.interruption_interpretations),
-        "review_items": list(result.review_items),
-    }
-    return (
-        "You are drafting the narrative section of a forensic delay "
-        "report over COMPLETED deterministic analysis output. Rules that "
-        "override everything below: use only the figures and findings "
-        "supplied; never invent activities, dates or causes; never "
-        "express a tier as a probability or percentage; never combine "
-        "tiers arithmetically; keep evidence, interpretation and "
-        "analyst-referred questions in separate sentences; do not infer "
-        "responsibility, entitlement or compensability; reproduce every "
-        "stated limitation. Write in measured expert-report English.\n\n"
-        "TEMPLATE TO FOLLOW:\n" + template + "\n\nDATA (JSON):\n"
-        + json.dumps(sections, default=str)[:60000]
-    )
+def _trace_table(trace, inferred=frozenset()):
+    rows = []
+    for a in trace.activities:
+        rows.append({
+            "Activity ID": a.task_code, "Activity": a.name[:52],
+            "As-built start": (f"{a.act_start:%Y-%m-%d}"
+                               if a.act_start else "—"),
+            "As-built finish": (f"{a.act_finish:%Y-%m-%d}"
+                                if a.act_finish else "—"),
+            "Basis": a.basis,
+        })
+    link_in = {lk.succ_code: lk for lk in trace.links}
+    for r in rows:
+        lk = link_in.get(r["Activity ID"])
+        r["Hand-off"] = ("INFERRED" if lk and (
+            lk.kind == "inferred"
+            or (lk.pred_code, lk.succ_code) in inferred)
+            else "recorded logic" if lk and lk.had_logic
+            else "sequence" if lk else "")
+    return pd.DataFrame(rows)
 
 
-def _node_row(graph, element):
-    node = graph.nodes[element.node_id]
-    if isinstance(node, InterruptionNode):
-        return {
-            "Order": element.order, "Type": "Interruption", "ID": "—",
-            "Name / workfront": node.workfront,
-            "Start": node.period_start, "Finish": node.period_end,
-            "Working days": round(node.working_days, 1),
-            "Tier": element.tier.value, "Basis": element.basis,
-            "Cap": element.governing_cap or "",
-        }
-    if isinstance(node, MilestoneNode):
-        return {
-            "Order": element.order, "Type": "Milestone",
-            "ID": node.task_code, "Name / workfront": node.name,
-            "Start": node.actual_date, "Finish": node.actual_date,
-            "Working days": 0.0, "Tier": element.tier.value,
-            "Basis": element.basis, "Cap": element.governing_cap or "",
-        }
-    return {
-        "Order": element.order, "Type": "Activity", "ID": node.task_code,
-        "Name / workfront": node.original_name,
-        "Start": node.actual_start, "Finish": node.actual_finish,
-        "Working days": (round(node.actual_duration_working_days, 1)
-                         if node.actual_duration_working_days is not None
-                         else None),
-        "Tier": element.tier.value, "Basis": element.basis,
-        "Cap": element.governing_cap or "",
-    }
-
-
-def _code(graph, node_id: str) -> str:
-    node = graph.nodes.get(node_id)
-    return getattr(node, "task_code", None) or getattr(
-        node, "workfront", node_id)
+def _ms_delay(rows):
+    pf = [r["planned_finish"] for r in rows if r.get("planned_finish")]
+    af = [r["actual_finish"] for r in rows if r.get("actual_finish")]
+    if pf and af:
+        return round((max(af) - max(pf)).total_seconds() / 86400, 1)
+    return None
 
 
 def apab_v2_tab() -> None:
-    st.header("As-Planned vs As-Built v2 — Retrospective Longest Path")
-    st.caption(
-        "Programme-only reconstruction of the probable as-built critical "
-        "path — actual work AND actual interruption — compared against "
-        "the planned path across windows. Assembled evidence with a "
-        "provisional reading, for adoption, adjustment or rejection."
-    )
-
     files = get_parsed_files()
-    if not files:
-        st.info("Upload XER files on the **Data Intake** page first. "
-                "Supply the baseline plus updates/as-built for the full "
-                "nine steps; a single as-built still yields the "
-                "interruption register and path.")
+    inv = st.session_state.get(sk.INVENTORY)
+    if not files or inv is None or len(files) < 2:
+        st.info("Upload the contract baseline and the as-built update "
+                "in **Data Intake** first.")
         return
+    pool = dict(files)
+    ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
+    baseline = (pool[inv.baseline.file_name]
+                if inv.baseline else ordered[0][1])
+    _, latest = ordered[-1]
+    dd = latest.project.data_date if latest.project else None
+    by_code = {t.task_code: t for t in latest.tasks if not t.is_loe_or_wbs}
 
-    names = [n for n, _ in files]
-    chosen = st.multiselect(
-        "Programmes to analyse (the engine orders them by data date; "
-        "earliest becomes the baseline, latest the as-built)",
-        names, default=names, key="apab_v2_files")
-    if not chosen:
-        st.warning("Select at least one programme.")
-        return
+    step = st.radio(
+        "Method step",
+        ["① Retrospective longest path", "② As-planned vs as-built",
+         "③ Windows", "④ Gantt & report"],
+        horizontal=True, key="apab2_step")
 
-    final_name = chosen[-1]
-    final_data = dict(files)[final_name]
-    milestone_options = ["(automatic — highest-ranked actual-dated "
-                         "completion milestone)"]
-    milestone_codes: list[str | None] = [None]
-    for t in final_data.tasks:
-        if t.is_milestone and (t.act_finish or t.act_start):
-            milestone_options.append(f"{t.task_code} — {t.name}")
-            milestone_codes.append(t.task_code)
-    anchor_pick = st.selectbox(
-        "Trace anchor (completion milestone with an actual date)",
-        range(len(milestone_options)),
-        format_func=lambda i: milestone_options[i],
-        key="apab_v2_anchor",
-        help="Do not assume the latest milestone is the contractual one — "
-             "elect it explicitly where the programme does not say.")
-    anchor_code = milestone_codes[anchor_pick]
+    paths: dict = st.session_state.get(_PATHS) or {}
+    basis_by: dict = st.session_state.get(_BASIS) or {}
+    date_basis = st.session_state.get(_DATE_BASIS, "late")
 
-    rejections: set[str] = set(st.session_state.get(_REJECT_KEY, []))
-    sig = hashlib.sha256(json.dumps(
-        [chosen, anchor_code, sorted(rejections)]
-    ).encode()).hexdigest()
+    def _rows_for(ms):
+        codes = {c for c, _ in paths.get(ms, [])}
+        return sorted(
+            planned_vs_actual(baseline, latest, codes,
+                              date_basis=date_basis),
+            key=lambda r: (r["actual_start"] is None,
+                           r["actual_start"]))
 
-    if st.button("Run RLPA assessment", type="primary", key="apab_v2_go") \
-            or (st.session_state.get(_SIG_KEY) == sig
-                and _RESULT_KEY in st.session_state):
-        if st.session_state.get(_SIG_KEY) != sig:
-            snapshots = []
-            with st.spinner("Running the nine-step assessment…"):
-                for name in chosen:
-                    data = dict(files)[name]
-                    raw = fetch_raw(name) or name.encode("utf-8")
-                    snapshots.append(snapshot_from_xer_data(
-                        data, filename=name, content=raw))
-                result = analyse(
-                    snapshots, anchor_task_code=anchor_code,
-                    rejected_element_ids=rejections,
-                )
-            st.session_state[_RESULT_KEY] = result
-            st.session_state[_SIG_KEY] = sig
-        result = st.session_state[_RESULT_KEY]
+    # ========= ① determine the retrospective longest path =========== #
+    if step.startswith("①"):
+        st.subheader("① Determine the retrospective longest path")
+        milestones = [t.task_code for t in latest.tasks
+                      if t.is_milestone and not t.is_loe_or_wbs]
+        if not milestones:
+            st.warning("No milestones in the latest programme.")
+            return
+        default = st.session_state.get(_MS)
+        ms = st.selectbox(
+            "Trace to (elected completion milestone)", milestones,
+            index=(milestones.index(default) if default in milestones
+                   else len(milestones) - 1),
+            format_func=lambda c: f"{c} — {by_code[c].name[:50]}",
+            key="apab2_ms_pick")
+        st.session_state[_MS] = ms
+
+        cand_logic = extract_asbuilt_longest_path(
+            latest, end_task_code=ms)
+        cand_seq = extract_actual_trace(ordered, end_task_code=ms,
+                                        max_gap_days=60)
+
+        st.markdown("**Candidate A — recorded logic** (the as-built "
+                    "longest path over the programme's own links)")
+        st.dataframe(_trace_table(cand_logic), width="stretch",
+                     hide_index=True, height=230)
+        st.markdown("**Candidate B — actual sequence** (recorded dates; "
+                    "un-evidenced hops disclosed)")
+        st.dataframe(_trace_table(cand_seq), width="stretch",
+                     hide_index=True, height=230)
+
+        # ---- candidate C: analyst-logic (AI-inferred) path ---------- #
+        st.markdown("**Candidate C — analyst logic** (dependencies the "
+                    "programme never linked, AI-proposed from a "
+                    "deterministic screen, majority-voted over "
+                    f"{_RUNS} independent runs)")
+        pairs = screen_missing_links(latest)
+        st.caption(f"{len(pairs)} unlinked pair(s) survive the "
+                   "deterministic screen (finish-before-start, shared "
+                   "work-area context, physically possible order). The "
+                   "AI can only select from these.")
+        ai_credentials_panel("apab2")
+        provider, model, api_key = resolve_ai_credentials()
+        if st.button(f"Run inference ({_RUNS} passes)", type="primary",
+                     disabled=not (api_key and pairs), key="apab2_go"):
+            prompt = build_inference_prompt(pairs)
+            runs, rejected = [], []
+            progress = st.progress(0.0, "Running inference…")
+            for i in range(_RUNS):
+                try:
+                    text = "".join(stream_narrative(
+                        provider, api_key, prompt, model or None))
+                except NarrativeError as exc:
+                    st.error(f"AI pass {i + 1} failed: {exc}")
+                    break
+                accepted, bad = parse_inference(text, pairs)
+                runs.append(accepted)
+                rejected.extend(bad)
+                progress.progress((i + 1) / _RUNS,
+                                  f"Pass {i + 1} of {_RUNS} done")
+            progress.empty()
+            if runs:
+                links = aggregate_votes(runs)
+                res = derive_paths(latest, links, end_task_code=ms)
+                res.candidates = pairs
+                res.rejected = rejected
+                st.session_state[_RLPA] = (ms, res)
+
+        stored = st.session_state.get(_RLPA)
+        res = stored[1] if stored and stored[0] == ms else None
+        option_traces = {}
+        if res:
+            for label, note, trace in res.options:
+                option_traces[label] = (note, trace)
+            inferred_set = {(l.pred_code, l.succ_code)
+                            for l in res.links}
+            for label, (note, trace) in option_traces.items():
+                on_path = sum(1 for lk in trace.links
+                              if lk.kind == "inferred")
+                st.markdown(f"**{label}** — {note}; {on_path} inferred "
+                            "hand-off(s) on the path")
+                st.dataframe(_trace_table(trace, inferred_set),
+                             width="stretch", hide_index=True,
+                             height=230)
+
+        # ---- adoption ------------------------------------------------
+        choices = {"A — recorded logic": ("as-built longest path "
+                                          "(recorded logic)",
+                                          cand_logic),
+                   "B — actual sequence": ("actual recorded sequence",
+                                           cand_seq)}
+        for label, (note, trace) in option_traces.items():
+            choices[f"C — {label}"] = (
+                f"retrospective longest path with inferred links "
+                f"({note})", trace)
+        pick = st.radio("Adopt as the as-built critical path",
+                        list(choices), key="apab2_adopt_pick")
+        if st.button("Adopt for this milestone", key="apab2_adopt"):
+            basis, trace = choices[pick]
+            paths[ms] = [(a.task_code, a.name) for a in trace.activities]
+            basis_by[ms] = basis
+            st.session_state[_PATHS] = paths
+            st.session_state[_BASIS] = basis_by
+            st.success(f"Adopted for {ms}: {basis}. Continue to step ②.")
+
+        # ---- qualification (separate section, words not numbers) ---- #
+        if res:
+            st.divider()
+            st.subheader("Qualification — inferred links")
+            if res.links:
+                st.dataframe(pd.DataFrame([{
+                    "Confidence": l.confidence.upper(),
+                    "Votes": f"{l.votes} of {l.runs} runs",
+                    "Predecessor": f"{l.pred_code} — "
+                    + by_code[l.pred_code].name[:38]
+                    if l.pred_code in by_code else l.pred_code,
+                    "Successor": f"{l.succ_code} — "
+                    + by_code[l.succ_code].name[:38]
+                    if l.succ_code in by_code else l.succ_code,
+                    "AI reasoning": " / ".join(l.reasons)[:160],
+                } for l in res.links]), width="stretch",
+                    hide_index=True)
+            else:
+                st.info("No missing dependencies proposed.")
+            if res.rejected:
+                with st.expander(f"{len(res.rejected)} AI proposal(s) "
+                                 "discarded by verbatim verification"):
+                    for r in res.rejected:
+                        st.write("•", r)
+            adopted_trace = res.options[0][2] if res.options else None
+            if adopted_trace:
+                gaps = path_idle_gaps(adopted_trace, latest)
+                if gaps:
+                    st.markdown("**Largest unexplained hand-off gaps "
+                                "on the path** (the workfront stood "
+                                "idle — often the finding itself):")
+                    st.dataframe(pd.DataFrame([{
+                        "After": g["after"], "Before": g["before"],
+                        "From": f"{g['from']:%Y-%m-%d}",
+                        "To": f"{g['to']:%Y-%m-%d}",
+                        "Working days": g["working_days"],
+                    } for g in gaps]), width="stretch",
+                        hide_index=True)
+            with st.expander("Standing caveats (always apply)"):
+                for c in RLPA_CAVEATS:
+                    st.write("•", c)
+
+    # ========= ② as-planned vs as-built ============================= #
+    elif step.startswith("②"):
+        st.subheader("② As-planned vs as-built")
+        if not paths:
+            st.info("Adopt a retrospective longest path in step ① "
+                    "first.")
+            return
+        basis_pick = st.radio(
+            "Planned dates from the baseline",
+            ["Late dates (LS/LF) — default", "Early dates (ES/EF)"],
+            horizontal=True, key="apab2_basis_dates",
+            index=0 if date_basis == "late" else 1)
+        date_basis = "late" if basis_pick.startswith("Late") else "early"
+        st.session_state[_DATE_BASIS] = date_basis
+        display, mets = [], []
+        for ms in paths:
+            rows = _rows_for(ms)
+            mets.append((ms, _ms_delay(rows)))
+            display.append({"task_code": "", "row_kind": "section",
+                            "name": f"PATH TO {ms} — "
+                            + (by_code[ms].name[:44]
+                               if ms in by_code else "")})
+            display.extend(rows)
+        cols = st.columns(max(len(mets), 1))
+        for col, (ms, delay) in zip(cols, mets):
+            col.metric(f"Delay to {ms}",
+                       f"{delay:+.0f} d" if delay is not None else "—")
+        _g2 = build_apab_gantt_html(
+            display,
+            title=f"As-planned ({date_basis} dates) vs as-built "
+                  "(retrospective longest path)",
+            data_date=dd)
+        st.iframe(_g2, height=560)
+        st.caption("Per row: as-planned dimension line BELOW, as-built "
+                   "bar ABOVE. Planned dates are the baseline's "
+                   f"{date_basis.upper()} dates. The path basis "
+                   "(including any inferred links) is recorded in "
+                   "step ① and the report.")
+        gantt_fullscreen_button(_g2, "apab2_step2_gantt", "apab2_fs2")
+
+    # ========= ③ windows ============================================ #
+    elif step.startswith("③"):
+        st.subheader("③ Analysis windows from key dates")
+        if not paths:
+            st.info("Adopt a retrospective longest path in step ① "
+                    "first.")
+            return
+        saved = st.session_state.get(_KD, {})
+        pickable, seen = [], set()
+        for ms in paths:
+            for r in _rows_for(ms):
+                if r["task_code"] not in seen:
+                    seen.add(r["task_code"])
+                    pickable.append(r)
+        edited = st.data_editor(pd.DataFrame([{
+            "Key date": r["task_code"] in saved,
+            "ID": r["task_code"],
+            "Activity": r["name"][:56],
+            "As-built finish": (f"{r['actual_finish']:%Y-%m-%d}"
+                                if r.get("actual_finish") else "—"),
+            "Why it is key": saved.get(r["task_code"], ""),
+        } for r in pickable]), width="stretch", hide_index=True,
+            height=340, disabled=["ID", "Activity", "As-built finish"],
+            key="apab2_kd_ed")
+        kd = {str(r["ID"]): str(r["Why it is key"] or "")
+              for _, r in edited.iterrows() if bool(r["Key date"])}
+        st.session_state[_KD] = kd
+        if not kd:
+            st.info("Tick at least ONE key date — the first window "
+                    "runs from the PROJECT START to it.")
+        for ms in paths:
+            rows = _rows_for(ms)
+            kwin = keydate_windows(rows, [c for c in kd
+                                          if c in {r["task_code"]
+                                                   for r in rows}])
+            if kwin:
+                st.markdown(f"**Windows on the path to {ms}:**")
+                st.dataframe(pd.DataFrame([{
+                    "Window": f"W{i}: {w['from_code']} → {w['to_code']}",
+                    "Planned finish": f"{w['planned_finish']:%Y-%m-%d}",
+                    "Actual finish": f"{w['actual_finish']:%Y-%m-%d}",
+                    "Delay at key date (d)": w["cumulative_delay_days"],
+                    "Accrued in window (d)": w["window_delay_days"],
+                    "Resequenced": ("⚠️ order differs from plan"
+                                    if w.get("resequenced") else ""),
+                } for i, w in enumerate(kwin, start=1)]),
+                    width="stretch", hide_index=True)
+
+    # ========= ④ gantt & report ===================================== #
     else:
-        st.stop()
-        return
+        st.subheader("④ Gantt & report")
+        if not paths:
+            st.info("Adopt a retrospective longest path in step ① "
+                    "first.")
+            return
+        kd = st.session_state.get(_KD, {})
+        display, mets, windows_by_ms, all_windows = [], [], {}, []
+        sections_data = []
+        for ms in paths:
+            rows = _rows_for(ms)
+            delay = _ms_delay(rows)
+            mets.append((ms, delay))
+            display.append({"task_code": "", "row_kind": "section",
+                            "name": f"PATH TO {ms} — "
+                            + (by_code[ms].name[:44]
+                               if ms in by_code else "")})
+            display.extend(rows)
+            kwin = keydate_windows(rows, [c for c in kd
+                                          if c in {r["task_code"]
+                                                   for r in rows}])
+            windows_by_ms[ms] = kwin
+            for i, w in enumerate(kwin, start=1):
+                all_windows.append({
+                    "label": f"W{i}", "start": w.get("window_start"),
+                    "end": w.get("window_end"),
+                    "delay_days": w["window_delay_days"]})
+            sections_data.append({
+                "ms": ms,
+                "ms_name": by_code[ms].name if ms in by_code else ms,
+                "basis": basis_by.get(ms, ""),
+                "delay_days": delay,
+                "achieved": bool(ms in by_code
+                                 and by_code[ms].act_finish),
+                "rows": rows})
+        cols = st.columns(max(len(mets), 1))
+        for col, (ms, delay) in zip(cols, mets):
+            col.metric(f"Delay to {ms}",
+                       f"{delay:+.0f} d" if delay is not None else "—")
+        _first = next((d for _, d in mets if d is not None), None)
+        _g4 = build_apab_gantt_html(
+            display, keydates=kd, overall_delay_days=_first,
+            title=f"As-planned ({date_basis} dates) vs as-built "
+                  "(retrospective longest path)",
+            windows=all_windows, data_date=dd)
+        st.iframe(_g4, height=620)
+        gantt_fullscreen_button(_g4, "apab2_final_gantt", "apab2_fs4")
 
-    run = result.run
-    st.warning("**Calibration status.** " + UNCALIBRATED_STATEMENT)
+        stored = st.session_state.get(_RLPA)
+        res = stored[1] if stored else None
+        inferred_rows = ([{
+            "Confidence": l.confidence.upper(),
+            "Votes": f"{l.votes} of {l.runs}",
+            "Predecessor": l.pred_code, "Successor": l.succ_code,
+            "AI reasoning": " / ".join(l.reasons)[:160],
+        } for l in res.links] if res else [])
 
-    # ---- Step 1: fitness (Layer 1) ----
-    st.subheader("Fitness gates — Layer 1")
-    left, right = st.columns([3, 1])
-    with left:
-        st.dataframe(pd.DataFrame([{
-            "Gate": g.gate, "Status": g.status.value,
-            "Measured": g.measured, "Threshold": g.threshold,
-            "Consequence on failure": g.consequence,
-        } for g in run.fitness.gates]), width="stretch", hide_index=True)
-    with right:
-        st.metric("Reliability", run.fitness.reliability)
-        st.caption("Graph version: `" + run.graph_version[:16] + "…`")
+        basis_panel("As-Planned vs As-Built v2 (RLPA)", latest, [
+            "Adopted path basis per milestone: "
+            + ("; ".join(f"{m}: {b}" for m, b in basis_by.items())
+               or "not adopted"),
+            f"Planned dates: baseline {date_basis.upper()} dates",
+            f"{len(inferred_rows)} inferred link(s) proposed by AI "
+            "over the deterministic screen; confidence stated in "
+            "words from cross-run agreement" if inferred_rows else
+            "No inferred links in play — recorded programme data only",
+        ])
+        with st.expander("Method caveats (always apply)"):
+            for c in RLPA_CAVEATS:
+                st.write("•", c)
 
-    # ---- Step 5: unexplained interruption register (headline) ----
-    st.subheader("Unexplained interruption register — headline output")
-    rows = []
-    for item in result.interruption_interpretations:
-        node = result.graph.nodes[item.interruption_node_id]
-        bundle = result.graph.negative_bundles.get(
-            node.negative_evidence_bundle_id)
-        pattern = " ".join(
-            f"{f.reference}:{f.state.value[:4]}" for f in bundle.factors
-        ) if bundle else ""
-        rows.append({
-            "Class": item.classification.value,
-            "Workfront": node.workfront,
-            "From": node.period_start, "To": node.period_end,
-            "Working days": round(node.working_days, 1),
-            "Bounded by": (_code(result.graph,
-                                 node.bounding_predecessor_node_id)
-                           + " → "
-                           + _code(result.graph,
-                                   node.bounding_successor_node_id)),
-            "Candidates tested": len(node.candidate_population),
-            "N1–N7": pattern,
-            "Coverage": item.coverage_qualification,
-            "Completion correspondence": item.completion_correspondence,
-            "Discriminating question": item.discriminating_question,
-            "Priority": item.review_priority.value,
-        })
-    if rows:
-        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
-        st.caption("**Evidence** (workfront, period, exclusions) is Layer 1; "
-                   "**classification and tier** are Layer 2; the "
-                   "**discriminating question** is referred to the analyst.")
-    else:
-        st.info("No reportable interruptions at the configured threshold.")
-
-    # ---- Step 6: derived path (Layer 2) ----
-    st.subheader("Probable as-built controlling chain — Layer 2")
-    if run.path:
-        st.dataframe(pd.DataFrame([
-            _node_row(result.graph, e) for e in run.path.elements
-        ]), width="stretch", hide_index=True)
-        tiers = [e.tier.value for e in run.path.elements]
-        profile = {t: tiers.count(t) for t in dict.fromkeys(tiers)}
-        st.caption(
-            f"Chain of {len(tiers)} elements — "
-            + ", ".join(f"{v}× {k}" for k, v in profile.items())
-            + f". Weakest link: {run.path.weakest_tier.value}. "
-            "Weakest-link characterisation only; tiers are never averaged. "
-            f"Query: {run.path.query_definition}")
-    else:
-        st.error("Path derivation suppressed by the fitness gates "
-                 "(see consequences above).")
-
-    # ---- Step 4: contested register ----
-    contested = [c for c in result.candidate_interpretations
-                 if c.admissible and c.contest_flag]
-    with st.expander(f"Contested relationship register "
-                     f"({len(contested)} link(s)) — Layer 2"):
-        for c in contested[:80]:
-            succ = _code(result.graph, c.successor_node_id)
-            pred = _code(result.graph, c.predecessor_node_id)
-            st.markdown(
-                f"**{succ} ← {pred}** — {c.tier.value}, margin "
-                f"{c.uniqueness_margin}. {c.alternative_comparison}")
-            bundle = (result.graph.evidence_bundles.get(c.evidence_bundle_id)
-                      if c.evidence_bundle_id else None)
-            if bundle:
-                st.caption("Evidence: " + "; ".join(
-                    f"{f.reference} {f.state.value}: {f.observation}"
-                    for f in bundle.factors))
-            st.caption("Hypotheses: " + "; ".join(
-                f"{h.reference} {'VIABLE' if h.viable else 'excluded'}"
-                for h in c.hypotheses)
-                + ((" — caps: " + "; ".join(c.caps_applied))
-                   if c.caps_applied else ""))
-            st.caption("For the analyst: " + c.discriminating_question)
-
-    # ---- Steps 7–8: windows and migration ----
-    if run.windows:
-        st.subheader("APvAB window comparison — Layer 2")
-        st.dataframe(pd.DataFrame([{
-            "Window": w.window_id, "From": w.start, "To": w.end,
-            "As-built path within window":
-                " → ".join(w.probable_as_built_path) or "—",
-            "Movement (wd)": w.completion_movement_working_days,
-            "Displaced from planned":
-                ", ".join(w.displaced_from_planned[:12]),
-            "Entered as-built": ", ".join(w.entered_as_built[:12]),
-            "Divergence": w.divergence.value, "Tier": w.tier.value,
-            "Suppressed": w.suppression_reason or "",
-        } for w in run.windows]), width="stretch", hide_index=True)
-    if run.migrations:
-        st.dataframe(pd.DataFrame([{
-            "Window": m.window_id, "From": m.previous_controlling_path,
-            "To": m.new_controlling_path, "Point": m.migration_point,
-            "Artefact/Execution": m.artefact_or_execution,
-            "Explanation": m.explanation,
-        } for m in run.migrations]), width="stretch", hide_index=True)
-
-    # ---- Layer 3: expert adoption gate ----
-    st.subheader("Expert adoption — Layer 3")
-    st.caption(
-        "Rejecting an interpretation re-runs the path query over the "
-        "same sealed evidence graph — the engine's original reading "
-        "remains disclosable beside yours.")
-    rejectable = {
-        f"{_code(result.graph, c.successor_node_id)} ← "
-        f"{_code(result.graph, c.predecessor_node_id)} ({c.tier.value})":
-        c.interpretation_id
-        for c in result.candidate_interpretations if c.admissible
-    }
-    picked = st.multiselect(
-        "Interpretations to reject", list(rejectable),
-        default=[k for k, v in rejectable.items() if v in rejections],
-        key="apab_v2_reject_pick")
-    if st.button("Apply rejections and re-run the path query",
-                 key="apab_v2_reject_go"):
-        st.session_state[_REJECT_KEY] = sorted(
-            rejectable[k] for k in picked)
-        st.session_state.pop(_SIG_KEY, None)
-        st.rerun()
-
-    # ---- warnings + downloads ----
-    if run.warnings:
-        with st.expander(f"Limitations and warnings ({len(run.warnings)})"):
-            for w in dict.fromkeys(run.warnings):
-                st.write("•", w)
-    with st.expander("Standing caveats (always apply)"):
-        for c in _CAVEATS:
-            st.write("•", c)
-
-    d1, d2, d3 = st.columns(3)
-    d1.download_button(
-        "⬇️ Full HTML report (layer-separated)",
-        data=html_report(result).encode("utf-8"),
-        file_name="rlpa_apvab_v2_report.html", mime="text/html",
-        key="apab_v2_dl_html")
-    d2.download_button(
-        "⬇️ Evidence graph (JSON)",
-        data=json.dumps(result.graph.to_dict(), indent=1,
-                        sort_keys=True).encode("utf-8"),
-        file_name="rlpa_evidence_graph.json", mime="application/json",
-        key="apab_v2_dl_graph")
-    d3.download_button(
-        "⬇️ Analysis run + audit (JSON)",
-        data=json.dumps(primitive(run), indent=1,
-                        sort_keys=True).encode("utf-8"),
-        file_name="rlpa_analysis_run.json", mime="application/json",
-        key="apab_v2_dl_run")
-
-    ai_narrative_panel(
-        "nar_apab_v2",
-        lambda tmpl: _prompt(result, tmpl),
-        "apab_v2",
-        _NARRATIVE_TEMPLATE,
-    )
+        _caveats = RLPA_CAVEATS + [
+            "Inferred hand-offs on the adopted path (if any) are "
+            "listed with the AI's reasoning and a word confidence; "
+            "they are analyst-proposed logic for review."]
+        ai_narrative_panel(
+            "nar_apab2",
+            lambda tmpl, sd=sections_data, db=date_basis,
+            wbm=windows_by_ms, ir=inferred_rows:
+            build_apab_report_prompt(sd, db, wbm, _caveats, tmpl)
+            + (("\n\nINFERRED LINKS (analyst-proposed, confidence in "
+                "words):\n" + "\n".join(
+                    f"- {r['Predecessor']} → {r['Successor']} "
+                    f"[{r['Confidence']}, {r['Votes']} runs]: "
+                    f"{r['AI reasoning']}" for r in ir))
+               if ir else ""),
+            "apab_v2",
+            DEFAULT_TEMPLATES["apab"],
+        )
+        st.download_button(
+            "⬇️ Download workbook (Excel)",
+            data=build_simple_xlsx(
+                "As-Planned vs As-Built v2 (RLPA)",
+                sheets={"Comparison": [
+                    {k: v for k, v in r.items() if k != "row_kind"}
+                    for r in display],
+                    "Windows": [w for ws in windows_by_ms.values()
+                                for w in ws] or [{}],
+                    "Inferred links": inferred_rows or [{}],
+                    "Key dates": [{"ID": c, "Why key": why}
+                                  for c, why in kd.items()] or [{}]},
+                notes=["Adopted path basis: "
+                       + ("; ".join(f"{m}: {b}"
+                                    for m, b in basis_by.items())
+                          or "not adopted")] + list(RLPA_CAVEATS)),
+            file_name="apvab_v2_rlpa.xlsx",
+            mime="application/vnd.openxmlformats-officedocument."
+                 "spreadsheetml.sheet",
+            key="apab2_dl")

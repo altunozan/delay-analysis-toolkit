@@ -359,6 +359,105 @@ def test_n6_completion_correspondence_with_update_pair():
     ), "N6 never tested despite a covering update pair"
 
 
+def _rlpa_data():
+    """Blockwork → first-fix with NO recorded link between them."""
+    from dcma.models import Calendar, Project
+    from dcma.xer_parser import XerData
+    tasks = [
+        task("1", "A-100", "Blockwork Zone A", 1, 5),
+        task("2", "E-200", "First Fix Electrical Installation Zone A",
+             8, 12),
+        task("3", "E-300", "Electrical Testing Zone A", 13, 14),
+        task("4", "PC-001", "Completion Zone A", 14, 14, milestone=True),
+    ]
+    rels = [
+        Relationship("2", "3", "PR_FS", 0.0),
+        Relationship("3", "4", "PR_FS", 0.0),
+    ]
+    return XerData(
+        header=["ERMHDR"],
+        raw_tables={
+            "TASK": [], "TASKPRED": [],
+            "CALENDAR": [{"clndr_id": "CAL-1", "clndr_name": "7d",
+                          "day_hr_cnt": "8", "clndr_data": ""}],
+        },
+        projects=[Project("P1", "RLPA", dt(1), None, dt(14), dt(14))],
+        tasks=tasks,
+        relationships=rels,
+        calendars={"CAL-1": Calendar("CAL-1", "7d", 8.0)},
+        tasks_by_id={t.task_id: t for t in tasks},
+    )
+
+
+def test_screen_finds_unlinked_blockwork_pair():
+    from programme.rlpa import screen_missing_links
+    pairs = screen_missing_links(_rlpa_data())
+    keys = {(p.pred_code, p.succ_code) for p in pairs}
+    assert ("A-100", "E-200") in keys, keys
+    # recorded links are never candidates
+    assert ("E-200", "E-300") not in keys
+    # backwards work order is never a candidate (testing -> blockwork)
+    assert ("E-300", "A-100") not in keys
+
+
+def test_parse_inference_is_verbatim_verified():
+    from programme.rlpa import parse_inference, screen_missing_links
+    pairs = screen_missing_links(_rlpa_data())
+    text = ('noise {"links":[{"pred":"A-100","succ":"E-200",'
+            '"reason":"zone must be closed"},{"pred":"GHOST-1",'
+            '"succ":"E-200","reason":"invented"}]} noise')
+    accepted, rejected = parse_inference(text, pairs)
+    assert accepted == [("A-100", "E-200", "zone must be closed")]
+    assert len(rejected) == 1 and "GHOST-1" in rejected[0]
+
+
+def test_vote_aggregation_maps_to_words_not_numbers():
+    from programme.rlpa import aggregate_votes
+    link = ("A-100", "E-200", "r")
+    other = ("A-100", "E-300", "r2")
+    runs = [[link, other], [link], [link]]
+    out = {(l.pred_code, l.succ_code): l for l in aggregate_votes(runs)}
+    assert out[("A-100", "E-200")].confidence == "strong"
+    assert out[("A-100", "E-300")].confidence == "poor"
+    two = aggregate_votes([[link], [link], []])
+    assert two[0].confidence == "medium"
+    from dataclasses import asdict
+    for l in aggregate_votes(runs):
+        assert "%" not in json.dumps(asdict(l))
+
+
+def test_derived_path_walks_through_inferred_link():
+    from programme.rlpa import aggregate_votes, derive_paths
+    data = _rlpa_data()
+    links = aggregate_votes([[("A-100", "E-200", "zone closed")]] * 3)
+    res = derive_paths(data, links, end_task_code="PC-001")
+    assert 1 <= len(res.options) <= 3
+    label, note, trace = res.options[0]
+    codes = [a.task_code for a in trace.activities]
+    assert "A-100" in codes and "E-200" in codes, codes
+    inferred = [lk for lk in trace.links if lk.kind == "inferred"]
+    assert any(lk.pred_code == "A-100" and lk.succ_code == "E-200"
+               for lk in inferred)
+    # confidence words only; no percentage anywhere in the caveats
+    assert all("%" not in c for c in res.caveats)
+
+
+def test_poor_links_stay_out_unless_they_extend_the_chain():
+    from programme.rlpa import aggregate_votes, derive_paths
+    data = _rlpa_data()
+    # poor vote only (1 of 3)
+    links = aggregate_votes([[("A-100", "E-200", "r")], [], []])
+    assert links[0].confidence == "poor"
+    res = derive_paths(data, links, end_task_code="PC-001")
+    main_codes = [a.task_code for a in res.options[0][2].activities]
+    assert "A-100" not in main_codes          # adopted excludes poor
+    extended = [o for o in res.options if o[0].startswith("Extended")]
+    assert extended, "poor link that extends the chain must appear as " \
+                     "the disclosed extended option"
+    assert "A-100" in [a.task_code
+                       for a in extended[0][2].activities]
+
+
 ALL_TESTS = [
     test_pipeline_builds_path_with_first_class_interruption,
     test_graph_is_deterministic_and_sealed,
@@ -368,6 +467,11 @@ ALL_TESTS = [
     test_interval_union_gap_detection,
     test_e5_suppressed_across_scheduling_option_boundary,
     test_n6_completion_correspondence_with_update_pair,
+    test_screen_finds_unlinked_blockwork_pair,
+    test_parse_inference_is_verbatim_verified,
+    test_vote_aggregation_maps_to_words_not_numbers,
+    test_derived_path_walks_through_inferred_link,
+    test_poor_links_stay_out_unless_they_extend_the_chain,
 ]
 
 
