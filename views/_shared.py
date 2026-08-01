@@ -440,6 +440,24 @@ def ai_provider_block(state_key: str) -> tuple[str, str | None, str]:
     return provider, model, api_key
 
 
+_AMEM_KEY = "analyst_memory_store"
+
+
+def analyst_mem() -> dict:
+    """Session-cached analyst memory (loaded from disk once)."""
+    from programme import analyst_memory as _am
+    if _AMEM_KEY not in st.session_state:
+        st.session_state[_AMEM_KEY] = _am.load()
+    return st.session_state[_AMEM_KEY]
+
+
+def analyst_mem_save() -> bool:
+    """Persist if the filesystem allows; session-only otherwise."""
+    from programme import analyst_memory as _am
+    mem = st.session_state.get(_AMEM_KEY)
+    return _am.save(mem) if mem is not None else False
+
+
 def ai_narrative_panel(
     state_key: str,
     prompt_builder,
@@ -467,9 +485,33 @@ def ai_narrative_panel(
         )
         provider, model, api_key = ai_provider_block(state_key)
 
+        # sleek analyst memory: a few remembered preference lines ride
+        # along in every prompt; empty memory changes nothing
+        from programme import analyst_memory as _am
+        _mem = analyst_mem()
+        with st.popover("🧠 AI memory", help="Standing preferences the "
+                        "AI follows in every draft — a few lines, "
+                        "remembered across sessions."):
+            _vc = st.text_area(
+                "Report voice (one bullet per line, max 5)",
+                value="\n".join(_mem.get("voice", [])), height=90,
+                key=f"{state_key}_amv")
+            if st.button("Remember", key=f"{state_key}_amvs"):
+                _am.set_voice(_mem, _vc.splitlines())
+                _ok = analyst_mem_save()
+                st.caption("Saved to disk." if _ok else
+                           "Session-only (hosted filesystem is "
+                           "read-only) — persists until the app "
+                           "restarts.")
+            _nl = len(_mem.get("lessons", []))
+            if _nl:
+                st.caption(f"{_nl} confirmed precedent line(s) also "
+                           "ride along.")
+
         if st.button("Generate narrative", type="primary",
                      disabled=not api_key, key=f"{state_key}_go"):
-            prompt = prompt_builder(template or default_template)
+            prompt = (prompt_builder(template or default_template)
+                      + _am.prompt_snippet(_mem, "narrative"))
             try:
                 with st.spinner("Drafting narrative from the results..."):
                     text = st.write_stream(
