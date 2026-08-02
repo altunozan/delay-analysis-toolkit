@@ -485,6 +485,19 @@ def apab_v2_tab() -> None:
         st.iframe(_g4, height=620)
         gantt_fullscreen_button(_g4, "apab2_final_gantt", "apab2_fs4")
 
+        # the EXACT step-④ chart rasterised from the same rows, so the
+        # Word narrative and the workbook carry the gantt the analyst
+        # just looked at. A figure failure never blocks either output.
+        try:
+            from programme import build_apab_gantt_png
+            _png4 = build_apab_gantt_png(
+                display, keydates=kd, overall_delay_days=_first,
+                title=f"As-planned ({date_basis} dates) vs as-built "
+                      "(retrospective longest path)",
+                windows=all_windows, data_date=dd)
+        except Exception:
+            _png4 = None
+
         stored = st.session_state.get(_RLPA)
         res = stored[1] if stored else None
         inferred_rows = ([{
@@ -529,11 +542,15 @@ def apab_v2_tab() -> None:
                if ir else ""),
             "apab_v2",
             DEFAULT_TEMPLATES["apab"],
+            chart_png_builder=lambda p=_png4: (
+                [("Final gantt — as-planned vs as-built "
+                  "(retrospective longest path)", p)] if p else None),
         )
         st.download_button(
             "⬇️ Download workbook (Excel)",
             data=build_simple_xlsx(
                 "As-Planned vs As-Built v2 (RLPA)",
+                images=({"Final Gantt": _png4} if _png4 else None),
                 sheets={"Comparison": [
                     {k: v for k, v in r.items() if k != "row_kind"}
                     | {"kind": r.get("row_kind", "")}

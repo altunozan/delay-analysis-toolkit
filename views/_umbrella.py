@@ -28,17 +28,6 @@ from views._shared import ai_provider_block
 def _adopt(groups: dict[str, list[str]]) -> None:
     st.session_state[sk.UMBRELLAS] = groups
     st.session_state[sk.UMBRELLA_ON] = bool(groups)
-    # confirmed groupings become one compact precedent line the AI
-    # proposer sees next time — names only, capped by the memory engine
-    if groups:
-        from programme import analyst_memory as _am
-        from views._shared import analyst_mem, analyst_mem_save
-        _mem = analyst_mem()
-        _am.remember_lesson(
-            _mem, "grouping",
-            "Analyst-confirmed work packages: "
-            + ", ".join(sorted(groups)[:8]))
-        analyst_mem_save()
 
 
 def umbrella_editor(rows: list[dict], path_codes: set[str],
