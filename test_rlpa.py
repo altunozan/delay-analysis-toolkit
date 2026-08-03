@@ -566,6 +566,183 @@ def test_classification_pass_is_verbatim_verified():
     assert "location" in kept.shared_context
 
 
+# --------------------------------------------------------------------- #
+# Path Studio — detached analyst workspace                              #
+# --------------------------------------------------------------------- #
+
+def _studio_pair():
+    """Baseline (early plan) + as-built (slipped actuals) sharing codes.
+
+    The as-built also carries an LOE row and one activity absent from
+    the baseline (scope growth), so both eligibility and missing-planned
+    behaviour are pinned on one fixture.
+    """
+    import dataclasses
+
+    from dcma.models import Calendar, Project
+    from dcma.xer_parser import XerData
+
+    def _xer(tasks, rels, name):
+        return XerData(
+            header=["ERMHDR"],
+            raw_tables={
+                "TASK": [], "TASKPRED": [],
+                "CALENDAR": [{"clndr_id": "CAL-1", "clndr_name": "7d",
+                              "day_hr_cnt": "8", "clndr_data": ""}],
+            },
+            projects=[Project("P1", name, dt(1), None, dt(20), dt(20))],
+            tasks=tasks,
+            relationships=rels,
+            calendars={"CAL-1": Calendar("CAL-1", "7d", 8.0)},
+            tasks_by_id={t.task_id: t for t in tasks},
+        )
+
+    base = _xer([
+        task("1", "A-100", "Blockwork Zone A", 1, 4),
+        task("2", "E-200", "First Fix Electrical Zone A", 5, 8),
+        task("4", "PC-001", "Completion Zone A", 9, 9, milestone=True),
+    ], [Relationship("1", "2", "PR_FS", 0.0),
+        Relationship("2", "4", "PR_FS", 0.0)], "BASE")
+    built = _xer([
+        task("1", "A-100", "Blockwork Zone A", 3, 7),
+        task("2", "E-200", "First Fix Electrical Zone A", 9, 13),
+        task("3", "X-900", "Scope growth: rework", 14, 15),
+        dataclasses.replace(
+            task("9", "LOE-01", "Site management", 1, 15),
+            task_type="TT_LOE"),
+        task("4", "PC-001", "Completion Zone A", 16, 16,
+             milestone=True),
+    ], [Relationship("1", "2", "PR_FS", 0.0),
+        Relationship("2", "4", "PR_FS", 0.0)], "BUILT")
+    return base, built
+
+
+def test_studio_planned_bars_come_from_the_baseline():
+    """The adapter defect fixed on port: planned dates must be the
+    BASELINE's (per the elected basis), never the as-built's own
+    targets, and scope growth carries no planned bar at all."""
+    from path_studio import dataset_from_xer
+    base, built = _studio_pair()
+    ds = dataset_from_xer(
+        built, path_codes=["A-100", "E-200", "PC-001"],
+        basis="recorded logic", milestone_code="PC-001",
+        baseline=base, date_basis="target")
+    by = {a.code: a for a in ds.activities}
+    assert by["A-100"].planned_start == dt(1).isoformat()
+    assert by["A-100"].planned_finish == dt(4).isoformat()
+    assert by["A-100"].start == dt(3).isoformat()        # as-built actual
+    assert by["X-900"].planned_start is None             # not in baseline
+    assert by["X-900"].start == dt(14).isoformat()
+    # without a baseline the planned side stays EMPTY — never silently
+    # compared against the as-built's own targets
+    ds_nb = dataset_from_xer(
+        built, path_codes=["A-100"], basis="x", milestone_code="PC-001")
+    assert all(a.planned_start is None for a in ds_nb.activities)
+
+
+def test_studio_adapter_eligibility_and_inferred_links():
+    from types import SimpleNamespace
+
+    from path_studio import dataset_from_xer
+    base, built = _studio_pair()
+    inferred = [
+        SimpleNamespace(pred_code="A-100", succ_code="E-200",
+                        confidence="strong", reasons=("dup of recorded",)),
+        SimpleNamespace(pred_code="E-200", succ_code="X-900",
+                        confidence="medium", reasons=("gap 1d",)),
+    ]
+    ds = dataset_from_xer(
+        built, path_codes=["A-100", "E-200", "PC-001"], basis="b",
+        milestone_code="PC-001", baseline=base,
+        inferred_links=inferred)
+    by = {a.code: a for a in ds.activities}
+    assert not by["LOE-01"].path_eligible
+    assert "Level of Effort" in by["LOE-01"].eligibility_reason
+    assert by["A-100"].path_eligible
+    pairs = [(r.predecessor, r.successor, r.source)
+             for r in ds.relationships]
+    # a recorded link is never duplicated as inferred
+    assert ("A-100", "E-200", "recorded") in pairs
+    assert ("A-100", "E-200", "inferred") not in pairs
+    assert ("E-200", "X-900", "inferred") in pairs
+    inf = next(r for r in ds.relationships
+               if r.source == "inferred")
+    assert "medium" in inf.evidence
+
+
+def test_studio_validation_gates():
+    from path_studio import PathDraft, dataset_from_xer, validate_draft
+    base, built = _studio_pair()
+    ds = dataset_from_xer(built, path_codes=["A-100", "E-200", "PC-001"],
+                          basis="recorded logic",
+                          milestone_code="PC-001", baseline=base)
+
+    def codes_of(draft):
+        return {i.code: i.severity for i in validate_draft(ds, draft)}
+
+    # LOE on path + missing anchor + missing basis are all blocking
+    bad = codes_of(PathDraft(ds.analysis_id,
+                             ("A-100", "LOE-01"), "  "))
+    assert bad.get("ineligible_path_activity") == "error"
+    assert bad.get("missing_anchor") == "error"
+    assert bad.get("missing_basis") == "error"
+    dup = codes_of(PathDraft(ds.analysis_id,
+                             ("A-100", "A-100", "PC-001"), "b"))
+    assert dup.get("duplicate_activity") == "error"
+    # a hop with no recorded/inferred relationship is a warning, not a
+    # block — the analyst documents the sequence evidence instead
+    hop = codes_of(PathDraft(ds.analysis_id,
+                             ("A-100", "X-900", "PC-001"), "b"))
+    assert hop.get("unlinked_handoff") == "warning"
+    ok = validate_draft(ds, PathDraft(
+        ds.analysis_id, ("A-100", "E-200", "PC-001"), "recorded"))
+    assert not [i for i in ok if i.severity == "error"]
+
+
+def test_studio_renderer_dual_mode():
+    """One template serves both the live component (sentinel intact,
+    Streamlit protocol present) and the standalone export (payload
+    embedded, '<' escaped against script breakout)."""
+    from pathlib import Path as _P
+
+    from path_studio import PathDraft, build_path_studio_html, \
+        dataset_from_xer, validate_draft
+    from path_studio.renderer import _SENTINEL, _TEMPLATE_PATH
+    import dataclasses as _dc
+    base, built = _studio_pair()
+    ds = dataset_from_xer(built, path_codes=["A-100", "E-200", "PC-001"],
+                          basis="recorded logic",
+                          milestone_code="PC-001", baseline=base)
+    ds = _dc.replace(ds, title="Harbour </script><b> injection")
+    draft = PathDraft(ds.analysis_id, ds.candidate_path_codes, "b")
+    html = build_path_studio_html(ds, draft, validate_draft(ds, draft))
+    assert _SENTINEL not in html
+    assert "</script><b> injection" not in html          # escaped
+    assert "\\u003c/script>" in html
+    assert "A-100" in html
+    static = _P(_TEMPLATE_PATH).read_text(encoding="utf-8")
+    assert _SENTINEL in static
+    assert "streamlit:componentReady" in static
+    assert "streamlit:setComponentValue" in static
+    assert "streamlit:render" in static
+
+
+def test_studio_apply_labelling():
+    """Applying an adjustment keeps the gantt's ordering, dedups, and
+    discloses the adjustment exactly once however often re-applied."""
+    from path_studio import adjusted_basis, adjusted_path
+    out = adjusted_path(["E-200", "A-100", "E-200", "PC-001"],
+                        {"A-100": "Blockwork", "E-200": "First Fix"})
+    assert out == [("E-200", "First Fix"), ("A-100", "Blockwork"),
+                   ("PC-001", "PC-001")]
+    once = adjusted_basis("as-built longest path (recorded logic)")
+    assert once.startswith("as-built longest path (recorded logic)")
+    assert "analyst-adjusted in the path gantt" in once
+    assert adjusted_basis(once) == once          # never stacks
+    assert adjusted_basis("").startswith("adopted path")
+    assert "%" not in once
+
+
 ALL_TESTS = [
     test_pipeline_builds_path_with_first_class_interruption,
     test_graph_is_deterministic_and_sealed,
@@ -584,6 +761,11 @@ ALL_TESTS = [
     test_responsibility_codes_are_never_relevance,
     test_per_successor_cap_keeps_tightest_handoffs,
     test_classification_pass_is_verbatim_verified,
+    test_studio_planned_bars_come_from_the_baseline,
+    test_studio_adapter_eligibility_and_inferred_links,
+    test_studio_validation_gates,
+    test_studio_renderer_dual_mode,
+    test_studio_apply_labelling,
 ]
 
 

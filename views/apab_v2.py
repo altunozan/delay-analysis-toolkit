@@ -18,12 +18,18 @@ runs, and the longest path is re-derived over the combined network.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 
 import state as sk
+from path_studio import (
+    PathDraft, adjusted_basis, adjusted_path, build_path_studio_html,
+    dataset_from_xer, validate_draft,
+)
+from path_studio.embed import studio_gantt
 from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
     ROLLUP_CAVEATS, build_apab_gantt_html, build_apab_report_prompt,
@@ -49,6 +55,8 @@ _MS = "apab2_ms"                # elected milestone code
 _RLPA = "apab2_rlpa"            # RLPAResult of the last inference run
 _KD = "apab2_keydates"          # code -> why
 _DATE_BASIS = "apab2_date_basis"
+_STUDIO_DS = "apab2_studio_ds"        # (signature) -> cached dataset
+_STUDIO_REASON = "apab2_studio_why"   # ms -> adjustment rationale
 
 _RUNS = 3
 
@@ -153,6 +161,20 @@ def apab_v2_tab() -> None:
         codes = {c for c, _ in paths.get(ms, [])}
         disp, _roll = _display_rows(_rows_for(ms), groups, codes)
         return disp
+
+    def _studio_dataset(ms, codes, links):
+        """The full-programme dataset for the path gantt, cached on a
+        signature so step-① reruns cost nothing."""
+        sig = (id(latest), id(baseline), ms, date_basis, len(links))
+        cached = st.session_state.get(_STUDIO_DS)
+        if cached and cached[0] == sig:
+            return cached[1]
+        ds = dataset_from_xer(
+            latest, path_codes=codes, basis=basis_by.get(ms, ""),
+            milestone_code=ms, baseline=baseline,
+            date_basis=date_basis, inferred_links=links)
+        st.session_state[_STUDIO_DS] = (sig, ds)
+        return ds
 
     # ========= ① determine the retrospective longest path =========== #
     if step.startswith("①"):
@@ -289,6 +311,93 @@ def apab_v2_tab() -> None:
             st.session_state[_PATHS] = paths
             st.session_state[_BASIS] = basis_by
             st.success(f"Adopted for {ms}: {basis}. Continue to step ②.")
+
+        # ---- review & adjust the adopted path in a P6-style gantt --- #
+        if ms in paths:
+            st.divider()
+            st.markdown("##### Review & adjust the adopted as-built "
+                        "critical path")
+            st.caption(
+                "The full programme in a P6-style gantt: planned "
+                "(baseline) vs current bars, relationship arrows with "
+                "lags and FS/SS/FF/SF types, activity codes, WBS "
+                "grouping, search and filters. Tick activities in or "
+                "out of the path in the chart — the checks below "
+                "update live, and nothing changes until you APPLY "
+                "with a written rationale.")
+            adopted_codes = [c for c, _ in paths[ms]]
+            stored_r = st.session_state.get(_RLPA)
+            links = (stored_r[1].links
+                     if stored_r and stored_r[0] == ms else ())
+            ds = _studio_dataset(ms, adopted_codes, links)
+            eligible = {a.code for a in ds.activities if a.path_eligible}
+            # the mount key carries the adopted membership: a new
+            # adoption (or an applied adjustment) remounts the gantt
+            # on the fresh path instead of a stale working state
+            mount = hashlib.md5(
+                ("|".join(adopted_codes)).encode()).hexdigest()[:10]
+            cmp_key = f"apab2_studio_{ms}_{mount}"
+            raw = st.session_state.get(cmp_key)
+            if isinstance(raw, dict) and raw.get("edited"):
+                working = [c for c in dict.fromkeys(raw["path_codes"])
+                           if c in eligible]
+            else:
+                working = list(adopted_codes)
+            wdraft = PathDraft(analysis_id=ds.analysis_id,
+                               path_codes=tuple(working),
+                               basis=basis_by.get(ms, ""))
+            issues = validate_draft(ds, wdraft)
+            errors = [i for i in issues if i.severity == "error"]
+            warns = [i for i in issues if i.severity == "warning"]
+            with st.expander("Open the path gantt (full programme, "
+                             "relationship arrows)", expanded=False):
+                studio_gantt({"dataset": ds.to_dict(),
+                              "draft": wdraft.to_dict(),
+                              "issues": [i.to_dict() for i in issues]},
+                             key=cmp_key)
+                gantt_fullscreen_button(
+                    build_path_studio_html(ds, wdraft, issues),
+                    "apab2_path_gantt", "apab2_studio_fs")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Activities on working path", len(working))
+            m2.metric("Blocking findings", len(errors))
+            m3.metric("Review warnings", len(warns))
+            if issues:
+                with st.expander("Path validation findings",
+                                 expanded=bool(errors)):
+                    for issue in issues:
+                        icon = {"error": "🔴", "warning": "🟠",
+                                "info": "🔵"}.get(issue.severity, "•")
+                        st.write(f"{icon} **{issue.code}** — "
+                                 f"{issue.message}")
+            changed = working != adopted_codes
+            r1, r2 = st.columns([3, 2])
+            why = r1.text_input(
+                "Adjustment rationale (required to apply)",
+                key=f"apab2_studio_why_{ms}",
+                placeholder="Why the inclusions/exclusions represent "
+                            "the retrospective driving path…")
+            if r2.button("Apply adjusted path",
+                         disabled=not changed or bool(errors)
+                         or not why.strip(),
+                         key=f"apab2_studio_apply_{ms}"):
+                names = {a.code: a.name for a in ds.activities}
+                paths[ms] = adjusted_path(working, names)
+                basis_by[ms] = adjusted_basis(basis_by.get(ms, ""))
+                st.session_state[_PATHS] = paths
+                st.session_state[_BASIS] = basis_by
+                st.session_state.setdefault(_STUDIO_REASON, {})[ms] = \
+                    why.strip()
+                st.success(f"Adjusted path applied for {ms}: "
+                           f"{len(working)} activities. Steps ②–④ now "
+                           "measure this path; the adjustment and "
+                           "rationale are disclosed in the basis of "
+                           "analysis.")
+                st.rerun()
+            elif changed:
+                st.caption(f"{len(working)} activities on the working "
+                           f"path vs {len(adopted_codes)} adopted — "
+                           "not applied yet.")
 
         # ---- umbrella grouping (optional, path activities) ---------- #
         union = {c for m in paths for c, _ in paths.get(m, [])}
@@ -507,6 +616,17 @@ def apab_v2_tab() -> None:
             "AI reasoning": " / ".join(l.reasons)[:160],
         } for l in res.links] if res else [])
 
+        # an analyst-adjusted path carries its own standing caveat in
+        # every disclosure that lists the method caveats
+        _studio_why = st.session_state.get(_STUDIO_REASON, {})
+        _studio_caveats = ([
+            "The adopted path includes analyst adjustments made in "
+            "the path gantt; the recorded rationale forms part of "
+            "the audit trail and the adjusted path is analyst "
+            "opinion, not a CPM derivation."]
+            if any("analyst-adjusted" in str(b)
+                   for b in basis_by.values()) else [])
+
         basis_panel("As-Planned vs As-Built v2 (RLPA)", latest, [
             "Adopted path basis per milestone: "
             + ("; ".join(f"{m}: {b}" for m, b in basis_by.items())
@@ -519,13 +639,18 @@ def apab_v2_tab() -> None:
             f"{len(groups)} umbrella work package(s); measured on "
             "path members only" if groups else
             "No umbrella grouping adopted",
+            ("Analyst path adjustments (rationale on file): "
+             + "; ".join(f"{m}: {w}" for m, w in _studio_why.items()))
+            if _studio_why else
+            "No analyst path adjustments — adopted candidate "
+            "measured as computed",
         ])
         with st.expander("Method caveats (always apply)"):
-            for c in RLPA_CAVEATS + (list(ROLLUP_CAVEATS)
-                                     if groups else []):
+            for c in (RLPA_CAVEATS + _studio_caveats
+                      + (list(ROLLUP_CAVEATS) if groups else [])):
                 st.write("•", c)
 
-        _caveats = RLPA_CAVEATS + [
+        _caveats = RLPA_CAVEATS + _studio_caveats + [
             "Inferred hand-offs on the adopted path (if any) are "
             "listed with the AI's reasoning and a word confidence; "
             "they are analyst-proposed logic for review."]
@@ -563,7 +688,12 @@ def apab_v2_tab() -> None:
                 notes=["Adopted path basis: "
                        + ("; ".join(f"{m}: {b}"
                                     for m, b in basis_by.items())
-                          or "not adopted")] + list(RLPA_CAVEATS)),
+                          or "not adopted")]
+                + (["Analyst path adjustments (rationale): "
+                    + "; ".join(f"{m}: {w}"
+                                for m, w in _studio_why.items())]
+                   if _studio_why else [])
+                + list(RLPA_CAVEATS) + _studio_caveats),
             file_name="apvab_v2_rlpa.xlsx",
             mime="application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet",
