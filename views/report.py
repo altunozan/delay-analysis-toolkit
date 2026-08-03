@@ -13,8 +13,9 @@ from dcma.narrative import (
     build_report_prompt, stream_narrative,
 )
 from programme import (
-    BasisOfAnalysis, ReportSection, SourceFile, build_rollup,
-    planned_vs_actual,
+    BasisOfAnalysis, ReportSection, ROLLUP_CAVEATS, SourceFile,
+    build_rollup,
+    build_apab_report_prompt, keydate_windows, planned_vs_actual,
     analyse_float_erosion, analyse_sequence, build_asbuilt_prompt,
     build_assembled_report, build_comparison_prompt,
     build_critical_path_prompt, build_float_erosion_prompt,
@@ -25,6 +26,7 @@ from programme import (
     extract_resource_loading, propose_sequence_mapping, report_charts,
     task_wbs_assignments,
 )
+from programme.rlpa import RLPA_CAVEATS
 from views._shared import (
     _fkey, ai_provider_block, cached_compare, cached_longest_path,
     cached_milestone_shifts, cached_windows, get_parsed_files,
@@ -251,6 +253,76 @@ def report_tab() -> None:
                  "Completion trajectory across data dates"),
                 (lambda w=wres: report_charts.windows_movement_chart(w),
                  "Completion movement per window")]))
+
+        # As-Planned vs As-Built — the flagship retrospective method.
+        # Only offered once the analyst has ADOPTED a path in step ①;
+        # the assembled report must never invent a method the analyst
+        # did not run.
+        _ap_paths = st.session_state.get("apab2_paths") or {}
+        if _ap_paths:
+            _ap_basis = st.session_state.get("apab2_basis") or {}
+            _ap_db = st.session_state.get("apab2_date_basis", "late")
+            _ap_kd = st.session_state.get("apab2_keydates", {})
+            _ap_groups = st.session_state.get(sk.UMBRELLAS) or {}
+            _ap_secs, _ap_wins, _ap_delays = [], {}, []
+            _latest = ordered[-1][1]
+            _by = {t.task_code: t for t in _latest.tasks}
+            for _ms in _ap_paths:
+                _codes = {c for c, _ in _ap_paths[_ms]}
+                _rows = planned_vs_actual(pool[base_name], _latest,
+                                          _codes, date_basis=_ap_db)
+                _pf = [r["planned_finish"] for r in _rows
+                       if r.get("planned_finish")]
+                _af = [r["actual_finish"] for r in _rows
+                       if r.get("actual_finish")]
+                _d = (round((max(_af) - max(_pf)).total_seconds() / 86400,
+                            1) if _pf and _af else None)
+                if _d is not None:
+                    _ap_delays.append((_ms, _d))
+                _kw = keydate_windows(
+                    _rows, [c for c in _ap_kd if c in _codes])
+                _ap_wins[_ms] = _kw
+                _ap_secs.append({
+                    "ms": _ms,
+                    "ms_name": (_by[_ms].name if _ms in _by else _ms),
+                    "basis": _ap_basis.get(_ms, ""),
+                    "delay_days": _d,
+                    "achieved": bool(_ms in _by and _by[_ms].act_finish),
+                    "rows": _rows})
+            sec = ReportSection("As-Planned vs As-Built")
+            for _ms, _d in _ap_delays:
+                sec.key_findings.append(
+                    f"Measured on the adopted as-built critical path to "
+                    f"{_ms}: {_d:+.0f} days against the baseline "
+                    f"{_ap_db.upper()} dates.")
+            sec.key_findings.append(
+                "Path basis: "
+                + ("; ".join(f"{m}: {b}"
+                             for m, b in _ap_basis.items()) or "—"))
+            if any("analyst-adjusted" in str(b)
+                   for b in _ap_basis.values()):
+                sec.key_findings.append(
+                    "The adopted path carries analyst adjustments made "
+                    "in the path gantt; the recorded rationale forms "
+                    "part of the audit trail.")
+            if _ap_groups:
+                sec.key_findings.append(
+                    f"Presented as {len(_ap_groups)} umbrella work "
+                    "package(s), each measured on its path members only.")
+            sec.caveats = list(RLPA_CAVEATS) + (
+                list(ROLLUP_CAVEATS) if _ap_groups else [])
+            candidates.append(dict(
+                label="As-planned vs as-built", sec=sec,
+                settings=[
+                    f"As-planned vs as-built — planned dates: baseline "
+                    f"{_ap_db.upper()}; path basis: "
+                    + ("; ".join(f"{m}: {b}"
+                                 for m, b in _ap_basis.items()) or "—")
+                    + f"; {len(_ap_kd)} key date(s)"],
+                nar_key="nar_apab2",
+                prompt=lambda s=_ap_secs, db=_ap_db, w=_ap_wins,
+                cv=sec.caveats: build_apab_report_prompt(s, db, w, cv),
+                charts=[]))
 
         # S-curve
         updates = [(n, d) for n, d in ordered if n != base_name]

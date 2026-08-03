@@ -3463,6 +3463,76 @@ check("Y8 TIA decision_grade set from calibration tolerance",
 check("Y8b tolerance is documented in config",
       _DCMAConfigP().calibration_tolerance_days == 30.0)
 
+# Z1 — the assembled report must offer the FLAGSHIP retrospective
+# method. The Report Assembler shipped for months without an
+# As-Planned vs As-Built section: an analyst could run the method and
+# have it silently omitted from the Word report. Pinned end-to-end
+# through the real page, because the defect was one of absence.
+def _z1_report_carries_apab():
+    from streamlit.testing.v1 import AppTest
+
+    from programme import build_inventory, extract_asbuilt_longest_path
+    import state as _sk
+
+    _root = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "sample")
+    _pool = [(n, parse_xer(open(os.path.join(_root, n), "rb").read()))
+             for n in ("Harbour Point DCP-03 - Baseline Programme "
+                       "Rev 0.xer",
+                       "Harbour Point DCP-03 - As-Built Programme "
+                       "Rev 12.xer")]
+    _ms = "H-5040"
+    _tr = extract_asbuilt_longest_path(_pool[1][1], end_task_code=_ms)
+
+    def _page(root: str):
+        # AppTest re-execs this function's SOURCE — nothing may be
+        # captured from the enclosing scope; the repo root arrives
+        # as an argument.
+        import sys as _s
+        _s.path.insert(0, root)
+        from views.report import report_tab
+        report_tab()
+
+    at = AppTest.from_function(
+        _page, default_timeout=300,
+        kwargs={"root": os.path.dirname(os.path.abspath(__file__))})
+    at.session_state[_sk.XER_POOL] = _pool
+    at.session_state[_sk.INVENTORY] = build_inventory(_pool)
+    at.session_state["apab2_paths"] = {
+        _ms: [(a.task_code, a.name) for a in _tr.activities]}
+    at.session_state["apab2_basis"] = {_ms: "as-built longest path"}
+    at.session_state["apab2_date_basis"] = "late"
+    at.run()
+    if at.exception:
+        return False, f"report page raised: {at.exception}"
+    labels = " ".join(str(getattr(c, "label", "")) for c in at.checkbox)
+    if "as-planned vs as-built" not in labels.lower():
+        return False, "no APvAB section offered"
+    btn = [b for b in at.button if b.key == "rep_build"]
+    if not btn:
+        return False, "no assemble button"
+    btn[0].click()
+    at.run()
+    if "rep_docx" not in at.session_state:
+        return False, "no docx produced"
+    import io as _io
+    import zipfile as _zf
+    with _zf.ZipFile(_io.BytesIO(at.session_state["rep_docx"])) as z:
+        xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    if "As-Planned vs As-Built" not in xml:
+        return False, "section missing from the Word file"
+    if "+92" not in xml:
+        return False, "measured delay missing from the Word file"
+    return True, ""
+
+
+try:
+    _z1_ok, _z1_why = _z1_report_carries_apab()
+except Exception as _z1_exc:                       # pragma: no cover
+    _z1_ok, _z1_why = False, f"{type(_z1_exc).__name__}: {_z1_exc}"
+check("Z1 assembled report carries the As-Planned vs As-Built section "
+      "and its measured delay", _z1_ok, _z1_why)
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")
