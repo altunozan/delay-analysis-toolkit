@@ -104,6 +104,7 @@ input[type=search]{width:205px}.spacer{flex:1}.btn{height:29px;border:1px solid
 .foot{padding:6px 12px;background:var(--panel);border-top:1px solid var(--strong);
   display:flex;gap:14px;color:var(--muted);align-items:center;position:sticky;bottom:0;z-index:50}
 .status{font-weight:700;color:var(--green)}.cap{color:var(--amber);font-weight:700}
+.readonly .check input{pointer-events:none;opacity:.35}
 @media(max-width:900px){:root{--table:680px}.row-info{grid-template-columns:32px 78px
   minmax(175px,1fr) 66px 66px 66px 66px 40px 42px}.drawer{left:8px;right:8px;width:auto}}
 </style></head><body><main class="shell">
@@ -121,6 +122,7 @@ input[type=search]{width:205px}.spacer{flex:1}.btn{height:29px;border:1px solid
 <label>Find<input id="search" type="search" placeholder="ID, name, WBS or activity code"></label>
 <button class="btn" id="fit">Fit visible</button><button class="btn" id="zoomout">−</button><button class="btn" id="zoomin">+</button>
 <button class="btn" id="expand">Expand</button><button class="btn" id="collapse">Collapse</button>
+<span class="spacer"></span><button class="btn primary" id="fullscreen">⛶ Full screen</button>
 </section>
 <section class="validation" id="validation"><div class="legend">
 <span class="key"><i class="sw" style="height:0;border-top:1.5px solid var(--ink)"></i>as-planned (baseline)</span>
@@ -163,7 +165,9 @@ function pushValue(){
     $("state").textContent="Edits streamed to the form — Save draft / Adopt there";
   },250);
 }
+let lastIssues=[];
 function renderIssues(issues){
+  lastIssues=issues;
   for(const chip of [...$("validation").querySelectorAll(".chip")])chip.remove();
   for(const issue of issues){const chip=document.createElement("span");chip.className="chip "+issue.severity;chip.textContent=issue.severity.toUpperCase()+": "+issue.message;$("validation").prepend(chip)}
 }
@@ -188,7 +192,7 @@ const x=value=>Number.isFinite(dt(value))?(dt(value)-viewStart)/DAY*pxPerDay:0;
 function renderTimeline(){const el=$("timeline");el.innerHTML="";let cur=new Date(viewStart);cur=new Date(cur.getFullYear(),cur.getMonth(),1);while(cur.getTime()<viewEnd){const next=new Date(cur.getFullYear(),cur.getMonth()+1,1),cell=document.createElement("div");cell.className="month";cell.style.left=((cur-viewStart)/DAY*pxPerDay)+"px";cell.style.width=((next-cur)/DAY*pxPerDay)+"px";cell.textContent=cur.toLocaleDateString(undefined,{month:"short",year:"2-digit"});el.appendChild(cell);cur=next}}
 function activityInfo(a){const v=variance(a),vcls=v==null?"":v>0?"late":"early",sub=[a.wbs,a.location,a.discipline].filter(Boolean).join(" · ");return `<div class="row-info"><label class="check" title="${esc(a.eligibility_reason||"Toggle path membership")}"><input type="checkbox" ${isPath(a.code)?"checked":""} ${a.path_eligible?"":"disabled"} aria-label="Include ${esc(a.code)} on path"></label><span class="aid">${esc(a.code)}</span><span class="anm" title="${esc(a.name)}">${esc(a.name)}<small class="sub">${esc(sub||"Uncoded")}</small></span><span class="date">${fmt(a.planned_start)}</span><span class="date">${fmt(a.planned_finish)}</span><span class="date">${fmt(a.start)}</span><span class="date">${fmt(a.finish)}</span><span class="num ${a.total_float_days!=null&&a.total_float_days<=0?"late":""}">${num(a.total_float_days)}</span><span class="num ${vcls}">${v==null?"—":(v>0?"+":"")+v}</span></div>`}
 function barMarkup(a){const ps=x(a.planned_start),pf=x(a.planned_finish),cs=x(a.start),cf=x(a.finish),v=variance(a),status=statusKind(a),mile=isMilestone(a);let html="";if(Number.isFinite(dt(a.planned_start))){html+=`<i class="bar planned ${mile?"milestone":""}" style="left:${ps}px;width:${Math.max(pf-ps,3)}px" title="${esc(a.code)} planned ${fmt(a.planned_start)} → ${fmt(a.planned_finish)}"></i>`}if(Number.isFinite(dt(a.start))){const cls=status!=="complete"?"forecast":v!=null&&v>0?"late":"";html+=`<i class="bar current ${cls} ${mile?"milestone":""}" style="left:${cs}px;width:${Math.max(cf-cs,3)}px" title="${esc(a.code)} current/recorded ${fmt(a.start)} → ${fmt(a.finish)}"></i>`}return html}
-function render(){if(!DATA)return;const result=filteredActivities(),activities=result.rows,rows=displayRows(activities),holder=$("rows");fitVisible(activities);renderTimeline();holder.innerHTML="";document.body.className="mode-"+$("barmode").value;
+function render(){if(!DATA)return;const result=filteredActivities(),activities=result.rows,rows=displayRows(activities),holder=$("rows");fitVisible(activities);renderTimeline();holder.innerHTML="";document.body.className=(EMBEDDED?"readonly ":"")+"mode-"+$("barmode").value;
   for(const item of rows){if(item.kind==="group"){const row=document.createElement("div");row.className="group-row";row.dataset.group=item.key;row.innerHTML=`<div class="left-pane"><span class="caret">${collapsed.has(item.key)?"▶":"▼"}</span><span>${esc(item.key)}</span><span class="group-meta">${item.count} ${item.count===1?"activity":"activities"}</span></div><div class="lane"></div>`;row.onclick=()=>{collapsed.has(item.key)?collapsed.delete(item.key):collapsed.add(item.key);render()};holder.appendChild(row);continue}
     const a=item.activity,row=document.createElement("div");row.className="activity-row "+(isPath(a.code)?"onpath ":"")+(selected===a.code?"selected ":"");row.dataset.code=a.code;row.innerHTML=`<div class="left-pane">${activityInfo(a)}</div><div class="lane">${barMarkup(a)}</div>`;const box=row.querySelector("input");box.addEventListener("click",event=>{event.stopPropagation();if(box.checked){if(a.path_eligible&&!isPath(a.code))path.push(a.code)}else path=path.filter(code=>code!==a.code);pushValue();render()});row.addEventListener("click",()=>{selected=a.code;openDrawer(a);render()});holder.appendChild(row)}
   drawOverlay(activities);$("count").textContent=`${path.length} on path · ${activities.length} displayed · ${result.total} matched · ${ACTIVITIES.length} total`;const focusHint=$("scope").value==="all"&&$("relmode").value==="selected"&&!selected?"Select an activity to reveal its incoming and outgoing logic.":`${activities.length} activities rendered`;$("rendernote").innerHTML=result.capped?`<span class="cap">First ${MAX_VISIBLE} shown — filter to narrow the schedule.</span>`:focusHint;}
@@ -199,7 +203,26 @@ function drawOverlay(activities){const old=$("logic");if(old)old.remove();const 
   if(DATA.data_date){const line=document.createElementNS("http://www.w3.org/2000/svg","line"),dx=x(DATA.data_date);line.setAttribute("x1",dx);line.setAttribute("x2",dx);line.setAttribute("y1",0);line.setAttribute("y2",$("rows").scrollHeight);line.setAttribute("class","data-date");svg.appendChild(line)}
   for(const rel of RELATIONSHIPS){if(!relWanted(rel,shown))continue;const p=BY[rel.predecessor],s=BY[rel.successor];if(!p||!s)continue;const x1=endpoint(p,rel.relationship_type,true),x2=endpoint(s,rel.relationship_type,false),y1=centers[p.code],y2=centers[s.code],bend=Math.max(x1+14,Math.min(x2-12,x1+34));const edge=document.createElementNS("http://www.w3.org/2000/svg","path");edge.setAttribute("d",`M${x1},${y1} H${bend} V${y2} H${x2}`);edge.setAttribute("class","rel "+rel.source);svg.appendChild(edge);const label=document.createElementNS("http://www.w3.org/2000/svg","text");label.setAttribute("x",bend+3);label.setAttribute("y",(y1+y2)/2-3);label.setAttribute("class","rel-label");label.textContent=rel.relationship_type+(rel.lag_days?` ${rel.lag_days>0?"+":""}${rel.lag_days}d`:"");svg.appendChild(label)}}
 function openDrawer(a){$("drawer").classList.add("open");$("dname").textContent=a.name;$("dcode").textContent=a.code;const incoming=RELATIONSHIPS.filter(r=>r.successor===a.code),outgoing=RELATIONSHIPS.filter(r=>r.predecessor===a.code),facts=[["Path status",isPath(a.code)?`Position ${path.indexOf(a.code)+1}`:a.path_eligible?"Context only":"Ineligible: "+a.eligibility_reason],["Activity codes",(a.activity_codes||[]).join(" · ")||"—"],["WBS",a.wbs||"—"],["Location",a.location||"—"],["Discipline",a.discipline||"—"],["System",a.system||"—"],["Calendar",a.calendar||"—"],["Status",a.status||"—"],["Predecessors",incoming.map(r=>`${r.predecessor} (${r.relationship_type} ${r.lag_days||0}d · ${r.source})`).join("; ")||"—"],["Successors",outgoing.map(r=>`${r.successor} (${r.relationship_type} ${r.lag_days||0}d · ${r.source})`).join("; ")||"—"],["Evidence",[...incoming,...outgoing].filter(r=>r.evidence).map(r=>r.evidence).join("; ")||"—"]];$("facts").innerHTML=facts.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");$("up").disabled=!isPath(a.code);$("down").disabled=!isPath(a.code)}
-function move(delta){const i=path.indexOf(selected),j=i+delta;if(i<0||j<0||j>=path.length)return;[path[i],path[j]]=[path[j],path[i]];pushValue();openDrawer(BY[selected]);render()}
+function move(delta){if(EMBEDDED)return;const i=path.indexOf(selected),j=i+delta;if(i<0||j<0||j>=path.length)return;[path[i],path[j]]=[path[j],path[i]];pushValue();openDrawer(BY[selected]);render()}
+/* Full screen: reload this very file in a NEW BROWSER TAB with the
+   current state baked in — browser-wide, fully zoomable. The sentinel
+   is assembled in pieces so the server-side replace touches only the
+   real one at the top of this script. */
+$("fullscreen").onclick=async()=>{
+  try{
+    const src=await (await fetch(location.pathname)).text();
+    const payload={dataset:DATA,issues:lastIssues,
+      draft:{analysis_id:DATA.analysis_id,path_codes:path,
+             basis:DATA.candidate_basis,revision:0,reason:"",
+             analyst:"",updated_utc:""}};
+    const sentinel="/*PAYLOAD*/"+"null"+"/*"+"END*/";
+    const html=src.replace(sentinel,
+      JSON.stringify(payload).replace(/</g,"\\u003c"));
+    window.open(URL.createObjectURL(
+      new Blob([html],{type:"text/html"})),"_blank");
+    $("state").textContent="Full-screen view opened in a new browser tab (view-only snapshot)";
+  }catch(err){$("state").textContent="Full-screen open failed: "+err.message}
+};
 function scopeChanged(){const scope=$("scope").value;if(scope==="path"){$("relmode").value="path";$("group").value="path"}else if(scope==="context"){$("relmode").value="context"}else{$("relmode").value="selected";if($("group").value==="path")$("group").value="wbs"}autoFit=true;render()}
 $("scope").onchange=scopeChanged;for(const id of ["barmode","group","statusfilter","floatfilter"]){$(id).onchange=()=>{autoFit=true;render()}}$("relmode").onchange=render;$("search").oninput=()=>{autoFit=true;render()};$("fit").onclick=()=>{autoFit=true;render()};$("zoomin").onclick=()=>{autoFit=false;pxPerDay=Math.min(pxPerDay*1.35,30);setLaneWidth();renderTimeline();render()};$("zoomout").onclick=()=>{autoFit=false;pxPerDay=Math.max(pxPerDay/1.35,.12);setLaneWidth();renderTimeline();render()};$("expand").onclick=()=>{collapsed.clear();render()};$("collapse").onclick=()=>{const group=$("group").value;if(group!=="path")for(const a of filteredActivities().rows)collapsed.add(groupKey(a,group));render()};$("close").onclick=()=>$("drawer").classList.remove("open");$("up").onclick=()=>move(-1);$("down").onclick=()=>move(1);
 
@@ -210,6 +233,14 @@ function boot(payload){
   $("title").textContent=DATA.title;$("basis").textContent="Candidate: "+DATA.candidate_basis;
   $("anchor").textContent="Anchor: "+DATA.milestone_code;$("ddmeta").textContent="Data date: "+fmt(DATA.data_date);
   renderIssues(payload.issues||[]);
+  if(EMBEDDED){
+    /* the full-screen tab is a view-only snapshot: reading aid, not a
+       second editor — path changes belong in the module (render()
+       keeps the readonly class via the EMBEDDED flag) */
+    $("fullscreen").style.display="none";
+    $("state").textContent="Full-screen view — read-only snapshot; "
+      +"adjust the path in the module";
+  }
   render();
 }
 if(EMBEDDED){boot(EMBEDDED)}

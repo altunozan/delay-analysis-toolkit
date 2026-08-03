@@ -26,8 +26,8 @@ import streamlit as st
 
 import state as sk
 from path_studio import (
-    PathDraft, adjusted_basis, adjusted_path, build_path_studio_html,
-    dataset_from_xer, validate_draft,
+    PathDraft, adjusted_basis, adjusted_path, dataset_from_xer,
+    validate_draft,
 )
 from path_studio.embed import studio_gantt
 from dcma.narrative import NarrativeError, stream_narrative
@@ -59,6 +59,28 @@ _STUDIO_DS = "apab2_studio_ds"        # (signature) -> cached dataset
 _STUDIO_REASON = "apab2_studio_why"   # ms -> adjustment rationale
 
 _RUNS = 3
+
+_STEPS = ["① Retrospective longest path", "② As-planned vs as-built",
+          "③ Windows", "④ Gantt & report"]
+
+
+def _goto_step(label: str) -> None:
+    """on_click callback: runs before the next script pass, so the
+    step radio can be advanced without touching an instantiated
+    widget's state mid-run."""
+    st.session_state["apab2_step"] = label
+
+
+def _next_step_button(current: str) -> None:
+    """A 'next step' button at the bottom of every step but the last,
+    so the analyst never scrolls back up to move on."""
+    idx = _STEPS.index(current)
+    if idx >= len(_STEPS) - 1:
+        return
+    nxt = _STEPS[idx + 1]
+    st.divider()
+    st.button(f"Next step: {nxt} →", type="primary",
+              key=f"apab2_next_{idx}", on_click=_goto_step, args=(nxt,))
 
 
 def _trace_table(trace, inferred=frozenset()):
@@ -138,11 +160,8 @@ def apab_v2_tab() -> None:
     dd = latest.project.data_date if latest.project else None
     by_code = {t.task_code: t for t in latest.tasks if not t.is_loe_or_wbs}
 
-    step = st.radio(
-        "Method step",
-        ["① Retrospective longest path", "② As-planned vs as-built",
-         "③ Windows", "④ Gantt & report"],
-        horizontal=True, key="apab2_step")
+    step = st.radio("Method step", _STEPS, horizontal=True,
+                    key="apab2_step")
 
     paths: dict = st.session_state.get(_PATHS) or {}
     basis_by: dict = st.session_state.get(_BASIS) or {}
@@ -355,9 +374,9 @@ def apab_v2_tab() -> None:
                               "draft": wdraft.to_dict(),
                               "issues": [i.to_dict() for i in issues]},
                              key=cmp_key)
-                gantt_fullscreen_button(
-                    build_path_studio_html(ds, wdraft, issues),
-                    "apab2_path_gantt", "apab2_studio_fs")
+                st.caption("⛶ Full screen (top-right of the chart) "
+                           "opens the gantt browser-wide in a new "
+                           "tab, to see the path clearly.")
             m1, m2, m3 = st.columns(3)
             m1.metric("Activities on working path", len(working))
             m2.metric("Blocking findings", len(errors))
@@ -452,6 +471,9 @@ def apab_v2_tab() -> None:
                 for c in RLPA_CAVEATS:
                     st.write("•", c)
 
+        if paths:
+            _next_step_button(step)
+
     # ========= ② as-planned vs as-built ============================= #
     elif step.startswith("②"):
         st.subheader("② As-planned vs as-built")
@@ -492,6 +514,7 @@ def apab_v2_tab() -> None:
                    "path basis (including any inferred links) is "
                    "recorded in step ① and the report.")
         gantt_fullscreen_button(_g2, "apab2_step2_gantt", "apab2_fs2")
+        _next_step_button(step)
 
     # ========= ③ windows ============================================ #
     elif step.startswith("③"):
@@ -543,6 +566,7 @@ def apab_v2_tab() -> None:
                                     if w.get("resequenced") else ""),
                 } for i, w in enumerate(kwin, start=1)]),
                     width="stretch", hide_index=True)
+        _next_step_button(step)
 
     # ========= ④ gantt & report ===================================== #
     else:

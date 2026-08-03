@@ -721,10 +721,19 @@ def test_studio_renderer_dual_mode():
     assert "\\u003c/script>" in html
     assert "A-100" in html
     static = _P(_TEMPLATE_PATH).read_text(encoding="utf-8")
-    assert _SENTINEL in static
+    # exactly ONE literal sentinel: the full-screen handler assembles
+    # its copy in pieces, or the payload replace would corrupt the JS
+    assert static.count(_SENTINEL) == 1
     assert "streamlit:componentReady" in static
     assert "streamlit:setComponentValue" in static
     assert "streamlit:render" in static
+    # every outbound protocol message carries the isStreamlitMessage
+    # flag the host filters on — a missing flag is an unbootable gantt
+    import re as _re
+    for m in _re.findall(r"postMessage\((\{[^)]*?)\}\s*,\s*\"\*\"",
+                         static):
+        assert "isStreamlitMessage" in m, m
+    assert 'id="fullscreen"' in static          # ⛶ opens a new tab
 
 
 def test_studio_apply_labelling():
