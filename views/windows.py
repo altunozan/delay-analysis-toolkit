@@ -39,7 +39,7 @@ def windows_tab() -> None:
         (tuple(_fkey(n) for n, _ in ordered),
          st.session_state.get(sk.CONTRACT_MS)), ordered,
         st.session_state.get(sk.CONTRACT_MS))
-    basis_panel("Windows Analysis", ordered[-1][1], [
+    basis_panel("Time Slice Windows", ordered[-1][1], [
         "Per-window driving path: independent longest-path trace of "
         "each revision to "
         + (f"the CONTRACTUAL completion milestone "

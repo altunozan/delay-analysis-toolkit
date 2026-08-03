@@ -33,10 +33,10 @@ TOOLS = [
     "As-Built Critical Path", "Report Assembler",
 ]
 RETRO = [
-    "As-Planned vs As-Built", "Windows Analysis",
-    "Impacted As-Planned", "Collapsed As-Built",
+    "As-Planned vs As-Built", "Time Slice Windows",
+    "Impacted As-Planned (beta)", "Collapsed As-Built (beta)",
 ]
-PROSPECTIVE = ["Time Impact Analysis"]
+PROSPECTIVE = ["Time Impact Analysis (beta)"]
 ALL_PAGES = TOOLS + RETRO + PROSPECTIVE
 
 
@@ -272,31 +272,38 @@ def main() -> int:
             check("umbrella typing exception-free",
                   exc() == 0, f"{exc()} exceptions")
 
-            # APvAB: the 4-step method (2026-07-27 spec). Step ① must
-            # offer BOTH candidate paths and adopt one; later steps
-            # depend on the adoption, so walk in order.
+            # APvAB (the RLPA-extended page): the 4-step method.
+            # Step ① must offer the computed candidates and adopt one;
+            # later steps depend on the adoption, so walk in order.
             goto("As-Planned vs As-Built")
             page.wait_for_timeout(4000)
             check("APvAB ① computes both CP candidates",
-                  page.get_by_text("Longest path (programme logic)",
+                  page.get_by_text("Candidate A — recorded logic",
                                    exact=False).count() > 0
-                  and page.get_by_text("Actual sequence (recorded",
+                  and page.get_by_text("Candidate B — actual sequence",
                                        exact=False).count() > 0)
-            check("APvAB ① milestone multiselect present",
-                  page.get_by_text("Milestone(s) to measure to",
+            check("APvAB ① milestone election present",
+                  page.get_by_text("Trace to (elected completion",
                                    exact=False).count() > 0)
-            adopt = page.get_by_role("button", name="Adopt this path")
+            adopt = page.get_by_role("button",
+                                     name="Adopt for this milestone")
             check("APvAB ① adopt button present", adopt.count() > 0)
             if adopt.count():
                 adopt.first.click()
                 page.wait_for_timeout(6000)
                 check("APvAB ① adoption exception-free", exc() == 0,
                       f"{exc()} exceptions")
+                check("APvAB ① path-gantt review section appears",
+                      page.get_by_text("Review & adjust the adopted",
+                                       exact=False).count() > 0)
                 check("APvAB ① umbrella editor appears (CP only)",
                       page.get_by_text("Group the path into umbrella",
                                        exact=False).count() > 0)
-                check("APvAB ① linked gantt renders",
-                      page.locator("iframe").count() > 0)
+                check("APvAB ① next-step button present",
+                      page.get_by_role(
+                          "button",
+                          name="Next step: ② As-planned vs as-built"
+                      ).count() > 0)
             for lbl, probe in (
                 ("② As-planned vs as-built", "Late dates (LS/LF)"),
                 ("③ Windows", "key dates"),

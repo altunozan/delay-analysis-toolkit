@@ -1,7 +1,7 @@
-"""As-Planned vs As-Built v2 — Retrospective Longest Path.
+"""As-Planned vs As-Built — the stepped method with RLPA extensions.
 
-The same four steps as the As-Planned vs As-Built method, with one
-extension in step ①: alongside the two computed candidates (recorded
+Four steps, with one extension in step ①: alongside the two computed
+candidates (recorded
 logic and actual sequence), the AI proposes dependencies that were
 never linked in the programme — blockwork before first-fix electrical
 — from a deterministically screened list, over multiple independent
@@ -32,9 +32,10 @@ from path_studio import (
 from path_studio.embed import studio_gantt
 from dcma.narrative import NarrativeError, stream_narrative
 from programme import (
-    ROLLUP_CAVEATS, build_apab_gantt_html, build_apab_report_prompt,
-    build_rollup, build_simple_xlsx, extract_actual_trace,
-    extract_asbuilt_longest_path, keydate_windows, planned_vs_actual,
+    ROLLUP_CAVEATS, apab_appendix, build_apab_gantt_html,
+    build_apab_report_prompt, build_rollup, build_simple_xlsx,
+    extract_actual_trace, extract_asbuilt_longest_path,
+    keydate_windows, planned_vs_actual,
 )
 from views._umbrella import umbrella_editor
 from programme.narrative import DEFAULT_TEMPLATES
@@ -651,7 +652,7 @@ def apab_v2_tab() -> None:
             if any("analyst-adjusted" in str(b)
                    for b in basis_by.values()) else [])
 
-        basis_panel("As-Planned vs As-Built v2 (RLPA)", latest, [
+        basis_panel("As-Planned vs As-Built", latest, [
             "Adopted path basis per milestone: "
             + ("; ".join(f"{m}: {b}" for m, b in basis_by.items())
                or "not adopted"),
@@ -689,16 +690,18 @@ def apab_v2_tab() -> None:
                     f"[{r['Confidence']}, {r['Votes']} runs]: "
                     f"{r['AI reasoning']}" for r in ir))
                if ir else ""),
-            "apab_v2",
+            "apab",
             DEFAULT_TEMPLATES["apab"],
             chart_png_builder=lambda p=_png4: (
                 [("Final gantt — as-planned vs as-built "
                   "(retrospective longest path)", p)] if p else None),
+            appendix_builder=lambda d=display, wbm=windows_by_ms,
+            k=kd: apab_appendix(d, windows_by_ms=wbm, keydates=k),
         )
         st.download_button(
             "⬇️ Download workbook (Excel)",
             data=build_simple_xlsx(
-                "As-Planned vs As-Built v2 (RLPA)",
+                "As-Planned vs As-Built",
                 images=({"Final Gantt": _png4} if _png4 else None),
                 sheets={"Comparison": [
                     {k: v for k, v in r.items() if k != "row_kind"}
@@ -718,7 +721,7 @@ def apab_v2_tab() -> None:
                                 for m, w in _studio_why.items())]
                    if _studio_why else [])
                 + list(RLPA_CAVEATS) + _studio_caveats),
-            file_name="apvab_v2_rlpa.xlsx",
+            file_name="as_planned_vs_as_built.xlsx",
             mime="application/vnd.openxmlformats-officedocument."
                  "spreadsheetml.sheet",
             key="apab2_dl")

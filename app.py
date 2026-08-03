@@ -20,7 +20,6 @@ import state as sk
 
 from views._shared import status_strip
 from views._theme import inject_theme
-from views.apab import apab_tab
 from views.apab_v2 import apab_v2_tab
 from views.asbuilt import asbuilt_tab
 from views.collapsed_asbuilt import collapsed_asbuilt_tab
@@ -132,24 +131,26 @@ def main() -> None:
                     url_path="report-assembler"),
         ],
         "\U0001f52c Retrospective — what happened": [
-            st.Page(apab_tab, title="As-Planned vs As-Built",
+            # the RLPA-extended page IS the as-planned vs as-built
+            # method now: same four steps, plus inferred-logic
+            # candidates and the interactive path gantt
+            st.Page(apab_v2_tab, title="As-Planned vs As-Built",
                     icon=":material/bar_chart:",
                     url_path="as-planned-vs-as-built"),
-            st.Page(apab_v2_tab, title="As-Planned vs As-Built v2 (RLPA)",
-                    icon=":material/route:",
-                    url_path="as-planned-vs-as-built-v2"),
-            st.Page(windows_tab, title="Windows Analysis",
+            st.Page(windows_tab, title="Time Slice Windows",
                     icon=":material/grid_view:",
                     url_path="windows-analysis"),
-            st.Page(impacted_asplanned_tab, title="Impacted As-Planned",
+            st.Page(impacted_asplanned_tab,
+                    title="Impacted As-Planned (beta)",
                     icon=":material/event_upcoming:",
                     url_path="impacted-as-planned"),
-            st.Page(collapsed_asbuilt_tab, title="Collapsed As-Built",
+            st.Page(collapsed_asbuilt_tab,
+                    title="Collapsed As-Built (beta)",
                     icon=":material/compress:",
                     url_path="collapsed-as-built"),
         ],
         "⚡ Prospective — forecast impact": [
-            st.Page(tia_tab, title="Time Impact Analysis",
+            st.Page(tia_tab, title="Time Impact Analysis (beta)",
                     icon=":material/bolt:",
                     url_path="time-impact-analysis"),
         ],
