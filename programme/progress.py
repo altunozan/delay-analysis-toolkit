@@ -309,23 +309,57 @@ def compute_progress(
                 result.time_offset_days = float((dd - planned_reach).days)
 
     # --- diagnostics -------------------------------------------------------
+    # THE VERDICT IS DRIVEN BY THE TIME OFFSET, not the percentage gap.
+    # Once the data date passes baseline completion the planned profile
+    # saturates at 100%, so the percentage comparison is structurally
+    # incapable of reporting "behind" — a project 92 days late reads
+    # "Favourable" by that test. The time offset (when the recorded
+    # level of progress was PLANNED to be reached) stays meaningful.
     if (result.planned_pct_at_dd is not None
             and result.recorded_pct_at_dd is not None):
         gap = result.planned_pct_at_dd - result.recorded_pct_at_dd
-        if gap > 0.5:
+        offset = result.time_offset_days
+        saturated = result.planned_pct_at_dd >= 99.95
+        if offset is not None and offset > 0.5:
+            result.warnings.append(
+                f"Behind plan by roughly {offset:.0f} days in TIME: the "
+                f"recorded level of progress "
+                f"({result.recorded_pct_at_dd:.1f}%) was planned to be "
+                f"reached {offset:.0f} days before the latest data "
+                "date."
+                + (" The percentage comparison "
+                   f"({result.recorded_pct_at_dd:.1f}% vs planned "
+                   f"{result.planned_pct_at_dd:.1f}%) is saturated — "
+                   "the data date post-dates baseline completion, so "
+                   "the planned profile reads 100% by construction and "
+                   "the time offset is the only meaningful measure."
+                   if saturated else "")
+            )
+        elif gap > 0.5:
             result.warnings.append(
                 f"As at the latest data date the programme records "
                 f"{result.recorded_pct_at_dd:.1f}% against a planned "
                 f"{result.planned_pct_at_dd:.1f}% — {gap:.1f} percentage "
                 "points behind the baseline profile"
-                + (f", equivalent to roughly {result.time_offset_days:.0f} "
+                + (f", equivalent to roughly "
+                   f"{result.time_offset_days:.0f} "
                    "days in time." if result.time_offset_days else ".")
+            )
+        elif saturated:
+            result.warnings.append(
+                "No verdict from the percentage comparison: the data "
+                "date post-dates baseline completion, so planned and "
+                "recorded both read 100% by construction. Judge "
+                "performance by the time offset and the completion "
+                "movement in Milestone Shift / As-Planned vs As-Built."
             )
         else:
             result.warnings.append(
                 "Favourable: recorded progress "
                 f"({result.recorded_pct_at_dd:.1f}%) is at or ahead of the "
                 f"planned profile ({result.planned_pct_at_dd:.1f}%) as at "
-                "the latest data date."
+                "the latest data date"
+                + (f" (time offset {offset:+.0f} d)."
+                   if offset is not None else ".")
             )
     return result

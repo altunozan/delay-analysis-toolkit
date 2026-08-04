@@ -56,12 +56,25 @@ def run_impacted_asplanned(
                    if l.other_id and not any(
                        l.other_id == g.act_id for g in fragnet)}
         missing = sorted(t for t in tie_ins if t not in codes)
+        # A fragnet with no successor tie into the network CANNOT
+        # transmit delay: the event work floats free and the run
+        # returns nil by construction. Previously this was accepted
+        # silently and the +0.0 read as a finding.
+        succ_ties = {l.other_id for f in (fragnet or [])
+                     for l in f.successors
+                     if l.other_id and not any(
+                         l.other_id == g.act_id for g in fragnet)}
         if not fragnet:
             skipped.append(f"{event.event_id} (no fragnet)")
         elif missing:
             skipped.append(f"{event.event_id} (tie-ins not in baseline: "
                            + ", ".join(missing[:4])
                            + (" …" if len(missing) > 4 else "") + ")")
+        elif not succ_ties:
+            skipped.append(
+                f"{event.event_id} (no successor tie-in — the event "
+                "cannot transmit delay into the network; a nil impact "
+                "would be an artefact of the fragnet, not a finding)")
         else:
             usable.append((event, fragnet))
 

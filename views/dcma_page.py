@@ -109,6 +109,14 @@ def scorecard(results) -> None:
     c2.metric("Checks Failed", failed)
     c3.metric("Not Applicable", na)
     c4.metric("Score (of scored)", f"{score_pct:.0f}%")
+    if na >= 5:
+        st.warning(
+            f"Only {scored} of {len(results)} checks are applicable to "
+            "this file — the rest return N/A (typically a fully "
+            "complete as-built, which has no remaining network to "
+            "assess). A high score here measures record-keeping "
+            "hygiene, NOT schedule health, and must not be compared "
+            "against a live update's score.")
 
     st.divider()
 

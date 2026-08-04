@@ -265,6 +265,23 @@ def collapse_asbuilt(
         result.delta_days = round(
             (result.model_completion
              - result.collapsed_completion).total_seconds() / 86400.0, 1)
+        # SIGNAL vs NOISE: a measured effect smaller than the model's
+        # own reconstruction error is not decision-grade even when the
+        # error sits inside the calibration tolerance — presenting
+        # +6.4 d as a headline against a −12.5 d validation gap invites
+        # a finding the model cannot support.
+        if (result.calibration_days is not None
+                and abs(result.delta_days)
+                <= abs(result.calibration_days)):
+            result.decision_grade = False
+            result.warnings.append(
+                f"INDICATIVE ONLY: the measured effect "
+                f"({result.delta_days:+.1f} calendar days) sits inside "
+                "the model's own reconstruction error "
+                f"({result.calibration_days:+.1f} calendar days vs the "
+                "recorded as-built completion). The signal is smaller "
+                "than the noise — treat the figure as a line of "
+                "enquiry, not a quantum.")
 
     # ---- controlling chains of BOTH runs (traceback) -------------------
     # Same walk on the model run and the collapsed run: the delta is

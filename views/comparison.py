@@ -73,14 +73,26 @@ def _strip_chart(cmp, attr):
     # Individual contributions interact and must never be summed, so
     # they are reported beneath, never as bridge steps.
     editing = getattr(attr, "editing_effect_days", None)
+    # An UNMEASURED editing effect must never masquerade as a measured
+    # zero: when the combined-revert run could not execute (e.g. the
+    # later revision has no remaining activities to re-schedule) the
+    # step is labelled NOT MEASURED and the residual row absorbs the
+    # whole movement under an honest name.
+    editing_measured = editing is not None
     if editing is None:
         editing = 0.0
     residual = round(total - editing, 1)
 
     A_OLD = "① Completion — earlier revision"
     A_NEW = "④ Completion — later revision"
-    E_ROW = "② Programme editing (all changes reverted together)"
-    R_ROW = "③ Progress performance & un-modelled changes"
+    E_ROW = ("② Programme editing (all changes reverted together)"
+             if editing_measured else
+             "② Programme editing — NOT MEASURED (no remaining "
+             "activities to re-schedule)")
+    R_ROW = ("③ Progress performance & un-modelled changes"
+             if editing_measured else
+             "③ Total movement (editing vs performance not separable "
+             "on this pair)")
     steps, anchors, txts = [], [], []
     order = [A_OLD]
     anchors.append({"Row": A_OLD, "x": 0.0, "kind": "completion",
@@ -113,6 +125,7 @@ def _strip_chart(cmp, attr):
     steps = [s for s in steps if abs(s["x1"] - s["x0"]) >= tiny_cut]
     y = alt.Y("Row:N", sort=order, title=None,
               axis=alt.Axis(labelLimit=330, labelFontSize=11,
+                            labelOverlap=False,
                             labelPadding=6, domain=False, ticks=False))
     xscale = alt.Scale(domain=[lo - pad * 0.35, hi + pad])
     x = alt.X("x0:Q",
@@ -208,6 +221,26 @@ def _completion_strip(cmp, attr) -> None:
                 "the categories the kernel does not re-schedule "
                 "(calendar definitions, scheduling options, "
                 "retrospective actuals).")
+    if edit is None:
+        st.warning(
+            "**Editing vs performance was NOT separable on this "
+            "pair.** The combined-revert run needs remaining "
+            "(incomplete) activities in the later revision to "
+            "re-schedule; here there are none, so step ② is shown as "
+            "not measured and the whole movement sits in ③ "
+            "unattributed. Do not read this as 'editing contributed "
+            "nothing' — run the split against an interim update "
+            "instead.")
+        st.caption(
+            "① where the earlier revision finished · ② NOT MEASURED "
+            "on this pair · ③ the total movement, editing and "
+            "performance not separable · ④ where the later revision "
+            "finishes. Individual change contributions below are "
+            "each tested alone and interact — never summed."
+            + (f" Largest single change tested alone: "
+               f"{movers[0].ref} ({movers[0].contribution_days:+.1f}d)."
+               if movers else ""))
+        return
     st.caption(
         "① where the earlier revision finished · ② what programme "
         "EDITING did, measured by reverting every revertible change "
@@ -304,7 +337,8 @@ def comparison_tab() -> None:
     _cc_base = alt.Chart(chart_df).encode(
         x=alt.X("Count:Q", title=None),
         y=alt.Y("Category:N", sort="-x", title=None,
-                axis=alt.Axis(labelLimit=280)))
+                axis=alt.Axis(labelLimit=280,
+                              labelOverlap=False)))
     cat_chart = (_cc_base.mark_bar(cornerRadius=2).encode(
         color=alt.condition(
             "datum.Category == 'Actual dates changed retrospectively'",

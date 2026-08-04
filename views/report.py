@@ -478,6 +478,88 @@ def report_tab() -> None:
             charts=[(lambda r=tia_res: report_charts.tia_paths_chart(r),
                      "Driving paths, pre vs post impact")]))
 
+    # Impacted As-Planned (when a run exists this session) — a but-for
+    # analysis the analyst ran MUST reach the assembled report
+    iap_res = st.session_state.get(sk.IAP_RES)
+    if iap_res is not None:
+        _il = st.session_state.get(sk.IAP_LABEL, "baseline")
+        sec = ReportSection("Impacted As-Planned (beta)")
+        _delta = iap_res.get("total_delta_days")
+        sec.key_findings = [
+            (f"Total modelled impact {_delta:+.1f} days on the "
+             f"baseline '{_il}' from {iap_res.get('events_used', 0)} "
+             "inserted event(s)."
+             if _delta is not None else
+             f"{iap_res.get('events_used', 0)} event(s) inserted into "
+             f"'{_il}'; no completion delta was measurable — see the "
+             "caveats."),
+        ]
+        if iap_res.get("skipped_events"):
+            sec.key_findings.append(
+                f"{len(iap_res['skipped_events'])} event(s) excluded "
+                "(could not tie into the baseline): "
+                + "; ".join(iap_res["skipped_events"][:3]) + ".")
+        sec.caveats = (list(iap_res.get("caveats", []))
+                       + list(iap_res.get("warnings", [])))
+        candidates.append(dict(
+            label="Impacted as-planned", sec=sec,
+            settings=[f"Impacted as-planned — events inserted into "
+                      f"'{_il}' cumulatively, prospective logic, "
+                      "simplified CPM"],
+            nar_key="nar_iap",
+            prompt=lambda r=iap_res, lb=_il: (
+                "Draft the Impacted As-Planned section of a delay "
+                "report from ONLY these figures (no invention): "
+                f"baseline '{lb}', total modelled impact "
+                f"{r.get('total_delta_days')} days, events used "
+                f"{r.get('events_used')}, skipped {r.get('skipped_events')}. "
+                "Reproduce all caveats verbatim: "
+                + " | ".join(list(r.get("caveats", []))
+                             + list(r.get("warnings", [])))),
+            charts=[]))
+
+    # Collapsed As-Built (when a run exists this session)
+    cab_res = st.session_state.get(sk.CAB_RES)
+    if cab_res is not None:
+        sec = ReportSection("Collapsed As-Built (beta)")
+        _cd = getattr(cab_res, "delta_days", None)
+        sec.key_findings = [
+            (f"Delay attributable to the extracted event(s): "
+             f"{_cd:+.1f} calendar days "
+             f"({len(getattr(cab_res, 'removed_codes', []))} "
+             "activity(ies) collapsed)."
+             if _cd is not None else
+             "No collapse delta was measurable — see the caveats."),
+        ]
+        _cal = getattr(cab_res, "calibration_days", None)
+        if _cal is not None:
+            sec.key_findings.append(
+                f"Model validation: unstatused model vs recorded "
+                f"as-built completion {_cal:+.1f} calendar days"
+                + ("" if getattr(cab_res, "decision_grade", None)
+                   else " — NOT decision-grade; the figure is a line "
+                        "of enquiry, not a quantum") + ".")
+        sec.caveats = (list(getattr(cab_res, "caveats", []))
+                       + list(getattr(cab_res, "warnings", [])))
+        candidates.append(dict(
+            label="Collapsed as-built", sec=sec,
+            settings=["Collapsed as-built — unstatus, validate, "
+                      "extract, reschedule, measure; extraction codes: "
+                      + ", ".join(list(getattr(cab_res, "removed_codes",
+                                               []))[:8])],
+            nar_key="nar_cab",
+            prompt=lambda r=cab_res: (
+                "Draft the Collapsed As-Built section of a delay "
+                "report from ONLY these figures (no invention): delta "
+                f"{getattr(r, 'delta_days', None)} calendar days, "
+                f"model validation {getattr(r, 'calibration_days', None)} "
+                "calendar days, decision-grade "
+                f"{getattr(r, 'decision_grade', None)}. Reproduce all "
+                "caveats verbatim: "
+                + " | ".join(list(getattr(r, "caveats", []))
+                             + list(getattr(r, "warnings", [])))),
+            charts=[]))
+
     # Sequence coding (latest revision; analyst-confirmed mapping if any)
     seq_prop = st.session_state.get(f"seq_rows_{curr_name}")
     seq_confirmed = st.session_state.get(f"seq_rows_{curr_name}_confirmed",

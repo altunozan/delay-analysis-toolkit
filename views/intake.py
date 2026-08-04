@@ -26,6 +26,14 @@ def intake_tab() -> None:
         "Upload every programme revision once — all modules read from this "
         "pool. The inventory below is the report's data front-matter."
     )
+    st.caption(
+        "⚠️ **Session lives in this browser tab.** Navigate between "
+        "modules with the SIDEBAR — a page reload, a pasted URL or a "
+        "hosting idle-timeout starts a fresh session and clears loaded "
+        "programmes, adopted paths, key-date justifications and TIA "
+        "runs. Export workbooks/reports as you go; the Project library "
+        "below re-registers files quickly after a reset."
+    )
     uploads = st.file_uploader(
         "Primavera P6 XER files (baseline + updates)",
         type=["xer"],

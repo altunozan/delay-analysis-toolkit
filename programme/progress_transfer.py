@@ -334,6 +334,35 @@ def run_progress_transfer(
         result.scope_effect_days = round(
             (result.completion_transferred
              - result.completion_logic_only).total_seconds() / 86400, 1)
+    # A BLANK HEADLINE MUST EXPLAIN ITSELF. Each effect needs a
+    # forward-pass completion on both of its runs; when the progress
+    # donor is fully complete (no remaining network) or every
+    # transferred activity is actualised, the runs produce nothing to
+    # compare and the module's whole question is unanswerable on this
+    # pair — which is a statement about the INPUTS, not a silent dash.
+    if result.network_effect_days is None:
+        _why = []
+        if not EF_r:
+            _why.append("the progress donor has no remaining "
+                        "(incomplete) network to schedule")
+        if not EF_i:
+            _why.append("the transferred network retains no remaining "
+                        "activities once the donor's progress is "
+                        "applied")
+        result.warnings.append(
+            "LOGIC/DURATION EFFECT not measurable on this pair: "
+            + ("; ".join(_why) if _why else
+               "a forward-pass completion could not be established "
+               "for both runs")
+            + ". The comparison needs a progress donor with remaining "
+            "work — run it against an interim update, not a fully "
+            "complete as-built.")
+    if result.scope_effect_days is None and result.network_effect_days \
+            is not None:
+        result.warnings.append(
+            "SCOPE EFFECT not measurable: the transferred run "
+            "produced no completion to compare against the "
+            "intersection-only run.")
 
     # --- calibration: reference run vs the progress donor's P6 forecast --
     p6_fin = progress.project.scheduled_finish if progress.project else None

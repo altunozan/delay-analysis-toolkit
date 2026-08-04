@@ -405,20 +405,25 @@ def check_09_invalid_dates(data: XerData, config: DCMAConfig) -> CheckResult:
             na_reason="No data date available to validate actual/forecast dates.",
         )
 
+    # DATE granularity, not timestamps: a data date of 08:00 with an
+    # actual finish at 17:00 the SAME day is ordinary end-of-shift
+    # statusing, not a future-dated actual. Comparing raw datetimes
+    # flagged every such record as invalid.
+    dd_day = data_date.date()
     affected = []
     detail = []
     for t in _eligible_activities(data):
         issues = []
         # Actuals must not be in the future (after the data date).
-        if t.act_start and t.act_start > data_date:
+        if t.act_start and t.act_start.date() > dd_day:
             issues.append("actual start after data date")
-        if t.act_finish and t.act_finish > data_date:
+        if t.act_finish and t.act_finish.date() > dd_day:
             issues.append("actual finish after data date")
         # Forecast (early) dates of remaining work must not precede data date.
         if t.is_incomplete:
-            if t.early_start and t.early_start < data_date:
+            if t.early_start and t.early_start.date() < dd_day:
                 issues.append("forecast start before data date")
-            if t.early_finish and t.early_finish < data_date:
+            if t.early_finish and t.early_finish.date() < dd_day:
                 issues.append("forecast finish before data date")
         if issues:
             affected.append(t.task_code)
@@ -505,6 +510,25 @@ def check_11_missed_tasks(data: XerData, config: DCMAConfig) -> CheckResult:
             metric_value="N/A", threshold=f"<= {config.missed_tasks_max_pct:.0f}%",
             summary="No baseline (target) finish dates available for comparison.",
             na_reason="Baseline finish dates required to evaluate missed tasks.",
+        )
+    # Execution-tracking checks measure a LIVE update against its
+    # baseline. On a fully complete programme the target dates have
+    # typically converged on the as-built record, so "0 missed" is a
+    # tautology, not a finding — and a 92-day-late project would read
+    # healthier than its own baseline. Say N/A, and say why.
+    if not any(t.is_incomplete for t in _eligible_activities(data)):
+        return CheckResult(
+            number=11, name="Missed Tasks", status=CheckStatus.NA,
+            metric_label="Activities finishing late vs baseline",
+            metric_value="N/A",
+            threshold=f"<= {config.missed_tasks_max_pct:.0f}%",
+            summary="Fully complete programme — the file's own target "
+                    "dates are no longer an independent baseline, so "
+                    "missed-task tracking is not meaningful. Measure "
+                    "slippage against the CONTRACT baseline revision "
+                    "instead (Milestone Shift / As-Planned vs As-Built).",
+            na_reason="No remaining execution to assess: every "
+                      "activity is complete.",
         )
 
     affected = []
@@ -744,6 +768,24 @@ def check_14_bei(data: XerData, config: DCMAConfig) -> CheckResult:
             summary="No activities were baselined to finish on or before the data date.",
             na_reason="No planned-complete activities to measure execution against.",
         )
+    # BEI on a fully complete programme is a tautology (~1.0 by
+    # construction when the targets have converged on the record): the
+    # index tracks EXECUTION PACE, and there is no execution left to
+    # pace. "On pace" on a 92-day-late as-built is exactly the false
+    # verdict a tribunal would seize on.
+    if not any(t.is_incomplete for t in _eligible_activities(data)):
+        return CheckResult(
+            number=14, name="BEI", status=CheckStatus.NA,
+            metric_label="Baseline Execution Index",
+            metric_value="N/A", threshold=f">= {config.bei_min:.2f}",
+            summary="Fully complete programme — BEI measures execution "
+                    "pace against the file's own targets, which have "
+                    "converged on the as-built record; no pace remains "
+                    "to assess. Measure the outcome against the "
+                    "CONTRACT baseline revision instead.",
+            na_reason="No remaining execution to assess: every "
+                      "activity is complete.",
+        )
     return CheckResult(
         number=14,
         name="BEI",
@@ -960,6 +1002,28 @@ SUPPLEMENTARY_CHECKS = [
 ]
 
 
+def _gate_empty_populations(results: list[CheckResult]) -> None:
+    """A check with NOTHING to measure must say N/A, never PASS.
+
+    Every population check formats its metric as "X of Y (p%)"; a
+    population of zero (e.g. a fully complete as-built has no
+    incomplete activities) previously scored "0 of 0 (0.0%)" as PASS —
+    a vacuous pass that inflates the health score of exactly the files
+    a tribunal scrutinises. Checks 12/13 already return honest N/As;
+    this brings the rest into line, in ONE place, so no individual
+    check can drift.
+    """
+    for c in results:
+        if (c.status == CheckStatus.PASS
+                and c.metric_value.startswith("0 of 0")):
+            c.status = CheckStatus.NA
+            c.metric_value = "N/A"
+            c.na_reason = ("No activities in the measured population "
+                           "(all complete or none eligible) — nothing "
+                           "to measure, so no pass is asserted.")
+            c.summary = c.na_reason
+
+
 def run_all_checks(
     data: XerData,
     config: DCMAConfig | None = None,
@@ -971,4 +1035,6 @@ def run_all_checks(
     config = config or DCMAConfig()
     checks = (ALL_CHECKS + SUPPLEMENTARY_CHECKS
               if include_supplementary else ALL_CHECKS)
-    return [check(data, config) for check in checks]
+    results = [check(data, config) for check in checks]
+    _gate_empty_populations(results)
+    return results

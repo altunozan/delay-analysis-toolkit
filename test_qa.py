@@ -3533,6 +3533,71 @@ except Exception as _z1_exc:                       # pragma: no cover
 check("Z1 assembled report carries the As-Planned vs As-Built section "
       "and its measured delay", _z1_ok, _z1_why)
 
+# ---------------------------------------------------------------- #
+# Z2-Z7 — external-review fixes: no verdict may contradict the      #
+# metric beside it, and degenerate results must explain themselves. #
+# ---------------------------------------------------------------- #
+from dcma.checks import CheckStatus as _CS
+
+_zcs = {c.number: c for c in run_all_checks(AB, _DCMAConfigP())}
+check("Z2 empty populations are N/A, never a vacuous PASS",
+      all(_zcs[n].status == _CS.NA for n in (1, 6, 8, 17)),
+      str({n: _zcs[n].status.value for n in (1, 6, 8, 17)}))
+check("Z2b fully-complete file: missed-tasks and BEI are N/A with a "
+      "stated reason",
+      _zcs[11].status == _CS.NA and _zcs[14].status == _CS.NA
+      and "complete" in (_zcs[11].na_reason or "")
+      and "complete" in (_zcs[14].na_reason or ""))
+check("Z2c check 9 compares DATES: same-day end-of-shift actuals are "
+      "not future-dated",
+      _zcs[9].status == _CS.PASS, _zcs[9].summary)
+
+from programme import compute_progress as _zcompute
+_zpr = _zcompute(B, "base", [("ab", AB)])
+check("Z3 S-curve verdict is driven by the TIME OFFSET, not the "
+      "saturated percentage",
+      any(w.startswith("Behind plan by roughly") for w in _zpr.warnings)
+      and not any(w.startswith("Favourable") for w in _zpr.warnings),
+      str(_zpr.warnings[:2]))
+
+from programme import run_tia as _zrun_tia
+_zt = _zrun_tia(AB, "AB", DelayEvent("EV-Z", "z"),
+                [FragnetActivity("Z-1", "z", 40,
+                                 successors=[FragnetLink("C-3040")])])
+check("Z4 TIA fragnet tied into COMPLETE work: no crash, VOID RUN "
+      "declared",
+      any(w.startswith("VOID RUN") for w in _zt.warnings)
+      and not any(w.startswith("Favourable") for w in _zt.warnings),
+      str(_zt.warnings[:3]))
+
+from programme import run_impacted_asplanned as _zrun_iap
+_ziap = _zrun_iap(B, "B", [(DelayEvent("EV-Z2", "z"),
+                            [FragnetActivity(
+                                "Z-2", "pred only", 40,
+                                predecessors=[FragnetLink("E-1030")])])])
+check("Z5 IAP refuses a predecessor-only fragnet with the reason "
+      "stated",
+      _ziap["events_used"] == 0
+      and any("cannot transmit delay" in s
+              for s in _ziap["skipped_events"]),
+      str(_ziap["skipped_events"]))
+
+from programme import collapse_asbuilt as _zcab
+_zc = _zcab(AB, "AB", {"T-4055"})
+check("Z6 CAB gates a signal smaller than its own reconstruction "
+      "error",
+      _zc.decision_grade is False
+      and any(w.startswith("INDICATIVE ONLY") for w in _zc.warnings),
+      f"delta {_zc.delta_days} cal {_zc.calibration_days} "
+      f"grade {_zc.decision_grade}")
+
+from programme import run_progress_transfer as _zpt
+_zp = _zpt(B, AB, "B", "AB")
+check("Z7 Progress Transfer explains an unmeasurable headline",
+      _zp.network_effect_days is not None
+      or any("not measurable" in w for w in _zp.warnings),
+      str(_zp.warnings[:4]))
+
 print(f"\n{'='*60}\nRESULT: {len(PASS)} passed, {len(FAIL)} FAILED")
 for name, d in FAIL:
     print(f"  FAILED: {name} — {d}")

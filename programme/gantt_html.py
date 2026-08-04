@@ -187,6 +187,20 @@ if (DATA_DATE) {
 }
 
 let ppm = __ZOOM__;                     // pixels per month (zoom unit)
+// FIT-TO-WIDTH on first load: the 600px table column is fixed, so at
+// the old default zoom a two-year programme left the timeline squeezed
+// into a sliver of the container. Scale the initial zoom up so the
+// full span fills the width actually available (never below the
+// configured default; the zoom slider still overrides).
+(function fitInitialZoom(){
+  const months = Math.max((dmax - dmin) / DAY / 30.44, 1);
+  const avail = Math.max(
+    (window.innerWidth || document.documentElement.clientWidth || 0)
+    - TREEW - 40, 200);
+  ppm = Math.max(ppm, Math.min(avail / months, 120));
+  const z = document.getElementById("zoom");
+  if (z) z.value = Math.round(ppm);
+})();
 const pxPerDay = () => ppm / 30.44;
 const X = t => (t - dmin) / DAY * pxPerDay();
 const totalW = () => Math.ceil((dmax - dmin) / DAY * pxPerDay());

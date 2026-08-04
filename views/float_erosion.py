@@ -35,9 +35,25 @@ def float_erosion_tab() -> None:
     ordered = [(r.file_name, pool[r.file_name]) for r in inv.revisions]
     res = analyse_float_erosion(ordered, near_days=near)
 
-    last = res.snapshots[-1]
+    # Float exists only on INCOMPLETE work: on a fully complete
+    # as-built every float statistic is None and the headline read
+    # em-dashes that contradicted the baseline's 32 critical
+    # activities shown one page over. Headline the LAST revision that
+    # still has a remaining network, and say which one it is.
+    populated = [s for s in res.snapshots if s.incomplete_count > 0]
+    last = populated[-1] if populated else res.snapshots[-1]
+    if not populated:
+        st.info("Every revision in the pool is fully complete — total "
+                "float exists only on remaining work, so there is no "
+                "float profile to erode. The table below still shows "
+                "each revision's population.")
+    elif last is not res.snapshots[-1]:
+        st.info(f"The latest revision is fully complete (no remaining "
+                "work carries float). Headline figures below are the "
+                f"last revision WITH a remaining network: {last.label}.")
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Median float (latest)",
+    _hdr = f" ({last.label})" if populated else ""
+    m1.metric(f"Median float{_hdr}",
               f"{last.median_float:+.0f} d"
               if last.median_float is not None else "—")
     m2.metric("Negative-float activities", last.negative_count)
@@ -53,12 +69,20 @@ def float_erosion_tab() -> None:
     for s in res.snapshots:
         if s.data_date is None:
             continue
-        prof += [
-            {"Data date": s.data_date, "Revision": s.label,
-             "Metric": "Median float (d)", "Value": s.median_float},
-            {"Data date": s.data_date, "Revision": s.label,
-             "Metric": "Negative-float count", "Value": s.negative_count},
-        ]
+        # None values must never reach a chart layer — Vega renders an
+        # empty panel with infinite-extent warnings instead of a chart
+        if s.median_float is not None:
+            prof.append(
+                {"Data date": s.data_date, "Revision": s.label,
+                 "Metric": "Median float (d)", "Value": s.median_float})
+        if s.incomplete_count > 0:
+            prof.append(
+                {"Data date": s.data_date, "Revision": s.label,
+                 "Metric": "Negative-float count",
+                 "Value": s.negative_count})
+    if not prof:
+        st.caption("No float profile to chart — no revision carries "
+                   "remaining work with stored float.")
     if prof:
         st.altair_chart(
             alt.Chart(pd.DataFrame(prof)).mark_line(point=True)

@@ -455,17 +455,50 @@ def run_tia(
         started)
 
     # --- insert the fragnet into a COPY ----------------------------------
+    # A tie into an activity that is NOT in the remaining network
+    # (complete, or absent from the file) cannot bind: a delay event
+    # cannot push work that already happened, and pointing an edge at a
+    # non-node crashed the forward pass. Drop each such tie WITH a
+    # warning, and if no successor tie survives, say plainly that the
+    # run is void — the +0.0 that results is an artefact of the
+    # fragnet's ties, not a measured finding.
     nodes_p = dict(nodes)
     preds_p = {k: list(v) for k, v in preds.items()}
+    frag_ids_pre = {f.act_id for f in fragnet}
+    bound_succ_ties = 0
     for f in fragnet:
         nodes_p[f.act_id] = (max(f.duration_days or 0.0, 0.0),
                              fmasks.get(f.calendar_id))
         preds_p.setdefault(f.act_id, [])
         for l in f.predecessors:
-            preds_p[f.act_id].append((l.other_id, l.link_type, l.lag_days))
+            if l.other_id in nodes or l.other_id in frag_ids_pre:
+                preds_p[f.act_id].append(
+                    (l.other_id, l.link_type, l.lag_days))
+            else:
+                result.warnings.append(
+                    f"{f.act_id}: predecessor tie-in {l.other_id} is "
+                    "not in the remaining network (complete or absent)"
+                    " — the tie cannot bind and was ignored; the "
+                    "fragnet starts at the data date instead.")
         for l in f.successors:
-            preds_p.setdefault(l.other_id, []).append(
-                (f.act_id, l.link_type, l.lag_days))
+            if l.other_id in nodes or l.other_id in frag_ids_pre:
+                preds_p.setdefault(l.other_id, []).append(
+                    (f.act_id, l.link_type, l.lag_days))
+                if l.other_id not in frag_ids_pre:
+                    bound_succ_ties += 1
+            else:
+                result.warnings.append(
+                    f"{f.act_id}: successor tie-in {l.other_id} is not "
+                    "in the remaining network (complete or absent) — "
+                    "a delay event cannot push work that already "
+                    "happened; the tie was ignored.")
+    if fragnet and bound_succ_ties == 0:
+        result.warnings.append(
+            "VOID RUN: no successor tie-in binds into the remaining "
+            "network, so the event cannot transmit any delay and the "
+            "zero impact below is an artefact of the fragnet's ties, "
+            "not a finding. Re-specify the tie-ins against incomplete "
+            "activities.")
     ES1, EF1, w1, drv1 = _forward_pass(nodes_p, preds_p, dd, started)
     result.warnings.extend(sorted(set(w0 + w1)))
     result.fragnet_dates = {f.act_id: (ES1.get(f.act_id),
@@ -639,36 +672,67 @@ def run_tia(
                 "confirm any quantum natively in P6.")
     if (result.completion_delta_days is not None
             and result.completion_delta_days <= 0 and fragnet):
-        detail = ""
-        with_float = [r for r in result.tie_in_float
-                      if r["float_post"] is not None]
-        if with_float:
-            tightest = with_float[0]        # sorted by post float ascending
-            consumed = tightest["consumed"]
-            detail = (
-                f" Tightest tie-in {tightest['code']} "
-                f"'{tightest['name']}' retains "
-                f"{tightest['float_post']:.0f}d total float"
-                + (f" (the event consumed {consumed:.0f}d of "
-                   f"{tightest['float_pre']:.0f}d)"
-                   if consumed is not None and tightest["float_pre"]
-                   is not None else "") + ".")
-        result.warnings.append(
-            "Favourable/neutral: the fragnet as modelled does not move "
-            "forecast completion — the impacted path carries float, or "
-            "the event ties into non-critical work." + detail
-        )
-        near = [r for r in result.tie_in_float
-                if r["float_post"] is not None and r["float_post"] < 10]
-        if near:
-            result.warnings.append(
-                "NEAR-CRITICAL: "
-                + "; ".join(f"{r['code']} is down to "
-                            f"{r['float_post']:.0f}d total float"
-                            for r in near[:4])
-                + " — a modest further slippage would surface a "
-                "completion impact. Monitor these chains."
-            )
+        # a void run (no binding successor tie) already carries its own
+        # warning — do NOT dress the artefact zero up as a verdict
+        if any(w.startswith("VOID RUN") for w in result.warnings):
+            pass
+        else:
+            with_float = [r for r in result.tie_in_float
+                          if r["float_post"] is not None]
+            tightest = with_float[0] if with_float else None
+            # THE VERDICT MUST MATCH THE FLOAT BESIDE IT: "carries
+            # float" next to "retains 0d" contradicted itself in one
+            # sentence. Zero float is CRITICAL, not near-critical.
+            if tightest is not None and tightest["float_post"] <= 0:
+                result.warnings.append(
+                    f"No modelled completion movement, but the tie-in "
+                    f"{tightest['code']} '{tightest['name']}' is "
+                    f"CRITICAL ({tightest['float_post']:.0f}d total "
+                    "float): the event as modelled runs concurrently "
+                    "with, or is absorbed by, the existing critical "
+                    "chain rather than extending it. Verify the "
+                    "fragnet's duration and ties before treating the "
+                    "zero as a finding.")
+            else:
+                detail = ""
+                if tightest is not None:
+                    consumed = tightest["consumed"]
+                    detail = (
+                        f" Tightest tie-in {tightest['code']} "
+                        f"'{tightest['name']}' retains "
+                        f"{tightest['float_post']:.0f}d total float"
+                        + (f" (the event consumed {consumed:.0f}d of "
+                           f"{tightest['float_pre']:.0f}d)"
+                           if consumed is not None
+                           and tightest["float_pre"] is not None
+                           else "") + ".")
+                result.warnings.append(
+                    "Favourable/neutral: the fragnet as modelled does "
+                    "not move forecast completion — the impacted path "
+                    "carries float." + detail)
+            near = [r for r in result.tie_in_float
+                    if r["float_post"] is not None
+                    and 0 < r["float_post"] < 10]
+            crit = [r for r in result.tie_in_float
+                    if r["float_post"] is not None
+                    and r["float_post"] <= 0]
+            if crit:
+                result.warnings.append(
+                    "CRITICAL (TF ≤ 0): "
+                    + "; ".join(f"{r['code']} at "
+                                f"{r['float_post']:.0f}d total float"
+                                for r in crit[:4])
+                    + " — these tie-ins are ON the critical chain; any "
+                    "further slippage moves completion day for day.")
+            if near:
+                result.warnings.append(
+                    "NEAR-CRITICAL: "
+                    + "; ".join(f"{r['code']} is down to "
+                                f"{r['float_post']:.0f}d total float"
+                                for r in near[:4])
+                    + " — a modest further slippage would surface a "
+                    "completion impact. Monitor these chains."
+                )
     return result
 
 

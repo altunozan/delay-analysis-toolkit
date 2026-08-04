@@ -98,7 +98,8 @@ def windows_tab() -> None:
     if mv:
         _mv_base = alt.Chart(pd.DataFrame(mv)).encode(
             x=alt.X("Window:N", sort=None, title=None,
-                    axis=alt.Axis(labelAngle=-20, labelLimit=200)),
+                    axis=alt.Axis(labelAngle=-20, labelLimit=200,
+                                  labelOverlap=False)),
             y=alt.Y("Movement (d):Q"),
             tooltip=["Window", "Movement (d)"])
         _mv_bars = _mv_base.mark_bar(cornerRadius=2).encode(
