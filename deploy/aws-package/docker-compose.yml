@@ -1,0 +1,16 @@
+# Local proof before AWS — run from this folder:
+#
+#   cp secrets.env.example secrets.env      # then fill it in
+#   docker compose up --build
+#   open http://localhost:8501
+#
+# NEVER commit or send a filled secrets.env.
+
+services:
+  delay-toolkit:
+    build: .
+    ports:
+      - "8501:8501"
+    env_file:
+      - secrets.env
+    restart: unless-stopped

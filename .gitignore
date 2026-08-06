@@ -59,4 +59,4 @@ deckforge/example_deck.pptx
 deckforge/report_deck.pptx
 
 # AWS deployment: local-only secret files
-deploy/aws/secrets.env
+deploy/aws-package/secrets.env

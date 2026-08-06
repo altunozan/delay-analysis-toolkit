@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RLPA Path Studio</title>
+<style>
+:root{
+  --ink:#14324A;--muted:#55708B;--paper:#FCFCFA;--panel:#F1F5F9;
+  --grid:#DDE7EF;--strong:#8FA9BE;--red:#9B3227;--green:#3F6B4F;
+  --blue:#4C8EDE;--purple:#7754A3;--amber:#C98420;
+  --table:760px;--lane:1180px;--row:38px;
+}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);
+  font:12px "Segoe UI","Helvetica Neue",Arial,sans-serif}
+.shell{min-height:100vh;display:flex;flex-direction:column}
+.top{padding:12px 16px 9px;background:var(--paper);border-bottom:2px solid var(--ink)}
+.eyebrow{font:700 9px ui-monospace,"SF Mono",Menlo,monospace;letter-spacing:.13em;
+  text-transform:uppercase;color:var(--muted)}
+h1{font-size:19px;margin:3px 0}.meta{display:flex;gap:17px;flex-wrap:wrap;color:var(--muted)}
+.control-note{margin-top:8px;padding:6px 9px;border-left:3px solid var(--amber);
+  background:#FFF7E6;color:#68430D}
+.toolbar{display:flex;align-items:end;gap:8px;flex-wrap:wrap;padding:8px 12px;
+  background:var(--panel);border-bottom:1px solid var(--strong)}
+label{display:flex;flex-direction:column;gap:3px;color:var(--muted);font-size:9px;
+  font-weight:700;text-transform:uppercase;letter-spacing:.05em}
+select,input,button{font:inherit}select,input[type=search]{height:29px;border:1px solid
+  var(--strong);background:var(--paper);color:var(--ink);border-radius:4px;padding:0 7px}
+input[type=search]{width:205px}.spacer{flex:1}.btn{height:29px;border:1px solid
+  var(--strong);border-radius:4px;background:var(--paper);color:var(--ink);font-weight:700;
+  padding:0 9px;cursor:pointer}.btn:hover{border-color:var(--ink)}
+.btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+.validation{display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding:6px 12px;
+  background:var(--paper);border-bottom:1px solid var(--grid)}
+.chip{border-radius:999px;padding:3px 8px;background:#EAF0F4;color:var(--muted)}
+.chip.error{background:#FBE9E7;color:#81231D}.chip.warning{background:#FFF2D9;color:#80500B}
+.chip.info{background:#E7F2F8;color:#245C78}.legend{display:flex;gap:11px;margin-left:auto;
+  align-items:center}.key{display:inline-flex;gap:4px;align-items:center;color:var(--muted)}
+.sw{width:14px;height:7px;display:inline-block}.chart{overflow:auto;flex:1;position:relative;
+  background-image:linear-gradient(#EDF3F8 1px,transparent 1px),
+  linear-gradient(90deg,#EDF3F8 1px,transparent 1px);background-size:22px 22px}
+.chart-grid{min-width:calc(var(--table) + var(--lane));position:relative}
+.chart-head,.activity-row,.group-row{display:grid;
+  grid-template-columns:var(--table) var(--lane);min-width:calc(var(--table) + var(--lane))}
+.chart-head{height:48px;position:sticky;top:0;z-index:40}
+.left-head,.left-pane{position:sticky;left:0;z-index:20;background:var(--paper);
+  border-right:2px solid var(--ink)}
+.left-head{z-index:45;background:var(--panel);border-bottom:2px solid var(--ink)}
+.row-info{height:100%;display:grid;grid-template-columns:36px 86px minmax(190px,1fr)
+  72px 72px 72px 72px 44px 46px;align-items:center}
+.row-info>span,.row-info>label{height:100%;display:flex;align-items:center;padding:0 5px;
+  border-right:1px solid var(--grid);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.head-info{font:700 8.5px ui-monospace,"SF Mono",Menlo,monospace;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.04em}
+.timeline-head{position:relative;background:var(--panel);border-bottom:2px solid var(--ink);
+  overflow:hidden}.month{position:absolute;top:0;height:100%;border-left:1px solid #C6D4E0;
+  padding:6px 4px;color:var(--muted);font:700 9px ui-monospace,"SF Mono",Menlo,monospace}
+.rows{position:relative}.activity-row{height:var(--row);border-bottom:1px solid var(--grid)}
+.activity-row:nth-child(even) .left-pane,.activity-row:nth-child(even) .lane{background-color:#F5F7F9}
+.activity-row:hover .left-pane,.activity-row:hover .lane{background-color:#E8F0F7}
+.activity-row.selected .left-pane,.activity-row.selected .lane{background-color:#DDECF4}
+.activity-row.onpath .left-pane{box-shadow:inset 4px 0 var(--red)}
+.group-row{height:29px;background:#E8EEF3;border-top:1px solid var(--strong);
+  border-bottom:1px solid var(--strong);font-weight:700;cursor:pointer}
+.group-row .left-pane{background:#E8EEF3;padding:0 10px;display:flex;align-items:center;gap:7px}
+.group-row .lane{background:#F1F5F9}.caret{width:12px}.group-meta{font-weight:400;color:var(--muted)}
+.check{justify-content:center}.check input{accent-color:var(--red)}.check input:disabled{opacity:.35}
+.aid{font:700 10.5px ui-monospace,"SF Mono",Menlo,monospace;color:var(--muted)}
+.activity-row.onpath .aid{color:var(--red)}.anm{font-weight:600;flex-direction:column;
+  align-items:flex-start!important;justify-content:center;line-height:1.15}.sub{display:block;
+  max-width:100%;font-size:8.5px;font-weight:400;color:var(--muted);overflow:hidden;
+  text-overflow:ellipsis}.date,.num{font:10px ui-monospace,"SF Mono",Menlo,monospace;
+  color:var(--muted)}.num.late{color:var(--red);font-weight:700}.num.early{color:var(--green);font-weight:700}
+.lane{position:relative;background-color:var(--paper);background-image:
+  repeating-linear-gradient(90deg,#EDF3F8 0 1px,transparent 1px 100%);
+  background-size:var(--monthpx) 100%}
+.bar{position:absolute;z-index:5;cursor:pointer}.planned{top:11px;height:0;
+  border-top:1.5px solid var(--ink)}.planned::before,.planned::after{content:"";
+  position:absolute;top:-4px;width:1.5px;height:9px;background:var(--ink)}
+.planned::before{left:0}.planned::after{right:0}
+.current{top:21px;height:8px;border:.5px solid var(--green);background:
+  repeating-linear-gradient(135deg,var(--green) 0 2px,transparent 2px 5px),#E8F0EA}
+.current.late{border-color:var(--red);background:repeating-linear-gradient(45deg,
+  var(--red) 0 3px,#C9857C 3px 6px)}.current.forecast{border-color:#2F5F9E;
+  background:var(--blue)}.activity-row.onpath .current{box-shadow:0 0 0 1.5px var(--red)}
+.activity-row.onpath .planned{border-color:var(--red)}
+.milestone{width:10px!important;height:10px!important;transform:rotate(45deg);
+  top:15px!important;border:1px solid var(--ink)!important;background:var(--paper)!important}
+.mode-current .planned{display:none}.mode-current .current{top:13px;height:11px}
+.mode-planned .current{display:none}.mode-planned .planned{top:18px}
+.logic{position:absolute;left:var(--table);top:0;z-index:14;pointer-events:none;
+  overflow:visible}.rel{fill:none;stroke:#376E91;stroke-width:1.4;opacity:.76;
+  marker-end:url(#arrow)}.rel.inferred{stroke:var(--purple);stroke-dasharray:5 3}
+.rel.analyst{stroke:var(--amber);stroke-dasharray:2 3}.rel.dimmed{opacity:.2}
+.rel.inferred{marker-end:url(#arrow-inferred)}.rel.analyst{marker-end:url(#arrow-analyst)}
+.rel-label{font:9px ui-monospace,"SF Mono",Menlo,monospace;fill:#46657B;
+  paint-order:stroke;stroke:var(--paper);stroke-width:3px;stroke-linejoin:round}
+.data-date{stroke:var(--red);stroke-width:2;stroke-dasharray:5 4;opacity:.8}
+.drawer{position:fixed;right:14px;top:148px;width:345px;max-height:calc(100vh - 170px);
+  overflow:auto;background:var(--paper);border:1px solid var(--strong);box-shadow:
+  0 10px 32px #17344733;z-index:70;padding:13px;display:none}.drawer.open{display:block}
+.drawer h2{font-size:15px;margin:0 28px 3px 0}.close{position:absolute;right:7px;top:7px}
+.facts{display:grid;grid-template-columns:110px 1fr;gap:7px;border-top:1px solid var(--grid);
+  padding-top:9px;margin-top:9px}.facts dt{color:var(--muted)}.facts dd{margin:0;
+  font-weight:600;overflow-wrap:anywhere}.order{display:flex;gap:6px;margin-top:10px}
+.foot{padding:6px 12px;background:var(--panel);border-top:1px solid var(--strong);
+  display:flex;gap:14px;color:var(--muted);align-items:center;position:sticky;bottom:0;z-index:50}
+.status{font-weight:700;color:var(--green)}.cap{color:var(--amber);font-weight:700}
+.readonly .check input{pointer-events:none;opacity:.35}
+@media(max-width:900px){:root{--table:680px}.row-info{grid-template-columns:32px 78px
+  minmax(175px,1fr) 66px 66px 66px 66px 40px 42px}.drawer{left:8px;right:8px;width:auto}}
+</style></head><body><main class="shell">
+<header class="top"><div class="eyebrow">As-planned vs as-built · retrospective longest path · analyst workspace</div>
+<h1 id="title"></h1><div class="meta"><span id="basis"></span><span id="anchor"></span>
+<span id="ddmeta"></span><span id="count"></span></div>
+<div class="control-note"><b>Forensic control:</b> display scope and path membership are independent. Context-only and LOE activities can be inspected without becoming part of the adopted driving path. Checkbox and ordering edits stream to the form beneath the chart — <b>Save draft</b> and <b>Adopt</b> there are the auditable commit points.</div></header>
+<section class="toolbar">
+<label>Activity scope<select id="scope"><option value="path">Identified path</option><option value="context">Path + logic context</option><option value="all">All activities</option></select></label>
+<label>Bar view<select id="barmode"><option value="dual">Planned vs current</option><option value="current">Current / recorded</option><option value="planned">As-planned</option></select></label>
+<label>Relationship lines<select id="relmode"><option value="path">Path hand-offs</option><option value="context">Path + context</option><option value="selected">Selected activity</option><option value="visible">All visible</option><option value="none">Hidden</option></select></label>
+<label>Group<select id="group"><option value="path">Path order / dates</option><option value="wbs">WBS groups</option><option value="location">Location</option><option value="discipline">Discipline</option><option value="system">System</option></select></label>
+<label>Status<select id="statusfilter"><option value="all">All statuses</option><option value="complete">Complete</option><option value="active">In progress</option><option value="notstarted">Not started</option></select></label>
+<label>Float<select id="floatfilter"><option value="all">All float</option><option value="critical">TF ≤ 0</option><option value="negative">Negative TF</option><option value="positive">Positive TF</option></select></label>
+<label>Find<input id="search" type="search" placeholder="ID, name, WBS or activity code"></label>
+<button class="btn" id="fit">Fit visible</button><button class="btn" id="zoomout">−</button><button class="btn" id="zoomin">+</button>
+<button class="btn" id="expand">Expand</button><button class="btn" id="collapse">Collapse</button>
+<span class="spacer"></span><button class="btn primary" id="fullscreen">⛶ Full screen</button>
+</section>
+<section class="validation" id="validation"><div class="legend">
+<span class="key"><i class="sw" style="height:0;border-top:1.5px solid var(--ink)"></i>as-planned (baseline)</span>
+<span class="key"><i class="sw" style="background:repeating-linear-gradient(45deg,var(--red) 0 3px,#C9857C 3px 6px)"></i>current late</span>
+<span class="key"><i class="sw" style="background:repeating-linear-gradient(135deg,var(--green) 0 2px,transparent 2px 5px),#E8F0EA"></i>current on/ahead</span>
+<span class="key"><i class="sw" style="background:var(--purple)"></i>inferred logic</span>
+</div></section>
+<section class="chart" id="chart"><div class="chart-grid" id="chartgrid">
+<div class="chart-head"><div class="left-head"><div class="row-info head-info">
+<span>Path</span><span>Activity ID</span><span>Activity name / coding</span><span>P. start</span><span>P. finish</span><span>C. start</span><span>C. finish</span><span>TF</span><span>Var d</span>
+</div></div><div class="timeline-head" id="timeline"></div></div>
+<div class="rows" id="rows"></div></div></section>
+<footer class="foot"><span class="status" id="state">Ready</span><span id="rendernote"></span><span>Click a row for relationships, activity codes, calendars and path ordering.</span></footer>
+</main>
+<aside class="drawer" id="drawer"><button class="btn close" id="close">×</button><h2 id="dname"></h2><div id="dcode" class="aid"></div><dl class="facts" id="facts"></dl><div class="order"><button class="btn" id="up">↑ Earlier on path</button><button class="btn" id="down">↓ Later on path</button></div></aside>
+<script>
+/* Dual mode: EMBEDDED payload -> standalone HTML export; null -> live
+   Streamlit component (payload arrives via the render event, edits are
+   pushed back with setComponentValue). */
+const EMBEDDED=/*PAYLOAD*/null/*END*/;
+let DATA=null,ACTIVITIES=[],RELATIONSHIPS=[],BY={},booted=false;
+const DAY=86400000,BASE_LANE=1180,MAX_VISIBLE=600;
+let path=[],selected=null,collapsed=new Set();
+let autoFit=true,pxPerDay=2.5,viewStart=Date.now(),viewEnd=Date.now()+90*DAY;
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const dt=s=>s?Date.parse(s):NaN,fmt=s=>s?String(s).slice(0,10):"—",num=n=>n==null?"—":Number(n).toFixed(1);
+const isPath=code=>path.includes(code),isMilestone=a=>a.task_type.includes("Mile")||a.duration_days===0;
+const statusKind=a=>a.status.includes("Complete")?"complete":a.status.includes("Active")?"active":"notstarted";
+const variance=a=>Number.isFinite(dt(a.finish))&&Number.isFinite(dt(a.planned_finish))?Math.round((dt(a.finish)-dt(a.planned_finish))/DAY):null;
+
+let pushTimer=null,editedFlag=false;
+function pushValue(){
+  if(EMBEDDED)return;editedFlag=true;
+  clearTimeout(pushTimer);
+  pushTimer=setTimeout(()=>{window.parent.postMessage({
+    isStreamlitMessage:true,type:"streamlit:setComponentValue",
+    dataType:"json",
+    value:{path_codes:path,edited:true,at:new Date().toISOString()}},"*");
+    $("state").textContent="Edits streamed to the form — Save draft / Adopt there";
+  },250);
+}
+let lastIssues=[];
+function renderIssues(issues){
+  lastIssues=issues;
+  for(const chip of [...$("validation").querySelectorAll(".chip")])chip.remove();
+  for(const issue of issues){const chip=document.createElement("span");chip.className="chip "+issue.severity;chip.textContent=issue.severity.toUpperCase()+": "+issue.message;$("validation").prepend(chip)}
+}
+
+function contextCodes(){const seeds=new Set(path),out=new Set(path);for(const rel of RELATIONSHIPS){if(seeds.has(rel.predecessor)||seeds.has(rel.successor)){out.add(rel.predecessor);out.add(rel.successor)}}return out}
+function filteredActivities(){
+  const scope=$("scope").value,query=$("search").value.trim().toLowerCase(),status=$("statusfilter").value,floatMode=$("floatfilter").value,context=contextCodes();
+  let rows=ACTIVITIES.filter(a=>scope==="all"||(scope==="path"?isPath(a.code):context.has(a.code)));
+  if(query)rows=rows.filter(a=>[a.code,a.name,a.wbs,a.location,a.discipline,a.system,...(a.activity_codes||[])].join(" ").toLowerCase().includes(query));
+  if(status!=="all")rows=rows.filter(a=>statusKind(a)===status);
+  if(floatMode!=="all")rows=rows.filter(a=>{const tf=a.total_float_days;if(tf==null)return false;if(floatMode==="critical")return tf<=0;if(floatMode==="negative")return tf<0;return tf>0});
+  const group=$("group").value;
+  rows.sort((a,b)=>{if(group==="path"){const ai=path.indexOf(a.code),bi=path.indexOf(b.code);if(ai>=0||bi>=0)return(ai<0?999999:ai)-(bi<0?999999:bi)}else{const g=String(a[group]||"Uncoded").localeCompare(String(b[group]||"Uncoded"));if(g)return g}return(dt(a.start)||9e15)-(dt(b.start)||9e15)});
+  const total=rows.length,capped=rows.length>MAX_VISIBLE;return{rows:rows.slice(0,MAX_VISIBLE),total,capped};
+}
+function groupKey(a,group){return String(a[group]||"Uncoded")}
+function displayRows(activities){const group=$("group").value;if(group==="path")return activities.map(activity=>({kind:"activity",activity}));const buckets=new Map();for(const a of activities){const key=groupKey(a,group);if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push(a)}const out=[];for(const [key,members] of [...buckets.entries()].sort((a,b)=>a[0].localeCompare(b[0]))){out.push({kind:"group",key,count:members.length});if(!collapsed.has(key))for(const activity of members)out.push({kind:"activity",activity,group:key})}return out}
+function datePair(a){const mode=$("barmode").value;if(mode==="planned")return[a.planned_start,a.planned_finish];return[a.start,a.finish]}
+function fitVisible(activities){const mode=$("barmode").value,dates=[];for(const a of activities){if(mode!=="current")dates.push(dt(a.planned_start),dt(a.planned_finish));if(mode!=="planned")dates.push(dt(a.start),dt(a.finish))}const valid=dates.filter(Number.isFinite);if(!valid.length){viewStart=Date.now();viewEnd=viewStart+90*DAY}else{viewStart=Math.min(...valid)-10*DAY;viewEnd=Math.max(...valid)+10*DAY}const span=Math.max((viewEnd-viewStart)/DAY,1);if(autoFit)pxPerDay=Math.max(.2,Math.min(14,(BASE_LANE-40)/span));setLaneWidth()}
+function setLaneWidth(){const span=Math.max((viewEnd-viewStart)/DAY,1),width=Math.max(BASE_LANE,Math.ceil(span*pxPerDay)+40);document.documentElement.style.setProperty("--lane",width+"px");document.documentElement.style.setProperty("--monthpx",(30.44*pxPerDay)+"px")}
+const x=value=>Number.isFinite(dt(value))?(dt(value)-viewStart)/DAY*pxPerDay:0;
+function renderTimeline(){const el=$("timeline");el.innerHTML="";let cur=new Date(viewStart);cur=new Date(cur.getFullYear(),cur.getMonth(),1);while(cur.getTime()<viewEnd){const next=new Date(cur.getFullYear(),cur.getMonth()+1,1),cell=document.createElement("div");cell.className="month";cell.style.left=((cur-viewStart)/DAY*pxPerDay)+"px";cell.style.width=((next-cur)/DAY*pxPerDay)+"px";cell.textContent=cur.toLocaleDateString(undefined,{month:"short",year:"2-digit"});el.appendChild(cell);cur=next}}
+function activityInfo(a){const v=variance(a),vcls=v==null?"":v>0?"late":"early",sub=[a.wbs,a.location,a.discipline].filter(Boolean).join(" · ");return `<div class="row-info"><label class="check" title="${esc(a.eligibility_reason||"Toggle path membership")}"><input type="checkbox" ${isPath(a.code)?"checked":""} ${a.path_eligible?"":"disabled"} aria-label="Include ${esc(a.code)} on path"></label><span class="aid">${esc(a.code)}</span><span class="anm" title="${esc(a.name)}">${esc(a.name)}<small class="sub">${esc(sub||"Uncoded")}</small></span><span class="date">${fmt(a.planned_start)}</span><span class="date">${fmt(a.planned_finish)}</span><span class="date">${fmt(a.start)}</span><span class="date">${fmt(a.finish)}</span><span class="num ${a.total_float_days!=null&&a.total_float_days<=0?"late":""}">${num(a.total_float_days)}</span><span class="num ${vcls}">${v==null?"—":(v>0?"+":"")+v}</span></div>`}
+function barMarkup(a){const ps=x(a.planned_start),pf=x(a.planned_finish),cs=x(a.start),cf=x(a.finish),v=variance(a),status=statusKind(a),mile=isMilestone(a);let html="";if(Number.isFinite(dt(a.planned_start))){html+=`<i class="bar planned ${mile?"milestone":""}" style="left:${ps}px;width:${Math.max(pf-ps,3)}px" title="${esc(a.code)} planned ${fmt(a.planned_start)} → ${fmt(a.planned_finish)}"></i>`}if(Number.isFinite(dt(a.start))){const cls=status!=="complete"?"forecast":v!=null&&v>0?"late":"";html+=`<i class="bar current ${cls} ${mile?"milestone":""}" style="left:${cs}px;width:${Math.max(cf-cs,3)}px" title="${esc(a.code)} current/recorded ${fmt(a.start)} → ${fmt(a.finish)}"></i>`}return html}
+function render(){if(!DATA)return;const result=filteredActivities(),activities=result.rows,rows=displayRows(activities),holder=$("rows");fitVisible(activities);renderTimeline();holder.innerHTML="";document.body.className=(EMBEDDED?"readonly ":"")+"mode-"+$("barmode").value;
+  for(const item of rows){if(item.kind==="group"){const row=document.createElement("div");row.className="group-row";row.dataset.group=item.key;row.innerHTML=`<div class="left-pane"><span class="caret">${collapsed.has(item.key)?"▶":"▼"}</span><span>${esc(item.key)}</span><span class="group-meta">${item.count} ${item.count===1?"activity":"activities"}</span></div><div class="lane"></div>`;row.onclick=()=>{collapsed.has(item.key)?collapsed.delete(item.key):collapsed.add(item.key);render()};holder.appendChild(row);continue}
+    const a=item.activity,row=document.createElement("div");row.className="activity-row "+(isPath(a.code)?"onpath ":"")+(selected===a.code?"selected ":"");row.dataset.code=a.code;row.innerHTML=`<div class="left-pane">${activityInfo(a)}</div><div class="lane">${barMarkup(a)}</div>`;const box=row.querySelector("input");box.addEventListener("click",event=>{event.stopPropagation();if(box.checked){if(a.path_eligible&&!isPath(a.code))path.push(a.code)}else path=path.filter(code=>code!==a.code);pushValue();render()});row.addEventListener("click",()=>{selected=a.code;openDrawer(a);render()});holder.appendChild(row)}
+  drawOverlay(activities);$("count").textContent=`${path.length} on path · ${activities.length} displayed · ${result.total} matched · ${ACTIVITIES.length} total`;const focusHint=$("scope").value==="all"&&$("relmode").value==="selected"&&!selected?"Select an activity to reveal its incoming and outgoing logic.":`${activities.length} activities rendered`;$("rendernote").innerHTML=result.capped?`<span class="cap">First ${MAX_VISIBLE} shown — filter to narrow the schedule.</span>`:focusHint;}
+function relWanted(rel,shown){if(!shown.has(rel.predecessor)||!shown.has(rel.successor))return false;const mode=$("relmode").value;if(mode==="none")return false;if(mode==="visible")return true;if(mode==="selected")return selected&&(rel.predecessor===selected||rel.successor===selected);const pi=path.indexOf(rel.predecessor),pathLink=pi>=0&&path[pi+1]===rel.successor;if(mode==="path")return pathLink;return pathLink||isPath(rel.predecessor)||isPath(rel.successor)}
+function endpoint(a,type,pred){const [start,finish]=datePair(a),sx=x(start),fx=x(finish);if(pred)return type==="SS"||type==="SF"?sx:fx;return type==="FF"||type==="SF"?fx:sx}
+function drawOverlay(activities){const old=$("logic");if(old)old.remove();const svg=document.createElementNS("http://www.w3.org/2000/svg","svg");svg.id="logic";svg.classList.add("logic");svg.setAttribute("width",getComputedStyle(document.documentElement).getPropertyValue("--lane"));svg.setAttribute("height",Math.max($("rows").scrollHeight,1));svg.innerHTML=`<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#376E91"></path></marker><marker id="arrow-inferred" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#7754A3"></path></marker><marker id="arrow-analyst" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#C98420"></path></marker></defs>`;$("rows").appendChild(svg);
+  const centers={},shown=new Set();for(const a of activities){const row=$("rows").querySelector(`[data-code="${CSS.escape(a.code)}"]`);if(row){centers[a.code]=row.offsetTop+row.offsetHeight/2;shown.add(a.code)}}
+  if(DATA.data_date){const line=document.createElementNS("http://www.w3.org/2000/svg","line"),dx=x(DATA.data_date);line.setAttribute("x1",dx);line.setAttribute("x2",dx);line.setAttribute("y1",0);line.setAttribute("y2",$("rows").scrollHeight);line.setAttribute("class","data-date");svg.appendChild(line)}
+  for(const rel of RELATIONSHIPS){if(!relWanted(rel,shown))continue;const p=BY[rel.predecessor],s=BY[rel.successor];if(!p||!s)continue;const x1=endpoint(p,rel.relationship_type,true),x2=endpoint(s,rel.relationship_type,false),y1=centers[p.code],y2=centers[s.code],bend=Math.max(x1+14,Math.min(x2-12,x1+34));const edge=document.createElementNS("http://www.w3.org/2000/svg","path");edge.setAttribute("d",`M${x1},${y1} H${bend} V${y2} H${x2}`);edge.setAttribute("class","rel "+rel.source);svg.appendChild(edge);const label=document.createElementNS("http://www.w3.org/2000/svg","text");label.setAttribute("x",bend+3);label.setAttribute("y",(y1+y2)/2-3);label.setAttribute("class","rel-label");label.textContent=rel.relationship_type+(rel.lag_days?` ${rel.lag_days>0?"+":""}${rel.lag_days}d`:"");svg.appendChild(label)}}
+function openDrawer(a){$("drawer").classList.add("open");$("dname").textContent=a.name;$("dcode").textContent=a.code;const incoming=RELATIONSHIPS.filter(r=>r.successor===a.code),outgoing=RELATIONSHIPS.filter(r=>r.predecessor===a.code),facts=[["Path status",isPath(a.code)?`Position ${path.indexOf(a.code)+1}`:a.path_eligible?"Context only":"Ineligible: "+a.eligibility_reason],["Activity codes",(a.activity_codes||[]).join(" · ")||"—"],["WBS",a.wbs||"—"],["Location",a.location||"—"],["Discipline",a.discipline||"—"],["System",a.system||"—"],["Calendar",a.calendar||"—"],["Status",a.status||"—"],["Predecessors",incoming.map(r=>`${r.predecessor} (${r.relationship_type} ${r.lag_days||0}d · ${r.source})`).join("; ")||"—"],["Successors",outgoing.map(r=>`${r.successor} (${r.relationship_type} ${r.lag_days||0}d · ${r.source})`).join("; ")||"—"],["Evidence",[...incoming,...outgoing].filter(r=>r.evidence).map(r=>r.evidence).join("; ")||"—"]];$("facts").innerHTML=facts.map(([k,v])=>`<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");$("up").disabled=!isPath(a.code);$("down").disabled=!isPath(a.code)}
+function move(delta){if(EMBEDDED)return;const i=path.indexOf(selected),j=i+delta;if(i<0||j<0||j>=path.length)return;[path[i],path[j]]=[path[j],path[i]];pushValue();openDrawer(BY[selected]);render()}
+/* Full screen: reload this very file in a NEW BROWSER TAB with the
+   current state baked in — browser-wide, fully zoomable. The sentinel
+   is assembled in pieces so the server-side replace touches only the
+   real one at the top of this script. */
+$("fullscreen").onclick=async()=>{
+  try{
+    const src=await (await fetch(location.pathname)).text();
+    const payload={dataset:DATA,issues:lastIssues,
+      draft:{analysis_id:DATA.analysis_id,path_codes:path,
+             basis:DATA.candidate_basis,revision:0,reason:"",
+             analyst:"",updated_utc:""}};
+    const sentinel="/*PAYLOAD*/"+"null"+"/*"+"END*/";
+    const html=src.replace(sentinel,
+      JSON.stringify(payload).replace(/</g,"\\u003c"));
+    window.open(URL.createObjectURL(
+      new Blob([html],{type:"text/html"})),"_blank");
+    $("state").textContent="Full-screen view opened in a new browser tab (view-only snapshot)";
+  }catch(err){$("state").textContent="Full-screen open failed: "+err.message}
+};
+function scopeChanged(){const scope=$("scope").value;if(scope==="path"){$("relmode").value="path";$("group").value="path"}else if(scope==="context"){$("relmode").value="context"}else{$("relmode").value="selected";if($("group").value==="path")$("group").value="wbs"}autoFit=true;render()}
+$("scope").onchange=scopeChanged;for(const id of ["barmode","group","statusfilter","floatfilter"]){$(id).onchange=()=>{autoFit=true;render()}}$("relmode").onchange=render;$("search").oninput=()=>{autoFit=true;render()};$("fit").onclick=()=>{autoFit=true;render()};$("zoomin").onclick=()=>{autoFit=false;pxPerDay=Math.min(pxPerDay*1.35,30);setLaneWidth();renderTimeline();render()};$("zoomout").onclick=()=>{autoFit=false;pxPerDay=Math.max(pxPerDay/1.35,.12);setLaneWidth();renderTimeline();render()};$("expand").onclick=()=>{collapsed.clear();render()};$("collapse").onclick=()=>{const group=$("group").value;if(group!=="path")for(const a of filteredActivities().rows)collapsed.add(groupKey(a,group));render()};$("close").onclick=()=>$("drawer").classList.remove("open");$("up").onclick=()=>move(-1);$("down").onclick=()=>move(1);
+
+function boot(payload){
+  DATA=payload.dataset;ACTIVITIES=DATA.activities;RELATIONSHIPS=DATA.relationships;
+  BY=Object.fromEntries(ACTIVITIES.map(a=>[a.code,a]));
+  path=[...((payload.draft||{}).path_codes||[])];
+  $("title").textContent=DATA.title;$("basis").textContent="Candidate: "+DATA.candidate_basis;
+  $("anchor").textContent="Anchor: "+DATA.milestone_code;$("ddmeta").textContent="Data date: "+fmt(DATA.data_date);
+  renderIssues(payload.issues||[]);
+  if(EMBEDDED){
+    /* the full-screen tab is a view-only snapshot: reading aid, not a
+       second editor — path changes belong in the module (render()
+       keeps the readonly class via the EMBEDDED flag) */
+    $("fullscreen").style.display="none";
+    $("state").textContent="Full-screen view — read-only snapshot; "
+      +"adjust the path in the module";
+  }
+  render();
+}
+if(EMBEDDED){boot(EMBEDDED)}
+else{
+  window.addEventListener("message",event=>{
+    const msg=event.data;
+    if(!msg||msg.type!=="streamlit:render")return;
+    const payload=(msg.args||{}).payload;
+    if(!payload)return;
+    if(!booted){booted=true;boot(payload);
+      window.parent.postMessage({isStreamlitMessage:true,
+        type:"streamlit:setFrameHeight",height:790},"*");
+    }else{
+      /* later reruns refresh the validation chips only — the analyst's
+         in-progress path edits must never be reset by their own echo */
+      renderIssues(payload.issues||[]);
+    }
+  });
+  window.parent.postMessage({isStreamlitMessage:true,
+    type:"streamlit:componentReady",apiVersion:1},"*");
+}
+</script></body></html>

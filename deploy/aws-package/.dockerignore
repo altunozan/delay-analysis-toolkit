@@ -1,0 +1,8 @@
+# Build context = this folder. Keep dev/test baggage out of the image.
+.git
+__pycache__
+**/__pycache__
+*.pyc
+.DS_Store
+secrets.env
+*.zip

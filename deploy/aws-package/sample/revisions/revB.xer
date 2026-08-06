@@ -1,0 +1,30 @@
+ERMHDR	20.12	2026-01-01	Project	admin	admin			USD
+%T	PROJECT
+%F	proj_id	proj_short_name	plan_start_date	plan_end_date	scd_end_date	last_recalc_date	clndr_id
+%R	1	MARINA-A	2026-01-05 08:00	2026-01-29 17:00	2026-01-29 17:00	2026-04-01 08:00	100
+%T	CALENDAR
+%F	clndr_id	clndr_name	day_hr_cnt
+%R	100	Standard	8
+%T	ACTVTYPE
+%F	actv_code_type_id	actv_code_type	actv_short_len
+%R	500	Area	6
+%T	ACTVCODE
+%F	actv_code_id	actv_code_type_id	actv_code_name	short_name
+%R	5001	500	Zone A	ZA
+%R	5002	500	Zone B	ZB
+%T	TASK
+%F	task_id	proj_id	clndr_id	task_code	task_name	task_type	status_code	target_drtn_hr_cnt	remain_drtn_hr_cnt	total_float_hr_cnt	early_start_date	early_end_date	act_start_date	act_end_date	target_start_date	target_end_date
+%R	10	1	100	A1000	Zone A Works	TT_Task	TK_Active	80	80	0	2026-01-05 08:00	2026-05-15 17:00	2026-01-05 08:00		2026-01-05 08:00	2026-05-01 17:00
+%R	20	1	100	A2000	Zone B Works	TT_Task	TK_NotStart	80	80	0	2026-05-18 08:00	2026-11-01 17:00			2026-05-04 08:00	2026-10-01 17:00
+%R	30	1	100	A3000	Zone B Fit-out	TT_Task	TK_NotStart	80	80	0	2026-11-02 08:00	2027-01-29 17:00			2026-10-02 08:00	2026-12-10 17:00
+%R	90	1	100	MS1000	Practical Completion	TT_FinMile	TK_NotStart	80	80	0		2027-01-29 17:00				2026-12-18 17:00
+%R	80	1	100	MS0500	Sectional Completion Zone A	TT_FinMile	TK_NotStart	80	80	0		2026-05-15 17:00				2026-05-01 17:00
+%T	TASKPRED
+%F	task_id	pred_task_id	pred_type	lag_hr_cnt
+%R	20	10	PR_FS	0
+%T	TASKACTV
+%F	task_id	proj_id	actv_code_type_id	actv_code_id
+%R	10	1	500	5001
+%R	20	1	500	5002
+%R	30	1	500	5002
+%E

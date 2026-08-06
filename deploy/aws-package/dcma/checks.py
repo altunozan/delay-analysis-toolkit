@@ -1,0 +1,1040 @@
+"""DCMA 14-Point Schedule Assessment check engine.
+
+Each check is a pure function of (XerData, DCMAConfig) returning a CheckResult.
+The engine is UI-independent so it can feed a CLI, the Streamlit app, or the
+downstream forensic-comparison / narrative modules.
+
+Conventions:
+- Durations/floats/lags from XER are in HOURS; converted to days using the
+  per-activity calendar's day_hr_cnt (fallback default_hours_per_day).
+- "Incomplete" = status != Complete.
+- WBS-summary and LOE activities are excluded from logic/duration checks.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+
+from .config import DCMAConfig
+from .models import (
+    REL_FF,
+    REL_FS,
+    REL_SF,
+    Task,
+)
+from .xer_parser import XerData
+
+
+class CheckStatus(str, Enum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+    NA = "N/A"
+
+
+@dataclass
+class CheckResult:
+    number: int
+    name: str
+    status: CheckStatus
+    metric_label: str          # e.g. "Activities missing logic"
+    metric_value: str          # formatted value, e.g. "14 (3.3%)"
+    threshold: str             # e.g. "<= 5%"
+    summary: str               # one-line plain-language result
+    affected_ids: list[str] = field(default_factory=list)
+    detail_rows: list[dict] = field(default_factory=list)
+    na_reason: str | None = None
+
+    @property
+    def affected_count(self) -> int:
+        return len(self.affected_ids)
+
+
+def _pct(part: int, whole: int) -> float:
+    return (part / whole * 100.0) if whole else 0.0
+
+
+def _eligible_activities(data: XerData) -> list[Task]:
+    """Activities eligible for logic/duration/float checks.
+
+    Excludes WBS-summary and LOE activities (not real network activities).
+    """
+    return [t for t in data.tasks if not t.is_loe_or_wbs]
+
+
+# ---------------------------------------------------------------------------
+# Check 1: Logic (missing predecessors/successors)
+# ---------------------------------------------------------------------------
+def check_01_logic(data: XerData, config: DCMAConfig) -> CheckResult:
+    preds: set[str] = set()      # tasks that HAVE a predecessor
+    succs: set[str] = set()      # tasks that HAVE a successor
+    for rel in data.relationships:
+        succs.add(rel.pred_task_id)   # predecessor task has a successor link
+        preds.add(rel.task_id)        # successor task has a predecessor link
+
+    activities = [t for t in _eligible_activities(data) if t.is_incomplete]
+    affected = []
+    detail = []
+    for t in activities:
+        missing_pred = t.task_id not in preds
+        missing_succ = t.task_id not in succs
+        if missing_pred or missing_succ:
+            affected.append(t.task_code)
+            tag = []
+            if missing_pred:
+                tag.append("no predecessor")
+            if missing_succ:
+                tag.append("no successor")
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Issue": "; ".join(tag),
+            })
+
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = CheckStatus.PASS if pct <= config.logic_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=1,
+        name="Logic",
+        status=status,
+        metric_label="Incomplete activities missing predecessor/successor",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.logic_max_pct:.0f}%",
+        summary=(
+            f"{len(affected)} incomplete activities ({pct:.1f}%) are missing "
+            f"a predecessor and/or successor (dangling logic)."
+        ),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 2: Leads (negative lag)
+# ---------------------------------------------------------------------------
+def check_02_leads(data: XerData, config: DCMAConfig) -> CheckResult:
+    affected = []
+    detail = []
+    for rel in data.relationships:
+        if rel.lag_hr < 0:
+            succ = data.tasks_by_id.get(rel.task_id)
+            pred = data.tasks_by_id.get(rel.pred_task_id)
+            # lag basis = the file's SCHEDOPTIONS election (central
+            # helper, shared with the CPM kernel) — successor h/day
+            # misstated the XER detail whenever calendars differed
+            from dcma.calendar import relationship_lag_hours_per_day
+            hpd, _ = relationship_lag_hours_per_day(
+                data, pred.clndr_id if pred else "",
+                succ.clndr_id if succ else "", config)
+            label = succ.task_code if succ else rel.task_id
+            affected.append(label)
+            detail.append({
+                "Predecessor": pred.task_code if pred else rel.pred_task_id,
+                "Successor": label,
+                "Type": rel.pred_type,
+                "Lag (days)": round(rel.lag_hr / hpd, 2),
+            })
+
+    count = len(affected)
+    status = CheckStatus.PASS if count <= config.leads_max_count else CheckStatus.FAIL
+    return CheckResult(
+        number=2,
+        name="Leads",
+        status=status,
+        metric_label="Relationships with negative lag (leads)",
+        metric_value=str(count),
+        threshold=f"<= {config.leads_max_count}",
+        summary=f"{count} relationships use a negative lag (lead).",
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 3: Lags (positive lag)
+# ---------------------------------------------------------------------------
+def check_03_lags(data: XerData, config: DCMAConfig) -> CheckResult:
+    total_rels = len(data.relationships)
+    affected = []
+    detail = []
+    for rel in data.relationships:
+        if rel.lag_hr > 0:
+            succ = data.tasks_by_id.get(rel.task_id)
+            pred = data.tasks_by_id.get(rel.pred_task_id)
+            # lag basis = the file's SCHEDOPTIONS election (central
+            # helper, shared with the CPM kernel) — successor h/day
+            # misstated the XER detail whenever calendars differed
+            from dcma.calendar import relationship_lag_hours_per_day
+            hpd, _ = relationship_lag_hours_per_day(
+                data, pred.clndr_id if pred else "",
+                succ.clndr_id if succ else "", config)
+            label = succ.task_code if succ else rel.task_id
+            affected.append(label)
+            detail.append({
+                "Predecessor": pred.task_code if pred else rel.pred_task_id,
+                "Successor": label,
+                "Type": rel.pred_type,
+                "Lag (days)": round(rel.lag_hr / hpd, 2),
+            })
+
+    pct = _pct(len(affected), total_rels)
+    status = CheckStatus.PASS if pct <= config.lags_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=3,
+        name="Lags",
+        status=status,
+        metric_label="Relationships with positive lag",
+        metric_value=f"{len(affected)} of {total_rels} ({pct:.1f}%)",
+        threshold=f"<= {config.lags_max_pct:.0f}%",
+        summary=f"{len(affected)} relationships ({pct:.1f}%) carry a positive lag.",
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 4: Relationship Types (FS percentage)
+# ---------------------------------------------------------------------------
+def check_04_relationship_types(data: XerData, config: DCMAConfig) -> CheckResult:
+    total = len(data.relationships)
+    counts = {REL_FS: 0, "PR_SS": 0, "PR_FF": 0, REL_SF: 0}
+    non_fs_detail = []
+    sf_ids = []
+    for rel in data.relationships:
+        counts[rel.pred_type] = counts.get(rel.pred_type, 0) + 1
+        if rel.pred_type != REL_FS:
+            succ = data.tasks_by_id.get(rel.task_id)
+            pred = data.tasks_by_id.get(rel.pred_task_id)
+            label = succ.task_code if succ else rel.task_id
+            non_fs_detail.append({
+                "Predecessor": pred.task_code if pred else rel.pred_task_id,
+                "Successor": label,
+                "Type": rel.pred_type,
+            })
+            if rel.pred_type == REL_SF:
+                sf_ids.append(label)
+
+    fs_pct = _pct(counts.get(REL_FS, 0), total)
+    status = CheckStatus.PASS if fs_pct >= config.fs_min_pct else CheckStatus.FAIL
+    sf_note = f" {len(sf_ids)} discouraged SF links present." if sf_ids else ""
+    return CheckResult(
+        number=4,
+        name="Relationship Types",
+        status=status,
+        metric_label="Finish-to-Start relationships",
+        metric_value=(
+            f"{fs_pct:.1f}% FS "
+            f"(FS={counts.get(REL_FS,0)}, SS={counts.get('PR_SS',0)}, "
+            f"FF={counts.get('PR_FF',0)}, SF={counts.get(REL_SF,0)})"
+        ),
+        threshold=f">= {config.fs_min_pct:.0f}% FS",
+        summary=f"{fs_pct:.1f}% of relationships are Finish-to-Start.{sf_note}",
+        affected_ids=[d["Successor"] for d in non_fs_detail],
+        detail_rows=non_fs_detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 5: Hard Constraints
+# ---------------------------------------------------------------------------
+def check_05_hard_constraints(data: XerData, config: DCMAConfig) -> CheckResult:
+    hard = config.hard_constraint_codes
+    activities = _eligible_activities(data)
+    affected = []
+    detail = []
+    for t in activities:
+        hits = []
+        if t.cstr_type in hard:
+            hits.append(t.cstr_type)
+        if t.cstr_type2 in hard:
+            hits.append(t.cstr_type2)
+        if hits:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Constraint(s)": ", ".join(hits),
+            })
+
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = CheckStatus.PASS if pct <= config.hard_constraint_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=5,
+        name="Hard Constraints",
+        status=status,
+        metric_label="Activities with hard constraints",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.hard_constraint_max_pct:.0f}%",
+        summary=(
+            f"{len(affected)} activities ({pct:.1f}%) carry a hard constraint "
+            f"({', '.join(sorted(hard))})."
+        ),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 6: High Float (> threshold days)
+# ---------------------------------------------------------------------------
+def check_06_high_float(data: XerData, config: DCMAConfig) -> CheckResult:
+    activities = [t for t in _eligible_activities(data) if t.is_incomplete]
+    affected = []
+    detail = []
+    for t in activities:
+        hpd = data.hours_per_day(t, config)
+        tf = t.total_float_days(hpd)
+        if tf is not None and tf > config.high_float_days:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Total Float (days)": round(tf, 1),
+            })
+
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = CheckStatus.PASS if pct <= config.high_float_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=6,
+        name="High Float",
+        status=status,
+        metric_label=f"Activities with total float > {config.high_float_days:.0f}d",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.high_float_max_pct:.0f}%",
+        summary=(
+            f"{len(affected)} activities ({pct:.1f}%) have total float exceeding "
+            f"{config.high_float_days:.0f} working days."
+        ),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 7: Negative Float
+# ---------------------------------------------------------------------------
+def check_07_negative_float(data: XerData, config: DCMAConfig) -> CheckResult:
+    activities = [t for t in _eligible_activities(data) if t.is_incomplete]
+    affected = []
+    detail = []
+    worst = 0.0
+    for t in activities:
+        hpd = data.hours_per_day(t, config)
+        tf = t.total_float_days(hpd)
+        if tf is not None and tf < 0:
+            affected.append(t.task_code)
+            worst = min(worst, tf)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Total Float (days)": round(tf, 1),
+            })
+
+    count = len(affected)
+    status = CheckStatus.PASS if count <= config.negative_float_max_count else CheckStatus.FAIL
+    worst_note = f" Max negative float: {worst:.0f} days." if count else ""
+    return CheckResult(
+        number=7,
+        name="Negative Float",
+        status=status,
+        metric_label="Activities with negative total float",
+        metric_value=str(count),
+        threshold=f"<= {config.negative_float_max_count}",
+        summary=f"{count} activities have negative total float.{worst_note}",
+        affected_ids=affected,
+        detail_rows=sorted(detail, key=lambda r: r["Total Float (days)"]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 8: High Duration (> threshold days)
+# ---------------------------------------------------------------------------
+def check_08_high_duration(data: XerData, config: DCMAConfig) -> CheckResult:
+    # Incomplete, non-milestone, non-summary activities.
+    activities = [
+        t for t in _eligible_activities(data)
+        if t.is_incomplete and not t.is_milestone
+    ]
+    affected = []
+    detail = []
+    for t in activities:
+        hpd = data.hours_per_day(t, config)
+        dur = t.remaining_duration_days(hpd)
+        if dur is not None and dur > config.high_duration_days:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Remaining Duration (days)": round(dur, 1),
+            })
+
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = CheckStatus.PASS if pct <= config.high_duration_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=8,
+        name="High Duration",
+        status=status,
+        metric_label=f"Activities with duration > {config.high_duration_days:.0f}d",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.high_duration_max_pct:.0f}%",
+        summary=(
+            f"{len(affected)} activities ({pct:.1f}%) have remaining duration "
+            f"exceeding {config.high_duration_days:.0f} working days."
+        ),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 9: Invalid Dates
+# ---------------------------------------------------------------------------
+def check_09_invalid_dates(data: XerData, config: DCMAConfig) -> CheckResult:
+    project = data.project
+    data_date = project.data_date if project else None
+    if data_date is None:
+        return CheckResult(
+            number=9, name="Invalid Dates", status=CheckStatus.NA,
+            metric_label="Activities with invalid dates",
+            metric_value="N/A", threshold=f"<= {config.invalid_dates_max_count}",
+            summary="Project data date (last_recalc_date) not found in file.",
+            na_reason="No data date available to validate actual/forecast dates.",
+        )
+
+    # DATE granularity, not timestamps: a data date of 08:00 with an
+    # actual finish at 17:00 the SAME day is ordinary end-of-shift
+    # statusing, not a future-dated actual. Comparing raw datetimes
+    # flagged every such record as invalid.
+    dd_day = data_date.date()
+    affected = []
+    detail = []
+    for t in _eligible_activities(data):
+        issues = []
+        # Actuals must not be in the future (after the data date).
+        if t.act_start and t.act_start.date() > dd_day:
+            issues.append("actual start after data date")
+        if t.act_finish and t.act_finish.date() > dd_day:
+            issues.append("actual finish after data date")
+        # Forecast (early) dates of remaining work must not precede data date.
+        if t.is_incomplete:
+            if t.early_start and t.early_start.date() < dd_day:
+                issues.append("forecast start before data date")
+            if t.early_finish and t.early_finish.date() < dd_day:
+                issues.append("forecast finish before data date")
+        if issues:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Issue": "; ".join(issues),
+            })
+
+    count = len(affected)
+    status = CheckStatus.PASS if count <= config.invalid_dates_max_count else CheckStatus.FAIL
+    return CheckResult(
+        number=9,
+        name="Invalid Dates",
+        status=status,
+        metric_label="Activities with invalid actual/forecast dates",
+        metric_value=str(count),
+        threshold=f"<= {config.invalid_dates_max_count}",
+        summary=(
+            f"{count} activities have dates inconsistent with the data date "
+            f"({data_date:%Y-%m-%d})."
+        ),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 10: Resources
+# ---------------------------------------------------------------------------
+def check_10_resources(data: XerData, config: DCMAConfig) -> CheckResult:
+    has_resource_table = bool(data.raw_tables.get("TASKRSRC"))
+    if not has_resource_table:
+        return CheckResult(
+            number=10, name="Resources", status=CheckStatus.NA,
+            metric_label="Incomplete activities lacking resources",
+            metric_value="N/A", threshold=f"<= {config.resources_max_count}",
+            summary="No resource assignments (TASKRSRC) present in the file.",
+            na_reason="Schedule is not resource-loaded; resource check not applicable.",
+        )
+
+    activities = [
+        t for t in _eligible_activities(data)
+        if t.is_incomplete and not t.is_milestone
+    ]
+    affected = []
+    detail = []
+    for t in activities:
+        hpd = data.hours_per_day(t, config)
+        dur = t.remaining_duration_days(hpd) or 0.0
+        if dur > 0 and t.resource_count == 0:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Remaining Duration (days)": round(dur, 1),
+            })
+
+    count = len(affected)
+    status = CheckStatus.PASS if count <= config.resources_max_count else CheckStatus.FAIL
+    return CheckResult(
+        number=10,
+        name="Resources",
+        status=status,
+        metric_label="Incomplete activities with duration but no resources",
+        metric_value=str(count),
+        threshold=f"<= {config.resources_max_count}",
+        summary=f"{count} incomplete activities have duration but no resource assignment.",
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 11: Missed Tasks (slipped vs baseline finish)
+# ---------------------------------------------------------------------------
+def check_11_missed_tasks(data: XerData, config: DCMAConfig) -> CheckResult:
+    # Baseline finish proxy = target_finish. If absent across the board, N/A.
+    activities = [t for t in _eligible_activities(data) if t.target_finish]
+    if not activities:
+        return CheckResult(
+            number=11, name="Missed Tasks", status=CheckStatus.NA,
+            metric_label="Activities finishing late vs baseline",
+            metric_value="N/A", threshold=f"<= {config.missed_tasks_max_pct:.0f}%",
+            summary="No baseline (target) finish dates available for comparison.",
+            na_reason="Baseline finish dates required to evaluate missed tasks.",
+        )
+    # Execution-tracking checks measure a LIVE update against its
+    # baseline. On a fully complete programme the target dates have
+    # typically converged on the as-built record, so "0 missed" is a
+    # tautology, not a finding — and a 92-day-late project would read
+    # healthier than its own baseline. Say N/A, and say why.
+    if not any(t.is_incomplete for t in _eligible_activities(data)):
+        return CheckResult(
+            number=11, name="Missed Tasks", status=CheckStatus.NA,
+            metric_label="Activities finishing late vs baseline",
+            metric_value="N/A",
+            threshold=f"<= {config.missed_tasks_max_pct:.0f}%",
+            summary="Fully complete programme — the file's own target "
+                    "dates are no longer an independent baseline, so "
+                    "missed-task tracking is not meaningful. Measure "
+                    "slippage against the CONTRACT baseline revision "
+                    "instead (Milestone Shift / As-Planned vs As-Built).",
+            na_reason="No remaining execution to assess: every "
+                      "activity is complete.",
+        )
+
+    affected = []
+    detail = []
+    for t in activities:
+        # Forecast/actual finish to compare against baseline target finish.
+        forecast = t.act_finish or t.early_finish
+        if forecast and t.target_finish and forecast > t.target_finish:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Baseline Finish": t.target_finish.strftime("%Y-%m-%d"),
+                "Forecast/Actual Finish": forecast.strftime("%Y-%m-%d"),
+            })
+
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = CheckStatus.PASS if pct <= config.missed_tasks_max_pct else CheckStatus.FAIL
+    return CheckResult(
+        number=11,
+        name="Missed Tasks",
+        status=status,
+        metric_label="Activities finishing late vs baseline",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.missed_tasks_max_pct:.0f}%",
+        summary=f"{len(affected)} activities ({pct:.1f}%) finished/forecast later than baseline.",
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 12: Critical Path Test
+# ---------------------------------------------------------------------------
+def check_12_critical_path(data: XerData, config: DCMAConfig) -> CheckResult:
+    """The test is CONTINUITY, not population: the threshold this check
+    advertises is ">= 1 continuous critical path", so counting low-float
+    activities alone is not enough. The low-float population is screened
+    for a connected chain that spans from the earliest critical start
+    (the data-date side) to the latest critical finish (completion) —
+    the same connected-components walk as the critical-path engine
+    (programme/critical_path.py; re-implemented here because dcma/ sits
+    below programme/ in the dependency order)."""
+    tol = config.critical_float_tolerance_days
+    activities = [t for t in _eligible_activities(data) if t.is_incomplete]
+    if not activities:
+        # fully progressed programme (e.g. an as-built): there is no
+        # remaining path to test — that is not a defect
+        return CheckResult(
+            number=12, name="Critical Path Test", status=CheckStatus.NA,
+            metric_label="Critical activities / chain segments",
+            metric_value="N/A",
+            threshold=">= 1 continuous critical path",
+            summary="All activities are complete — no remaining "
+                    "network exists, so the forward-path test does "
+                    "not apply.",
+            na_reason="No incomplete activities.")
+    crit_tasks = []
+    for t in activities:
+        hpd = data.hours_per_day(t, config)
+        tf = t.total_float_days(hpd)
+        if tf is not None and tf <= tol:
+            crit_tasks.append(t)
+    critical = [t.task_code for t in crit_tasks]
+    has_critical = len(critical) > 0
+
+    # connected components of the critical subnetwork (links between
+    # two critical activities, either direction)
+    crit_ids = {t.task_id for t in crit_tasks}
+    adjacency: dict[str, set[str]] = {tid: set() for tid in crit_ids}
+    for rel in data.relationships:
+        if rel.task_id in crit_ids and rel.pred_task_id in crit_ids:
+            adjacency[rel.pred_task_id].add(rel.task_id)
+            adjacency[rel.task_id].add(rel.pred_task_id)
+    seen: set[str] = set()
+    components: list[set[str]] = []
+    for tid in crit_ids:
+        if tid in seen:
+            continue
+        comp: set[str] = set()
+        stack = [tid]
+        while stack:
+            cur = stack.pop()
+            if cur in comp:
+                continue
+            comp.add(cur)
+            stack.extend(adjacency.get(cur, ()))
+        seen |= comp
+        components.append(comp)
+    segments = len(components)
+
+    # the driving component must span earliest start -> latest finish
+    spanning = False
+    stray_codes: list[str] = []
+    if has_critical:
+        by_id = {t.task_id: t for t in crit_tasks}
+        starts = [t for t in crit_tasks if (t.act_start or t.early_start)]
+        fins = [t for t in crit_tasks if (t.act_finish or t.early_finish)]
+        if starts and fins:
+            first = min(starts,
+                        key=lambda t: t.act_start or t.early_start)
+            last = max(fins,
+                       key=lambda t: t.act_finish or t.early_finish)
+            driving = next((c for c in components if last.task_id in c),
+                           set())
+            spanning = first.task_id in driving
+            stray_codes = sorted(by_id[tid].task_code
+                                 for tid in crit_ids - driving)
+        else:
+            spanning = segments == 1     # undated file: continuity only
+
+    status = (CheckStatus.PASS if has_critical and spanning
+              else CheckStatus.FAIL)
+    pct = _pct(len(critical), len(activities))
+    if not has_critical:
+        summary = ("No critical-path activities found; schedule may "
+                   "lack a valid critical path.")
+    elif spanning:
+        summary = (
+            f"{len(critical)} activities (TF <= {tol:.0f}d) form a "
+            "continuous critical path from earliest start to latest "
+            "finish"
+            + (f"; {len(stray_codes)} low-float activities sit outside "
+               "the driving chain." if stray_codes else "."))
+    else:
+        summary = (
+            f"{len(critical)} low-float activities (TF <= {tol:.0f}d) "
+            f"form {segments} DISCONNECTED chain segments — no single "
+            "continuous path spans the programme; missing logic or "
+            "constraints are likely breaking the path (see checks 1 "
+            "and 5).")
+    return CheckResult(
+        number=12,
+        name="Critical Path Test",
+        status=status,
+        metric_label="Critical activities / chain segments",
+        metric_value=(f"{len(critical)} of {len(activities)} "
+                      f"({pct:.1f}%) in {segments} segment(s)"),
+        threshold=">= 1 continuous critical path",
+        summary=summary,
+        affected_ids=stray_codes if spanning else critical,
+        detail_rows=[{
+            "Activity ID": c,
+            "Finding": "Low-float activity outside the driving chain",
+        } for c in stray_codes],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 13: CPLI (Critical Path Length Index)
+# ---------------------------------------------------------------------------
+def check_13_cpli(data: XerData, config: DCMAConfig) -> CheckResult:
+    project = data.project
+    data_date = project.data_date if project else None
+    project_finish = project.scheduled_finish if project else None
+    must_finish = project.must_finish if project else None
+
+    if not (data_date and project_finish and must_finish):
+        missing = []
+        if not data_date:
+            missing.append("data date")
+        if not project_finish:
+            missing.append("scheduled finish")
+        if not must_finish:
+            missing.append("must-finish/baseline finish")
+        return CheckResult(
+            number=13, name="CPLI", status=CheckStatus.NA,
+            metric_label="Critical Path Length Index",
+            metric_value="N/A", threshold=f">= {config.cpli_min:.2f}",
+            summary="CPLI requires data date, scheduled finish, and a target finish.",
+            na_reason=f"Missing: {', '.join(missing)}.",
+        )
+
+    # CPLI = (critical path length + total float) / critical path length
+    # Approximated at project level:
+    #   CPL = working days from data date to project scheduled finish
+    #   project total float = working days (scheduled finish -> must finish)
+    cpl_days = max((project_finish - data_date).days, 1)
+    project_float = (must_finish - project_finish).days
+    cpli = (cpl_days + project_float) / cpl_days
+
+    status = CheckStatus.PASS if cpli >= config.cpli_min else CheckStatus.FAIL
+    return CheckResult(
+        number=13,
+        name="CPLI",
+        status=status,
+        metric_label="Critical Path Length Index",
+        metric_value=f"{cpli:.2f}",
+        threshold=f">= {config.cpli_min:.2f}",
+        summary=(
+            f"CPLI = {cpli:.2f} (CPL {cpl_days}d, project float {project_float}d). "
+            f"{'On track' if cpli >= config.cpli_min else 'Behind required pace'}."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Check 14: BEI (Baseline Execution Index)
+# ---------------------------------------------------------------------------
+def check_14_bei(data: XerData, config: DCMAConfig) -> CheckResult:
+    project = data.project
+    data_date = project.data_date if project else None
+    activities = [t for t in _eligible_activities(data) if not t.is_milestone]
+    baselined = [t for t in activities if t.target_finish]
+
+    if not data_date or not baselined:
+        reason = "No data date." if not data_date else "No baseline finish dates."
+        return CheckResult(
+            number=14, name="BEI", status=CheckStatus.NA,
+            metric_label="Baseline Execution Index",
+            metric_value="N/A", threshold=f">= {config.bei_min:.2f}",
+            summary="BEI requires a data date and baseline finish dates.",
+            na_reason=reason,
+        )
+
+    # BEI = tasks actually completed / tasks that should have completed
+    #       (baseline finish on or before the data date).
+    should_complete = [t for t in baselined if t.target_finish <= data_date]
+    actually_complete = [t for t in should_complete if t.is_complete]
+    # Also credit tasks completed early (baseline finish after data date but done).
+    extra_complete = [
+        t for t in baselined
+        if t.target_finish > data_date and t.is_complete
+    ]
+
+    planned = len(should_complete)
+    completed = len(actually_complete) + len(extra_complete)
+    bei = (completed / planned) if planned else 0.0
+
+    status = CheckStatus.PASS if bei >= config.bei_min else CheckStatus.FAIL
+    if planned == 0:
+        return CheckResult(
+            number=14, name="BEI", status=CheckStatus.NA,
+            metric_label="Baseline Execution Index",
+            metric_value="N/A", threshold=f">= {config.bei_min:.2f}",
+            summary="No activities were baselined to finish on or before the data date.",
+            na_reason="No planned-complete activities to measure execution against.",
+        )
+    # BEI on a fully complete programme is a tautology (~1.0 by
+    # construction when the targets have converged on the record): the
+    # index tracks EXECUTION PACE, and there is no execution left to
+    # pace. "On pace" on a 92-day-late as-built is exactly the false
+    # verdict a tribunal would seize on.
+    if not any(t.is_incomplete for t in _eligible_activities(data)):
+        return CheckResult(
+            number=14, name="BEI", status=CheckStatus.NA,
+            metric_label="Baseline Execution Index",
+            metric_value="N/A", threshold=f">= {config.bei_min:.2f}",
+            summary="Fully complete programme — BEI measures execution "
+                    "pace against the file's own targets, which have "
+                    "converged on the as-built record; no pace remains "
+                    "to assess. Measure the outcome against the "
+                    "CONTRACT baseline revision instead.",
+            na_reason="No remaining execution to assess: every "
+                      "activity is complete.",
+        )
+    return CheckResult(
+        number=14,
+        name="BEI",
+        status=status,
+        metric_label="Baseline Execution Index",
+        metric_value=f"{bei:.2f}",
+        threshold=f">= {config.bei_min:.2f}",
+        summary=(
+            f"BEI = {bei:.2f} ({completed} completed vs {planned} planned-complete). "
+            f"{'On pace' if bei >= config.bei_min else 'Falling behind plan'}."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Supplementary baseline-quality checks 15-17 (NOT part of the DCMA 14).
+# The 14-point gate misses three classic baseline defects; these close the
+# gap and are labelled "supp." so the scorecard never overstates the
+# standard's scope.
+# ---------------------------------------------------------------------------
+def check_15_loe_logic(data: XerData, config: DCMAConfig) -> CheckResult:
+    """LOE / WBS-summary activities must never DRIVE real work.
+
+    A hammock's dates should be derived from the activities it spans;
+    when an LOE is the predecessor of a real task it injects derived
+    dates back into the driving network."""
+    by_id = {t.task_id: t for t in data.tasks}
+    affected: list[str] = []
+    detail: list[dict] = []
+    for rel in data.relationships:
+        pred = by_id.get(rel.pred_task_id)
+        succ = by_id.get(rel.task_id)
+        if pred is None or succ is None:
+            continue
+        if pred.is_loe_or_wbs and not succ.is_loe_or_wbs:
+            affected.append(succ.task_code)
+            detail.append({
+                "LOE / summary": pred.task_code,
+                "LOE name": pred.name,
+                "Drives activity": succ.task_code,
+                "Activity name": succ.name,
+                "Link": rel.pred_type.replace("PR_", ""),
+            })
+    count = len(affected)
+    status = (CheckStatus.PASS if count <= config.loe_driving_max_count
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=15,
+        name="LOE Driving Logic (supp.)",
+        status=status,
+        metric_label="Relationships where an LOE/summary drives real work",
+        metric_value=str(count),
+        threshold=f"<= {config.loe_driving_max_count}",
+        summary=(f"{count} relationship(s) have an LOE/hammock or summary "
+                 "activity as the predecessor of a real activity — "
+                 "derived dates are feeding the driving network."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+def check_16_redundant_logic(data: XerData,
+                             config: DCMAConfig) -> CheckResult:
+    """Direct FS links duplicated by a longer path (transitive logic).
+
+    Redundant links hide the true driver, inflate the logic count and
+    make float analysis noisy. Topological screening only: a redundant
+    link may still be intentional (e.g. carrying a different lag), so
+    flags are prompts for tidy-up, not errors."""
+    real = {t.task_id for t in data.tasks if not t.is_loe_or_wbs}
+    # FS-only edges: only an unbroken FS chain strictly implies the direct
+    # FS link (mixed SS/FF paths do not carry the same dependency).
+    succs: dict[str, set[str]] = {}
+    for rel in data.relationships:
+        if (rel.pred_type == REL_FS
+                and rel.pred_task_id in real and rel.task_id in real):
+            succs.setdefault(rel.pred_task_id, set()).add(rel.task_id)
+
+    by_id = {t.task_id: t for t in data.tasks}
+
+    def reachable_avoiding_direct(src: str, dst: str) -> bool:
+        """Path src -> dst of length >= 2 (skip the direct edge once)."""
+        stack = [n for n in succs.get(src, ()) if n != dst]
+        seen = set(stack)
+        while stack:
+            cur = stack.pop()
+            nxt = succs.get(cur, ())
+            if dst in nxt:
+                return True
+            for n in nxt:
+                if n not in seen:
+                    seen.add(n)
+                    stack.append(n)
+        return False
+
+    total_rels = len(data.relationships)
+    affected: list[str] = []
+    detail: list[dict] = []
+    for rel in data.relationships:
+        if rel.pred_type != REL_FS:
+            continue
+        if rel.pred_task_id not in real or rel.task_id not in real:
+            continue
+        if reachable_avoiding_direct(rel.pred_task_id, rel.task_id):
+            p, s = by_id[rel.pred_task_id], by_id[rel.task_id]
+            affected.append(s.task_code)
+            detail.append({
+                "Predecessor": p.task_code,
+                "Pred name": p.name,
+                "Successor": s.task_code,
+                "Succ name": s.name,
+                "Note": "direct FS duplicated by a longer path",
+            })
+    pct = _pct(len(affected), total_rels)
+    status = (CheckStatus.PASS if pct <= config.redundant_max_pct
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=16,
+        name="Redundant Logic (supp.)",
+        status=status,
+        metric_label="Direct FS links duplicated by a longer path",
+        metric_value=f"{len(affected)} of {total_rels} ({pct:.1f}%)",
+        threshold=f"<= {config.redundant_max_pct:.0f}%",
+        summary=(f"{len(affected)} relationship(s) ({pct:.1f}%) are "
+                 "topologically redundant — the same dependency is also "
+                 "carried by a longer path. Screening only; a redundant "
+                 "link may be intentional."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+def check_17_dangling_ends(data: XerData,
+                           config: DCMAConfig) -> CheckResult:
+    """Dangling ends beyond simple open ends (Check 1 catches those).
+
+    An activity can have both predecessors and successors yet still be
+    unmoored: a START driven by nothing (only FF/SF predecessors) or a
+    FINISH that controls nothing (only SS/SF successors). Such logic
+    lets duration changes vanish without downstream effect."""
+    preds_of: dict[str, list[str]] = {}
+    succs_of: dict[str, list[str]] = {}
+    for rel in data.relationships:
+        preds_of.setdefault(rel.task_id, []).append(rel.pred_type)
+        succs_of.setdefault(rel.pred_task_id, []).append(rel.pred_type)
+
+    activities = [t for t in _eligible_activities(data)
+                  if t.is_incomplete and not t.is_milestone]
+    affected: list[str] = []
+    detail: list[dict] = []
+    for t in activities:
+        p_types = preds_of.get(t.task_id)
+        s_types = succs_of.get(t.task_id)
+        if not p_types or not s_types:
+            continue                     # open end — already Check 1
+        issues = []
+        # start driven only by finish-anchored links at the successor side
+        if all(pt in (REL_FF, REL_SF) for pt in p_types):
+            issues.append("start not logic-driven (only FF/SF "
+                          "predecessors)")
+        # finish consumed by nothing: only links leaving its start
+        if all(st_ in ("PR_SS", REL_SF) for st_ in s_types):
+            issues.append("finish controls nothing (only SS/SF "
+                          "successors)")
+        if issues:
+            affected.append(t.task_code)
+            detail.append({
+                "Activity ID": t.task_code,
+                "Activity Name": t.name,
+                "Issue": "; ".join(issues),
+            })
+    total = len(activities)
+    pct = _pct(len(affected), total)
+    status = (CheckStatus.PASS if pct <= config.dangling_max_pct
+              else CheckStatus.FAIL)
+    return CheckResult(
+        number=17,
+        name="Dangling Ends (supp.)",
+        status=status,
+        metric_label="Activities with an undriven start or "
+                     "non-controlling finish",
+        metric_value=f"{len(affected)} of {total} ({pct:.1f}%)",
+        threshold=f"<= {config.dangling_max_pct:.0f}%",
+        summary=(f"{len(affected)} incomplete activities ({pct:.1f}%) "
+                 "have logic on both ends yet a dangling start or "
+                 "finish — their duration can change with no downstream "
+                 "effect."),
+        affected_ids=affected,
+        detail_rows=detail,
+    )
+
+
+ALL_CHECKS = [
+    check_01_logic,
+    check_02_leads,
+    check_03_lags,
+    check_04_relationship_types,
+    check_05_hard_constraints,
+    check_06_high_float,
+    check_07_negative_float,
+    check_08_high_duration,
+    check_09_invalid_dates,
+    check_10_resources,
+    check_11_missed_tasks,
+    check_12_critical_path,
+    check_13_cpli,
+    check_14_bei,
+]
+
+SUPPLEMENTARY_CHECKS = [
+    check_15_loe_logic,
+    check_16_redundant_logic,
+    check_17_dangling_ends,
+]
+
+
+def _gate_empty_populations(results: list[CheckResult]) -> None:
+    """A check with NOTHING to measure must say N/A, never PASS.
+
+    Every population check formats its metric as "X of Y (p%)"; a
+    population of zero (e.g. a fully complete as-built has no
+    incomplete activities) previously scored "0 of 0 (0.0%)" as PASS —
+    a vacuous pass that inflates the health score of exactly the files
+    a tribunal scrutinises. Checks 12/13 already return honest N/As;
+    this brings the rest into line, in ONE place, so no individual
+    check can drift.
+    """
+    for c in results:
+        if (c.status == CheckStatus.PASS
+                and c.metric_value.startswith("0 of 0")):
+            c.status = CheckStatus.NA
+            c.metric_value = "N/A"
+            c.na_reason = ("No activities in the measured population "
+                           "(all complete or none eligible) — nothing "
+                           "to measure, so no pass is asserted.")
+            c.summary = c.na_reason
+
+
+def run_all_checks(
+    data: XerData,
+    config: DCMAConfig | None = None,
+    *,
+    include_supplementary: bool = True,
+) -> list[CheckResult]:
+    """Run the DCMA 14-point assessment plus the supplementary
+    baseline-quality checks (15-17, clearly labelled "supp.")."""
+    config = config or DCMAConfig()
+    checks = (ALL_CHECKS + SUPPLEMENTARY_CHECKS
+              if include_supplementary else ALL_CHECKS)
+    results = [check(data, config) for check in checks]
+    _gate_empty_populations(results)
+    return results
