@@ -1,0 +1,20 @@
+# Local parity test — run the EXACT production container on your
+# machine before anything touches AWS:
+#
+#   cd <repo root>
+#   cp deploy/aws/secrets.env.example deploy/aws/secrets.env   # fill in
+#   docker compose -f deploy/aws/docker-compose.yml up --build
+#   open http://localhost:8501
+#
+# secrets.env is gitignored — never commit a filled copy.
+
+services:
+  delay-toolkit:
+    build:
+      context: ../..
+      dockerfile: deploy/aws/Dockerfile
+    ports:
+      - "8501:8501"
+    env_file:
+      - secrets.env
+    restart: unless-stopped

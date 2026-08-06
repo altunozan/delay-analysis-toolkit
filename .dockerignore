@@ -1,0 +1,22 @@
+# Build context = repo root (docker build -f deploy/aws/Dockerfile .)
+# Everything the running app never imports stays out of the image.
+.git
+.gitignore
+.dockerignore
+.claude
+.streamlit/secrets.toml
+graphify-out
+ui_variants
+portable
+deckforge
+qa-chatgpt-copy
+tools
+test_*.py
+**/__pycache__
+*.pyc
+.pytest_cache
+.DS_Store
+*.xlsx
+*.tmp
+.analyst_memory.json
+.path_studio

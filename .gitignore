@@ -57,3 +57,6 @@ deckforge/.deckforge_autosave.pkl
 deckforge/sample_output.pptx
 deckforge/example_deck.pptx
 deckforge/report_deck.pptx
+
+# AWS deployment: local-only secret files
+deploy/aws/secrets.env

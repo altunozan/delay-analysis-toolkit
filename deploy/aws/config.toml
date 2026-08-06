@@ -1,0 +1,17 @@
+# Streamlit server configuration for the AWS container.
+# Copied to /app/.streamlit/config.toml at image build.
+
+[server]
+headless = true
+# The intake page advertises 400 MB per XER — the server limit must
+# honour it (Streamlit's default is 200).
+maxUploadSize = 400
+# Behind the ALB the app is same-origin; keep XSRF protection on.
+enableXsrfProtection = true
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+# The app injects its own theme (views/_theme.py); base stays light.
+base = "light"
